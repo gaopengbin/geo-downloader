@@ -1,0 +1,73 @@
+[package]
+name = "tif-downloader"
+version = "1.0.0"
+description = "TIF地图下载工具 - 地图瓦片下载与拼接"
+authors = ["you"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-http = "2"
+tauri-plugin-process = "2"
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Image processing
+image = "0.25"
+tiff = "0.9"
+
+# Random
+rand = "0.8"
+
+# URL encoding
+urlencoding = "2.1"
+
+# GeoTIFF (GDAL bindings)
+gdal = { version = "0.17", optional = true }
+
+# Logging
+log = "0.4"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# DateTime
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Directories
+dirs = "5"
+
+# Shell commands
+open = "5"
+
+[features]
+default = []
+geotiff = ["gdal"]

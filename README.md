@@ -1,97 +1,98 @@
-# TIF 地图下载工具 (Map Downloader)
+# TIF 地图下载工具
 
-一个功能强大的地图瓦片下载与拼接工具，支持多种在线图源，可将瓦片拼接并导出为 GeoTIFF、PNG 或 JPEG 格式。同时支持矢量数据（OSM、行政区划）下载与查看。
+一个基于 Tauri + Rust 的高性能地图瓦片下载与拼接桌面工具。
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/python-3.10+-green.svg)
-![FastAPI](https://img.shields.io/badge/backend-FastAPI-009688.svg)
-![Leaflet](https://img.shields.io/badge/frontend-Leaflet-199900.svg)
+![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)
+![Tauri](https://img.shields.io/badge/tauri-2.0-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 
-## ✨ 主要功能
+## ✨ 功能特性
 
-### 🗺️ 地图瓦片下载
-- **多图源支持**：Google Maps/Satellite, OpenStreetMap, 天地图 (矢量/影像), ArcGIS, Carto 等
-- **自定义 Token**：支持配置和保存自定义的天地图 API Token
-- **高精度拼接**：自动下载指定区域瓦片并无缝拼接
-- **多种格式**：导出带有地理坐标信息的 **GeoTIFF**，或普通 **PNG/JPEG** 图像
-- **按边界裁剪**：支持按行政区划、自定义多边形绘制或**上传 SHP/GeoJSON** 边界裁剪
-- **大图支持**：优化的内存管理，支持下载百万级瓦片
+### 🗳️ 地图下载
+- **多图源支持**：OSM、ArcGIS 卫星/地形/街道、天地图、Carto、Google Maps、高德地图/卫星、OpenTopoMap 等
+- **自定义图源**：支持添加任意 `{z}/{x}/{y}` 格式的瓦片图源
+- **多任务并行下载**：支持同时创建多个下载任务，实时进度显示
+- **多格式导出**：GeoTIFF（带地理坐标 + LZW 压缩）、PNG、JPEG
+- **按边界裁剪**：支持按多边形边界裁剪，透明背景
+- **可调并发**：支持 10-100 并发下载，快速高效
+- **下载历史**：自动记录每次下载，支持快速打开文件夹
 
-### 📍 矢量数据工具
-- **OSM 下载**：下载选定区域的 OpenStreetMap 矢量数据（道路、建筑、水系、POI 等）
-- **行政区划**：自动获取中国省/市/区县的 GeoJSON 边界数据
+### 📍 区域选择
+- **地名搜索**：输入地名快速定位
+- **行政区划**：中国省/市/区县三级联动选择
 - **自定义边界**：
-  - 支持上传 **GeoJSON** (.json/.geojson)
-  - 支持上传 **Shapefile** (.shp + .shx + .dbf，支持投影坐标自动转 WGS84)
-  - 边界可直接用于地图裁剪区域
-- **格式转换**：内置 Shapefile 转 GeoJSON 工具
+  - 上传 GeoJSON (.json/.geojson)
+  - 上传 Shapefile (.shp + .shx + .dbf)
+  - 地图上手动绘制矩形或多边形
 
-### 🖥️ 桌面端体验
-- **原生应用**：基于 PyWebView 的独立桌面程序，无需浏览器即可运行
-- **文件对话框**：原生文件保存体验，直接保存到本地磁盘
-- **智能交互**：地名搜索自动定位行政区划，坐标网格显示
+### 📦 矢量数据（高级功能）
+- OSM 数据下载（道路、建筑、水系等）
+- 行政区划边界下载
+- 本地矢量文件加载预览
 
 ## 🚀 快速开始
 
 ### 环境要求
-- Python 3.10 或更高版本
-- GDAL (通常通过 rasterio 安装)
+- [Rust](https://www.rust-lang.org/tools/install) 1.70+
+- [Node.js](https://nodejs.org/) (可选，仅开发时需要)
 
-### 安装依赖
-
-```bash
-# 创建虚拟环境 (推荐)
-python -m venv venv
-# Windows 激活
-venv\Scripts\activate
-# Linux/Mac 激活
-source venv/bin/activate
-
-# 安装依赖
-pip install -r requirements.txt
-```
-
-### 运行 Web 版
+### 开发运行
 
 ```bash
-# Windows
-run.bat
-
-# 或手动运行
-uvicorn app.main:app --reload
+cd src-tauri
+cargo tauri dev
 ```
-访问 http://127.0.0.1:8000
 
-### 运行桌面版
+### 构建发布
 
 ```bash
-python desktop.py
+cd src-tauri
+cargo tauri build
 ```
 
-## 📦 打包发布
+构建完成后，安装包位于 `src-tauri/target/release/bundle/` 目录。
 
-本项目支持打包为 Windows 可执行文件 (.exe)。
+## 🏗️ 项目结构
 
-```bash
-# 安装打包工具
-pip install pywebview pyinstaller
-
-# 运行打包脚本
-build_desktop.bat
 ```
-打包完成后，可执行文件位于 `dist/TIF地图下载工具/` 目录。
+tif-downloader/
+├── src-tauri/          # Rust 后端 (Tauri)
+│   ├── src/
+│   │   ├── lib.rs        # 应用入口
+│   │   ├── commands.rs   # Tauri 命令
+│   │   ├── config.rs     # 配置和内置图源
+│   │   ├── tile.rs       # 瓦片坐标计算
+│   │   ├── downloader.rs # 异步并发下载器
+│   │   ├── merger.rs     # 瓦片拼接与裁剪
+│   │   ├── exporter.rs   # 图像导出 (GeoTIFF/PNG/JPEG)
+│   │   ├── admin.rs      # 行政区划数据
+│   │   ├── task.rs       # 多任务管理
+│   │   ├── history.rs    # 下载历史记录
+│   │   └── settings.rs   # 用户设置持久化
+│   └── Cargo.toml
+├── static/             # 前端静态文件
+│   ├── index.html
+│   ├── css/style.css
+│   ├── lib/            # 本地 Leaflet 库
+│   └── js/
+│       ├── api.js      # Tauri API 适配层
+│       └── app.js      # 前端主逻辑
+└── docs/               # 文档
+```
 
-## 🛠️ 技术栈
+## ⚙️ 配置说明
 
-- **后端**：FastAPI, Uvicorn, Rasterio (GDAL), PIL (Pillow), PyShp, Fiona, PyProj
-- **前端**：HTML5, CSS3 (GeoAI Pro Theme), JavaScript, Leaflet.js, Leaflet.Draw
-- **桌面封装**：PyWebView, PyInstaller
+### 天地图 Token
+内置了默认 Token，建议在「高级选项」中配置您自己的 Token 以获得更好的服务。
+
+### 代理设置
+访问 Google 等国外图源时，请在「高级选项」中启用代理并配置正确的代理地址。
 
 ## 📝 注意事项
 
-- **天地图 Key**：内置了测试 Key，建议在界面中输入您自己的 Token 并点击保存（会自动持久化存储）。
-- **网络代理**：访问 Google 等国外图源时，请在界面勾选"启用代理"并配置正确的代理地址 (默认 http://127.0.0.1:10808)。
-- **版权声明**：下载的地图数据版权归原图商所有，请遵守相关使用条款。
+- 下载的地图数据版权归原图商所有，请遵守相关使用条款
+- 大范围高缩放级别下载可能需要较长时间，请耐心等待
+- 建议根据网络状况调整并发数（网络不稳定时降低并发数）
 
 ## 📄 许可证
 

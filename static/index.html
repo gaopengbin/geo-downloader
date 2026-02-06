@@ -3,209 +3,451 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TIF下载工具</title>
+    <title>TIF 地图下载工具</title>
     
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <!-- Leaflet Draw CSS -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+    <!-- Leaflet CSS (本地) -->
+    <link rel="stylesheet" href="./lib/leaflet.css" />
+    <!-- Leaflet Draw CSS (本地) -->
+    <link rel="stylesheet" href="./lib/leaflet.draw.css" />
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/css/style.css" />
+    <link rel="stylesheet" href="./css/style.css" />
 </head>
 <body>
-    <div class="container">
-        <!-- Left Panel -->
-        <div class="sidebar" id="sidebar">
-            <h1>
-                <span>🗺️ TIF下载工具</span>
-                <div class="sidebar-header-toggle" id="sidebar-close" title="收起面板">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                        <path fill-rule="evenodd" d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854Z"/>
+    <!-- 自定义标题栏 -->
+    <header class="titlebar">
+        <div class="titlebar-title">
+            <svg class="titlebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>TIF 地图下载工具</span>
+        </div>
+        <div class="titlebar-controls">
+            <button class="titlebar-btn" id="titlebar-minimize" title="最小化">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+            </button>
+            <button class="titlebar-btn" id="titlebar-maximize" title="最大化">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="4" y="4" width="16" height="16" rx="2"/>
+                </svg>
+            </button>
+            <button class="titlebar-btn titlebar-btn-close" id="titlebar-close" title="关闭">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="app-layout">
+        <!-- 左侧控制面板 -->
+        <aside class="control-panel" id="sidebar" role="complementary" aria-label="控制面板">
+
+            <!-- Tab 导航 -->
+            <nav class="tab-nav" role="tablist">
+                <button class="tab-btn active" data-tab="download" role="tab" aria-selected="true">
+                    <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
-                </div>
-            </h1>
-            
-            <!-- Part 1: Range Selection -->
-            <div class="section-group">
-                <div class="section-title">📐 区域选择</div>
-                
-                <!-- Search Box -->
-                <div class="panel">
-                    <div class="search-box">
-                        <input type="text" id="search-input" placeholder="输入地名搜索...">
-                        <button id="search-btn">Go</button>
-                    </div>
-                    <div id="search-results" class="search-results"></div>
-                </div>
-                
-                <!-- Administrative Region -->
-                <div class="panel">
-                    <h3>🏛️ 行政区划</h3>
-                    <div class="form-grid-3">
-                        <div class="form-group" style="margin-bottom: 0;">
-                            <select id="province-select">
+                    资源下载
+                </button>
+                <button class="tab-btn" data-tab="history" role="tab" aria-selected="false">
+                    <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                    下载中心
+                </button>
+                <button class="tab-btn" data-tab="settings" role="tab" aria-selected="false">
+                    <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    设置
+                </button>
+            </nav>
+
+            <!-- Tab 内容容器 -->
+            <div class="tab-content">
+                <!-- Tab 1: 资源下载 -->
+                <div class="tab-panel active" id="tab-download" role="tabpanel">
+                    <!-- 区域选择 -->
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+                                <circle cx="12" cy="10" r="3"/>
+                            </svg>
+                            <h3>区域选择</h3>
+                        </div>
+                        
+                        <!-- 搜索框 -->
+                        <div class="search-box">
+                            <input type="text" id="search-input" class="form-input" placeholder="搜索地名..." aria-label="搜索地名">
+                            <button id="search-btn" class="btn-icon btn-primary" aria-label="搜索">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"/>
+                                    <path d="m21 21-4.35-4.35"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="search-results" class="search-results"></div>
+                        
+                        <!-- 行政区划选择 -->
+                        <div class="form-row form-row-3">
+                            <select id="province-select" class="form-select" aria-label="选择省份">
                                 <option value="">省份</option>
                             </select>
-                        </div>
-                        <div class="form-group" style="margin-bottom: 0;">
-                            <select id="city-select" disabled>
+                            <select id="city-select" class="form-select" disabled aria-label="选择城市">
                                 <option value="">城市</option>
                             </select>
-                        </div>
-                        <div class="form-group" style="margin-bottom: 0;">
-                            <select id="district-select" disabled>
+                            <select id="district-select" class="form-select" disabled aria-label="选择区县">
                                 <option value="">区县</option>
                             </select>
                         </div>
-                    </div>
-                    <button id="load-boundary-btn" class="btn-secondary" style="margin-top: 8px;">加载边界</button>
-                </div>
-
-                <!-- Custom Boundary -->
-                <div class="panel">
-                    <h3>📁 自定义边界</h3>
-                    <div class="btn-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-                        <button id="upload-boundary-btn" class="btn-secondary">📂 上传</button>
-                        <button id="clear-boundary-btn" class="btn-secondary">✖ 清除</button>
-                    </div>
-                    <input type="file" id="boundary-file-input" accept=".geojson,.json,.shp,.shx,.dbf,.prj" style="display: none;" multiple>
-                    <p id="boundary-status" style="font-size: 11px; color: #666; margin-top: 6px;"></p>
-                </div>
-
-                <!-- Selection Info -->
-                <div class="panel">
-                    <div id="selection-info">
-                        <p style="margin: 0; font-size: 12px; color: #666;">使用右上角工具绘制，或选择上方边界</p>
-                    </div>
-                    <div id="estimate-info" class="estimate-info"></div>
-                </div>
-            </div>
-
-            <!-- Part 2: Map Source -->
-            <div class="section-group">
-                <div class="section-title">🗺️ 图源设置</div>
-                
-                <div class="panel">
-                    <div class="form-group">
-                        <label>底图来源</label>
-                        <select id="source-select">
-                            <option value="osm">OpenStreetMap</option>
-                            <option value="tianditu_satellite">天地图 卫星</option>
-                            <option value="tianditu_vector">天地图 矢量</option>
-                            <option value="arcgis_satellite">ArcGIS 卫星</option>
-                            <option value="carto_light">Carto Light</option>
-                            <option value="carto_dark">Carto Dark</option>
-                            <option value="google_satellite">⚠️ Google 卫星 (需翻墙)</option>
-                            <option value="google_map">⚠️ Google 地图 (需翻墙)</option>
-                            <option value="google_hybrid">⚠️ Google 混合 (需翻墙)</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- TianDiTu Token -->
-                <div class="panel">
-                    <h3>🔑 天地图Token</h3>
-                    <div class="form-group" style="margin-bottom: 6px;">
-                        <input type="text" id="tianditu-token-input" placeholder="输入自定义Token (可选)">
-                    </div>
-                    <div class="btn-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-                        <button id="save-token-btn" class="btn-secondary">💾 保存</button>
-                        <button id="clear-token-btn" class="btn-secondary">🗑 清除</button>
-                    </div>
-                    <p id="token-status" style="font-size: 11px; color: #666; margin-top: 6px;"></p>
-                </div>
-
-                <!-- Proxy Settings -->
-                <div class="panel">
-                    <h3>🌐 代理设置</h3>
-                    <div class="form-group checkbox-wrapper" style="margin-bottom: 6px;">
-                        <input type="checkbox" id="proxy-checkbox" checked>
-                        <label for="proxy-checkbox" style="margin: 0; cursor: pointer;">启用代理</label>
-                    </div>
-                    <input type="text" id="proxy-input" placeholder="http://127.0.0.1:10808" value="http://127.0.0.1:10808">
-                </div>
-            </div>
-
-            <!-- Part 3: Download Settings -->
-            <div class="section-group">
-                <div class="section-title">⚙️ 下载设置</div>
-                
-                <!-- Image Download -->
-                <div class="panel">
-                    <h3>🖼️ 影像下载</h3>
-                    <div class="form-grid-2">
-                        <div class="form-group" style="margin-bottom: 0;">
-                            <label>缩放: <span id="zoom-value">15</span></label>
-                            <input type="range" id="zoom-slider" min="1" max="19" value="15">
+                        <button id="load-boundary-btn" class="btn btn-secondary btn-block">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            </svg>
+                            加载行政边界
+                        </button>
+                        
+                        <!-- 自定义边界 -->
+                        <div class="btn-group">
+                            <button id="upload-boundary-btn" class="btn btn-outline">
+                                <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                                上传边界
+                            </button>
+                            <button id="clear-boundary-btn" class="btn btn-outline">
+                                <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <line x1="18" y1="6" x2="6" y2="18"/>
+                                    <line x1="6" y1="6" x2="18" y2="18"/>
+                                </svg>
+                                清除
+                            </button>
                         </div>
-                        <div class="form-group" style="margin-bottom: 0;">
-                            <label>格式</label>
-                            <select id="format-select">
-                                <option value="geotiff">.tif</option>
-                                <option value="png">.png</option>
-                                <option value="jpeg">.jpg</option>
+                        <input type="file" id="boundary-file-input" accept=".geojson,.json,.shp,.shx,.dbf,.prj" style="display: none;" multiple>
+                        
+                        <!-- 选区信息 -->
+                        <div id="selection-info" class="info-card">
+                            <p class="hint">使用地图工具绘制区域，或从上方加载边界</p>
+                        </div>
+                    </section>
+
+                    <!-- 下载设置 -->
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            <h3>下载设置</h3>
+                        </div>
+                        
+                        <!-- 图源选择 -->
+                        <div class="form-group">
+                            <label class="form-label" for="source-select">地图源</label>
+                            <select id="source-select" class="form-select">
+                                <option value="osm">加载中...</option>
                             </select>
                         </div>
-                    </div>
-                    <div class="form-group checkbox-wrapper" style="margin-top: 8px;">
-                        <input type="checkbox" id="crop-checkbox">
-                        <label for="crop-checkbox" style="margin: 0; cursor: pointer;">按边界裁剪 (透明背景)</label>
-                    </div>
-                    
-                    <button id="download-btn" class="btn-primary" disabled style="margin-top: 8px;">
-                        📥 下载影像
-                    </button>
-                    
-                    <div id="progress-container" class="progress-container" style="display: none; margin-top: 8px;">
-                        <div class="progress-bar">
-                            <div id="progress-fill" class="progress-fill"></div>
+                        
+                        <!-- 缩放级别 -->
+                        <div class="form-group">
+                            <div class="form-label-row">
+                                <label class="form-label" for="zoom-slider">缩放级别</label>
+                                <span class="badge badge-primary" id="zoom-badge">z15 · 街道级</span>
+                            </div>
+                            <input type="range" id="zoom-slider" class="form-range" min="1" max="22" value="15">
+                            <div class="range-labels">
+                                <span>1</span>
+                                <span>12</span>
+                                <span>22</span>
+                            </div>
                         </div>
-                        <p id="progress-text">准备中...</p>
-                    </div>
+                        
+                        <!-- 输出格式和并发数 -->
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label class="form-label" for="format-select">输出格式</label>
+                                <select id="format-select" class="form-select">
+                                    <option value="geotiff">GeoTIFF (.tif)</option>
+                                    <option value="png">PNG (.png)</option>
+                                    <option value="jpeg">JPEG (.jpg)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="concurrency-slider">
+                                    并发数 <span class="text-primary" id="concurrency-value">30</span>
+                                </label>
+                                <input type="range" id="concurrency-slider" class="form-range" min="10" max="100" value="30" step="5">
+                            </div>
+                        </div>
+                        
+                        <!-- 估算信息 -->
+                        <div id="estimate-info" class="estimate-card"></div>
+                        
+                        <!-- 裁剪选项 -->
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="crop-checkbox">
+                            <span class="checkbox-mark"></span>
+                            <span>按边界裁剪 (透明背景)</span>
+                        </label>
+                        
+                        <!-- 压缩选项 (TIFF 专用) -->
+                        <label class="checkbox-label" id="compress-option">
+                            <input type="checkbox" id="compress-checkbox" checked>
+                            <span class="checkbox-mark"></span>
+                            <span>LZW 压缩 <span class="text-muted">(减小约70%，耗时增加)</span></span>
+                        </label>
+                        
+                        <!-- 下载按钮 -->
+                        <button id="download-btn" class="btn btn-cta btn-lg btn-block" disabled>
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            下载地图
+                        </button>
+                        
+                    </section>
+
+                    <!-- 矢量数据下载 -->
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                                <polyline points="2 17 12 22 22 17"/>
+                                <polyline points="2 12 12 17 22 12"/>
+                            </svg>
+                            <h3>矢量数据</h3>
+                        </div>
+                        <div class="form-group">
+                            <select id="osm-feature-select" class="form-select">
+                                <option value="roads">道路</option>
+                                <option value="buildings">建筑</option>
+                                <option value="waterways">水系</option>
+                                <option value="landuse">土地利用</option>
+                                <option value="pois">兴趣点 (POI)</option>
+                                <option value="railways">铁路</option>
+                                <option value="natural">自然要素</option>
+                            </select>
+                        </div>
+                        <div class="btn-group">
+                            <button id="download-osm-btn" class="btn btn-outline btn-sm" disabled>下载 OSM</button>
+                            <button id="download-admin-btn" class="btn btn-outline btn-sm" disabled>下载边界</button>
+                        </div>
+                        <div class="btn-group">
+                            <button id="load-vector-btn" class="btn btn-outline btn-sm">加载本地</button>
+                            <button id="clear-vector-btn" class="btn btn-outline btn-sm">清除图层</button>
+                        </div>
+                        <p id="vector-status" class="status-text"></p>
+                        <input type="file" id="vector-file-input" accept=".geojson,.json,.shp,.zip" style="display: none;" multiple>
+                    </section>
                 </div>
 
-                <!-- Vector Download -->
-                <div class="panel" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #dfe1e6;">
-                    <h3>📍 矢量下载</h3>
-                    <div class="form-group">
-                        <select id="osm-feature-select">
-                            <option value="roads">道路</option>
-                            <option value="buildings">建筑</option>
-                            <option value="waterways">水系</option>
-                            <option value="landuse">土地利用</option>
-                            <option value="pois">兴趣点 (POI)</option>
-                            <option value="railways">铁路</option>
-                            <option value="natural">自然要素</option>
-                        </select>
-                    </div>
-                    <div class="btn-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-                        <button id="download-osm-btn" class="btn-secondary" disabled>⬇ OSM</button>
-                        <button id="download-admin-btn" class="btn-secondary" disabled>⬇ 边界数据</button>
-                        <button id="load-vector-btn" class="btn-secondary">📂 加载本地</button>
-                        <button id="clear-vector-btn" class="btn-secondary">🗑 清除图层</button>
-                    </div>
-                    <p id="vector-status" style="font-size: 11px; color: #666; margin-top: 6px;"></p>
-                    <input type="file" id="vector-file-input" accept=".geojson,.json,.shp,.zip" style="display: none;" multiple>
+                <!-- Tab 2: 下载中心 -->
+                <div class="tab-panel" id="tab-history" role="tabpanel">
+                    <!-- 活动任务 -->
+                    <section class="panel-section" id="active-tasks-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            <h3>活动任务</h3>
+                        </div>
+                        <div id="active-tasks-list" class="task-list">
+                            <div class="empty-state small">
+                                <p>暂无活动任务</p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- 历史记录 -->
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <polyline points="12 6 12 12 16 14"/>
+                            </svg>
+                            <h3>历史记录</h3>
+                            <button id="clear-history-btn" class="btn-icon btn-sm" title="清空历史">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polyline points="3 6 5 6 21 6"/>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="history-list" class="history-list">
+                            <div class="empty-state">
+                                <p>暂无下载记录</p>
+                                <span class="hint">完成下载后，记录将显示在这里</span>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Tab 3: 设置 -->
+                <div class="tab-panel" id="tab-settings" role="tabpanel">
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                            </svg>
+                            <h3>天地图 Token</h3>
+                        </div>
+                        <div class="form-group">
+                            <input type="text" id="tianditu-token-input" class="form-input" placeholder="输入自定义 Token (可选)">
+                            <p class="form-hint">用于访问天地图服务，可从天地图官网获取</p>
+                        </div>
+                    </section>
+
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="2" y1="12" x2="22" y2="12"/>
+                                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                            </svg>
+                            <h3>代理设置</h3>
+                        </div>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="proxy-checkbox" checked>
+                            <span class="checkbox-mark"></span>
+                            <span>启用代理 (Google 图源需要)</span>
+                        </label>
+                        <div class="form-group">
+                            <input type="text" id="proxy-input" class="form-input" placeholder="http://127.0.0.1:10808" value="http://127.0.0.1:10808">
+                        </div>
+                    </section>
+
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="4" y1="21" x2="4" y2="14"/>
+                                <line x1="4" y1="10" x2="4" y2="3"/>
+                                <line x1="12" y1="21" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12" y2="3"/>
+                                <line x1="20" y1="21" x2="20" y2="16"/>
+                                <line x1="20" y1="12" x2="20" y2="3"/>
+                                <line x1="1" y1="14" x2="7" y2="14"/>
+                                <line x1="9" y1="8" x2="15" y2="8"/>
+                                <line x1="17" y1="16" x2="23" y2="16"/>
+                            </svg>
+                            <h3>默认设置</h3>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">默认并发数</label>
+                            <div class="form-row">
+                                <input type="range" id="default-concurrency" class="form-range" min="10" max="100" value="30" step="5">
+                                <span class="badge badge-secondary" id="default-concurrency-value">30</span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">默认缩放级别</label>
+                            <div class="form-row">
+                                <input type="range" id="default-zoom" class="form-range" min="1" max="22" value="15">
+                                <span class="badge badge-secondary" id="default-zoom-value">15</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- 自定义图源 -->
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                                <polyline points="2 17 12 22 22 17"/>
+                                <polyline points="2 12 12 17 22 12"/>
+                            </svg>
+                            <h3>自定义图源</h3>
+                        </div>
+                        <div class="form-group">
+                            <input type="text" id="custom-source-name" class="form-input" placeholder="图源名称">
+                        </div>
+                        <div class="form-group">
+                            <input type="text" id="custom-source-url" class="form-input" placeholder="URL 模板，例如 https://{s}.tile.xxx.org/{z}/{x}/{y}.png">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <input type="text" id="custom-source-subdomains" class="form-input" placeholder="子域名 (a,b,c)">
+                            </div>
+                            <div class="form-group">
+                                <input type="number" id="custom-source-maxzoom" class="form-input" placeholder="最大缩放" value="18" min="1" max="22">
+                            </div>
+                        </div>
+                        <button id="add-custom-source-btn" class="btn btn-secondary btn-block">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="12" y1="5" x2="12" y2="19"/>
+                                <line x1="5" y1="12" x2="19" y2="12"/>
+                            </svg>
+                            添加图源
+                        </button>
+                        <div id="custom-sources-list"></div>
+                    </section>
+
+                    <section class="panel-section">
+                        <button id="save-settings-btn" class="btn btn-primary btn-block">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                <polyline points="17 21 17 13 7 13 7 21"/>
+                                <polyline points="7 3 7 8 15 8"/>
+                            </svg>
+                            保存设置
+                        </button>
+                        <p id="settings-status" class="status-text"></p>
+                    </section>
+
+                    <!-- 关于 / 更新 -->
+                    <section class="panel-section">
+                        <div class="section-header">
+                            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <h3>关于</h3>
+                        </div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                            <span style="font-size:0.8rem;color:var(--text-secondary)">TIF地图下载工具 v<span id="app-version">1.0.0</span></span>
+                            <button id="check-update-btn" class="btn btn-outline btn-sm">检查更新</button>
+                        </div>
+                        <p id="update-status" class="status-text" style="font-size:0.75rem"></p>
+                        <a href="https://github.com/gaopengbin/tif-downloader" target="_blank" style="font-size:0.75rem;color:var(--primary);text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                            GitHub
+                        </a>
+                    </section>
                 </div>
             </div>
-        </div>
+        </aside>
         
-        <!-- Sidebar Toggle Button (External) -->
-        <div class="sidebar-toggle-btn" id="sidebar-open" title="展开面板">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 16 16">
-                <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
-            </svg>
-        </div>
-        
-        <!-- Map Container -->
-        <div id="map"></div>
+        <!-- 右侧地图面板 -->
+        <main class="map-panel" role="main" aria-label="地图面板">
+            <div id="map"></div>
+        </main>
     </div>
-    
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Leaflet Draw JS -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
-    <!-- Custom JS -->
-    <script src="/static/js/app.js"></script>
+
+    <!-- Scripts (本地) -->
+    <script src="./lib/leaflet.js"></script>
+    <script src="./lib/leaflet.draw.js"></script>
+    <script src="./lib/shp.js"></script>
+    <script src="./js/api.js"></script>
+    <script src="./js/app.js"></script>
 </body>
 </html>

@@ -1,90 +1,36 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+*.pdb
+
+# Node (如果前端使用)
+node_modules/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
-# Virtual Env
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# VS Code
+# IDE
 .vscode/
-
-# PyCharm
 .idea/
+*.swp
+*.swo
 
 # Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Project specific
-# Ignored downloaded maps and data
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 下载的地图数据 (临时文件)
 *.tif
 *.tiff
-*.png
-*.jpg
-*.jpeg
-*.geojson
-*.json
-*.zip
-*.shp
-*.shx
-*.dbf
-*.prj
-*.cpg
+output/
 
-# Keep specific config/data files if needed
-!static/
-!app/
-!requirements.txt
-!*.md
-!*.bat
-!*.spec
-
-# Logs
+# 日志
 *.log
+
+# 环境文件
+.env
+.env.local
