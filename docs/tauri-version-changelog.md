@@ -266,3 +266,57 @@ src-tauri/src/
 - `.cesium-controls` 背景从深色 `rgba(15,23,42,0.92)` 改为亮色 `rgba(255,255,255,0.95)`
 - `.map-status-bar` 背景从 `rgba(30,41,59,0.8)` 改为 `rgba(255,255,255,0.9)`
 - 文字颜色统一使用 `var(--text)` CSS 变量
+
+---
+
+## Google 3D Tiles 兼容性修复与产品重命名
+
+> 日期: 2026-04-07
+
+### 19. Google 3D Tiles 下载三处 Bug 修复
+
+**问题现象**：框选台湾台中一小块区域（~120.647°-120.650°E, 24.213°-24.216°N），仅下载了最外层几块地球瓦片（6个 glb），无高精度细节。
+
+**Bug 1: JSON 扩展名检测失败**
+- Google 内容 URI 含 query 参数：`file.json?session=CL34hcL28MKHVRDJ7tTOBg`
+- `uri.to_lowercase().ends_with(".json")` 返回 false，子瓦片集未被识别为 JSON
+- 修复：`uri.split('?').next().unwrap_or(uri)` 去除 query 再判断，影响 3 处（`fetcher.rs` ×2、`tileset.rs` ×1）
+
+**Bug 2: Session 参数未传播到子瓦片集内容**
+- Google 根级 tileset 的内容 URI 已嵌入 `?session=xxx`
+- 但子瓦片集中的内容 URI **不含** session 参数，请求返回 403
+- 修复：从 initial_uris 提取 `session=xxx`，构建 `effective_query` 包含 key + session，shadow `query_params` 使后续所有请求自动携带
+- 修复后：6个 glb → 137个 glb + 82个 json
+
+**Bug 3: 子瓦片集 URI 未本地化**
+- 下载的子瓦片集 JSON 仍含 Google 绝对路径 `/v1/3dtiles/datasets/CgIYAQ/files/xxx.glb`
+- 本地预览时 CesiumJS 无法解析这些路径
+- 修复：下载子瓦片集时构建 `sub_uri_map: HashMap<String, String>`，调用 `rewrite_tileset_uris()` 将 URI 转为本地相对路径
+
+### 20. 调试日志清理
+
+- 移除所有 `_debug_resolve.log` 文件写入
+- 移除所有 `eprintln!("[DEBUG]...")` 调试输出
+- 错误处理改用 `log::warn!`
+
+### 21. 产品重命名 tif-downloader → GeoDownloader
+
+**变更范围（14+ 文件）**：
+- `Cargo.toml`: name → `geo-downloader`，description 更新
+- `tauri.conf.json`: productName / identifier / title → `GeoDownloader`
+- `admin.rs`: User-Agent → `GeoDownloader/1.0`（2处）
+- `commands.rs`: 安装包名 → `GeoDownloader_{}_setup.exe`，User-Agent 更新
+- `settings.rs` / `history.rs` / `task.rs`: AppData 路径 → `geo-downloader`
+- `index.html`: 版本显示文本、GitHub 链接
+- `app.js`: `GITHUB_REPO = 'gaopengbin/geo-downloader'`
+- `release.yml`: 安装包名称、Release 标题
+- `README.md`: 标题、功能描述、项目结构、Star History
+- `promotion.md` / `3dtiles-design.md` / `MASTER.md`: 产品名更新
+
+### 22. 版本升级 2.0.0 → 3.0.0
+
+- `tauri.conf.json` / `Cargo.toml` / `app.js` 版本号统一升至 3.0.0
+- `README.md` 新增 v3.0.0 版本说明段落
+- GitHub 仓库重命名 `gaopengbin/tif-downloader` → `gaopengbin/geo-downloader`（自动 301 重定向）
+- 本地 git remote 更新
+- 创建 v3.0.0 tag 并触发 Release CI
