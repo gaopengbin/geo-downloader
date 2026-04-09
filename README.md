@@ -1,10 +1,13 @@
 # GeoDownloader
 
-一个基于 Tauri + Rust 的高性能地理空间数据下载与导出桌面工具。支持 2D 地图瓦片、3D Tiles 裁剪下载，导出 GeoTIFF。
+一个基于 Tauri + Rust 的高性能地理空间数据下载与导出桌面工具。支持 2D 地图瓦片、3D Tiles 裁剪下载、Esri Wayback 历史影像，导出 GeoTIFF。
 
 ![Rust](https://img.shields.io/badge/rust-1.77+-orange.svg)
 ![Tauri](https://img.shields.io/badge/tauri-2.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
+![GitHub Release](https://img.shields.io/github/v/release/gaopengbin/geo-downloader)
+![Downloads](https://img.shields.io/github/downloads/gaopengbin/geo-downloader/total?color=brightgreen&label=downloads)
+![Latest Downloads](https://img.shields.io/github/downloads/gaopengbin/geo-downloader/latest/total?label=latest%20downloads)
 
 ## 🎉 v3.0.0 — 大版本更新
 
