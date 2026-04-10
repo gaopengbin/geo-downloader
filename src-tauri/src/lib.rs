@@ -17,6 +17,11 @@ mod commands;
 
 use std::sync::Arc;
 use task::TaskManager;
+use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::TrayIconBuilder,
+    Manager, WindowEvent,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -83,6 +88,55 @@ pub fn run() {
             // 更新
             commands::download_and_install_update,
         ])
+        .setup(|app| {
+            // 系统托盘右键菜单
+            let show = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+
+            // 创建托盘图标
+            let tray_icon = app.default_window_icon().cloned().expect("no default icon");
+            let tray = TrayIconBuilder::new()
+                .icon(tray_icon)
+                .tooltip("GeoDownloader")
+                .menu(&menu)
+                .on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+                        if let Some(w) = tray.app_handle().get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // 窗口关闭时最小化到托盘而非退出
+            let window = app.get_webview_window("main").unwrap();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Some(w) = tray.app_handle().get_webview_window("main") {
+                        let _ = w.hide();
+                    }
+                }
+            });
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

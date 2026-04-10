@@ -1,4 +1,4 @@
-# GeoDownloader
+# <img src="https://img.shields.io/badge/GeoD-ownloader-blue?style=for-the-badge&labelColor=2563eb&color=475569" alt="GeoDownloader" height="36">
 
 一个基于 Tauri + Rust 的高性能地理空间数据下载与导出桌面工具。支持 2D 地图瓦片、3D Tiles 裁剪下载、Esri Wayback 历史影像，导出 GeoTIFF。
 
@@ -125,6 +125,21 @@ geo-downloader/
 ## 📄 许可证
 
 MIT License
+
+## ☕ 赞助
+
+如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
+
+<p align="center">
+  <img src="./wx.jpg" alt="微信赞赏" width="250">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="./zfb.jpg" alt="支付宝赞赏" width="250">
+</p>
+<p align="center">
+  <sub>微信</sub>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <sub>支付宝</sub>
+</p>
 
 ## Star History
 

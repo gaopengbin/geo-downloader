@@ -18,15 +18,28 @@
     <!-- 自定义标题栏 -->
     <header class="titlebar">
         <div class="titlebar-title">
-            <svg class="titlebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-            <span id="app-title">TIF 地图下载工具</span>
+            <span id="app-title" class="brand-logo"><span class="brand-accent">GeoD</span><span class="brand-text">ownloader</span></span>
+            <span class="star-wrapper">
+                <a class="github-star-btn" id="github-star-btn" title="Star on GitHub" href="javascript:void(0)" onclick="if(window.__TAURI__&&window.__TAURI__.opener){window.__TAURI__.opener.openUrl('https://github.com/gaopengbin/geo-downloader')}">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                        <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25z"/>
+                    </svg>
+                    <span>Star</span>
+                </a>
+                <div class="star-hint" id="star-hint">
+                    <span>觉得好用帮忙点个 Star ⭐</span>
+                    <button class="star-hint-close" onclick="event.stopPropagation();document.getElementById('star-hint').remove()">×</button>
+                </div>
+            </span>
+            <button class="sponsor-btn" id="sponsor-btn" title="赞助作者">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                    <path d="M8 1.314C12.438-3.248 23.534 4.735 8 15-7.534 4.736 3.562-3.248 8 1.314z"/>
+                </svg>
+                <span>赞助</span>
+            </button>
         </div>
         <div class="mode-toggle" id="mode-toggle">
-            <button class="mode-toggle-btn active" data-mode="tif">TIF 瓦片</button>
+            <button class="mode-toggle-btn active" data-mode="tif">GeoTIFF</button>
             <button class="mode-toggle-btn" data-mode="3dtiles">3D Tiles</button>
             <button class="mode-toggle-btn" data-mode="wayback">历史影像</button>
         </div>
@@ -408,18 +421,18 @@
 
                         <!-- 版本选择 -->
                         <div class="form-group">
-                            <label class="form-label" for="wayback-version-select">
-                                影像日期
-                                <button id="wayback-load-versions-btn" class="btn-icon btn-primary" style="margin-left: 4px; padding: 2px 6px; font-size: 11px;" title="加载版本列表">
+                            <label class="form-label" for="wayback-version-select">影像日期</label>
+                            <div style="display:flex;gap:4px;align-items:center">
+                                <select id="wayback-version-select" class="form-select" style="flex:1" disabled>
+                                    <option value="">点击右侧按钮加载版本列表</option>
+                                </select>
+                                <button id="wayback-load-versions-btn" class="btn-icon btn-primary" style="padding:4px 6px;flex-shrink:0" title="加载版本列表">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px">
                                         <polyline points="23 4 23 10 17 10"/>
                                         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
                                     </svg>
                                 </button>
-                            </label>
-                            <select id="wayback-version-select" class="form-select" disabled>
-                                <option value="">点击“加载”获取版本列表</option>
-                            </select>
+                            </div>
                         </div>
 
                         <!-- 缩放级别 -->
@@ -703,6 +716,11 @@
         <main class="map-panel" role="main" aria-label="地图面板">
             <div id="map"></div>
             <div id="cesium-container" style="display: none;"></div>
+            <!-- 地图加载遮罩 -->
+            <div id="map-loading" class="map-loading" style="display:none">
+                <div class="map-loading-spinner"></div>
+                <div class="map-loading-text">加载历史影像数据...</div>
+            </div>
 
             <!-- 历史影像时间轴 -->
             <div id="wayback-timeline" class="wayback-timeline" style="display: none;">
@@ -848,6 +866,24 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-right:4px"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                     立即更新
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 赞助弹窗 -->
+    <div id="sponsor-dialog" class="sponsor-overlay" style="display:none">
+        <div class="sponsor-dialog">
+            <div class="sponsor-dialog-header">
+                <h3>☕ 请作者喝杯咖啡</h3>
+                <button class="sponsor-dialog-close" onclick="document.getElementById('sponsor-dialog').style.display='none'">×</button>
+            </div>
+            <p class="sponsor-desc">如果 GeoDownloader 对你有帮助，欢迎赞助支持开发 🙏</p>
+            <div class="sponsor-tabs">
+                <button class="sponsor-tab active" data-tab="wx" onclick="switchSponsorTab('wx')">微信支付</button>
+                <button class="sponsor-tab" data-tab="zfb" onclick="switchSponsorTab('zfb')">支付宝</button>
+            </div>
+            <div class="sponsor-qr">
+                <img id="sponsor-qr-img" src="./images/wx.jpg" alt="收款码" />
             </div>
         </div>
     </div>

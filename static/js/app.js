@@ -73,6 +73,26 @@ document.addEventListener('DOMContentLoaded', async function() {
     initTiles3dPanel(); // 3D Tiles 面板事件
     initCesiumDrawTools(); // CesiumJS 绘图工具
     initWaybackPanel(); // 历史影像面板事件
+    // GitHub Star 引导气泡
+    const starHint = document.getElementById('star-hint');
+    if (starHint) {
+        if (localStorage.getItem('star-hint-dismissed')) {
+            starHint.remove();
+        } else {
+            const dismiss = () => { starHint.remove(); localStorage.setItem('star-hint-dismissed', '1'); };
+            document.getElementById('github-star-btn')?.addEventListener('click', dismiss);
+            setTimeout(() => { if (starHint.parentElement) { starHint.style.animation = 'starHintFadeIn 0.3s ease reverse forwards'; setTimeout(() => starHint.remove(), 300); } }, 15000);
+        }
+    }
+
+    // 赞助按钮
+    document.getElementById('sponsor-btn')?.addEventListener('click', () => {
+        document.getElementById('sponsor-dialog').style.display = '';
+    });
+    // 点击遮罩关闭
+    document.getElementById('sponsor-dialog')?.addEventListener('click', (e) => {
+        if (e.target.classList.contains('sponsor-overlay')) e.target.style.display = 'none';
+    });
     initSettingsPanel();
     initHistoryListEvents();
     initTaskListEvents();
@@ -115,14 +135,14 @@ function initTitlebar() {
     const titlebar = document.querySelector('.titlebar');
     if (titlebar) {
         titlebar.addEventListener('mousedown', (e) => {
-            // 排除按钮和模式切换器的点击
-            if (e.target.closest('.titlebar-btn') || e.target.closest('.mode-toggle')) return;
+            // 排除按钮、模式切换器、Star按钮的点击
+            if (e.target.closest('.titlebar-btn') || e.target.closest('.mode-toggle') || e.target.closest('.github-star-btn') || e.target.closest('.sponsor-btn')) return;
             appWindow.startDragging();
         });
         
         // 双击标题栏最大化/还原
         titlebar.addEventListener('dblclick', async (e) => {
-            if (e.target.closest('.titlebar-btn') || e.target.closest('.mode-toggle')) return;
+            if (e.target.closest('.titlebar-btn') || e.target.closest('.mode-toggle') || e.target.closest('.github-star-btn') || e.target.closest('.sponsor-btn')) return;
             const isMaximized = await appWindow.isMaximized();
             if (isMaximized) {
                 appWindow.unmaximize();
@@ -159,12 +179,7 @@ function switchMode(mode) {
         b.classList.toggle('active', b.dataset.mode === mode);
     });
 
-    // 更新标题文字
-    const title = document.getElementById('app-title');
-    if (title) {
-        const titles = { tif: 'TIF 地图下载工具', '3dtiles': '3D Tiles 下载工具', wayback: '历史影像下载工具' };
-        title.textContent = titles[mode] || 'GeoDownloader';
-    }
+    // 标题固定为 GeoDownloader，不随模式切换
 
     // 切换面板内容
     const tifContent = document.getElementById('tif-mode-content');
@@ -893,6 +908,11 @@ function closeUpdateDialog() {
     if (_updateUnlisten) { _updateUnlisten(); _updateUnlisten = null; }
 }
 
+function switchSponsorTab(tab) {
+    document.querySelectorAll('.sponsor-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.getElementById('sponsor-qr-img').src = tab === 'wx' ? './images/wx.jpg' : './images/zfb.jpg';
+}
+
 async function doUpdateNow() {
     if (!_updateDownloadUrl) return;
     
@@ -1198,7 +1218,14 @@ async function saveAllSettings() {
         applySettings(settings);
         
         // 刷新地图图层
-        refreshMapLayers();
+        refreshMapLayers().then(() => {
+            // wayback 模式下不应恢复底图
+            if (currentMode === 'wayback') {
+                Object.values(mapLayers).forEach(layer => {
+                    if (map.hasLayer(layer)) map.removeLayer(layer);
+                });
+            }
+        });
     } catch (error) {
         statusEl.textContent = '❌ 保存失败: ' + error.message;
         statusEl.className = 'status-text error';
@@ -3556,11 +3583,13 @@ let timelineVersions = [];
 async function loadWaybackVersions() {
     const select = document.getElementById('wayback-version-select');
     const loadBtn = document.getElementById('wayback-load-versions-btn');
+    const mapLoading = document.getElementById('map-loading');
     if (!select) return;
 
     select.disabled = true;
     select.innerHTML = '<option value="">加载中...</option>';
     if (loadBtn) loadBtn.disabled = true;
+    if (mapLoading) mapLoading.style.display = '';
 
     try {
         const useProxy = document.getElementById('proxy-checkbox')?.checked;
@@ -3592,6 +3621,7 @@ async function loadWaybackVersions() {
         console.error('加载 Wayback 版本失败:', e);
     } finally {
         if (loadBtn) loadBtn.disabled = false;
+        if (mapLoading) mapLoading.style.display = 'none';
     }
 }
 

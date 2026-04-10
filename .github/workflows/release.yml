@@ -7,8 +7,25 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-arm64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS-x64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: Linux
+
+    runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
 
@@ -16,8 +33,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -28,38 +53,90 @@ jobs:
         run: cargo install tauri-cli --version "^2"
 
       - name: Build
-        run: cargo tauri build
+        run: cargo tauri build --target ${{ matrix.target }}
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\(.*\)".*/\1/')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      # Windows: 收集 .exe
+      - name: Collect Windows artifacts
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exeFile = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          $newName = "GeoDownloader_${{ steps.version.outputs.VERSION }}_windows_x64-setup.exe"
+          Copy-Item $exeFile.FullName -Destination $newName
+          echo "ARTIFACT=$newName" >> $env:GITHUB_OUTPUT
+        id: collect-win
+
+      # macOS: 收集 .dmg
+      - name: Collect macOS artifacts
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          ARCH=$([[ "${{ matrix.target }}" == *aarch64* ]] && echo "arm64" || echo "x64")
+          DMG=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name "*.dmg" | head -1)
+          NEW_NAME="GeoDownloader_${{ steps.version.outputs.VERSION }}_macos_${ARCH}.dmg"
+          cp "$DMG" "$NEW_NAME"
+          echo "ARTIFACT=$NEW_NAME" >> $GITHUB_OUTPUT
+        id: collect-mac
+
+      # Linux: 收集 .deb 和 .AppImage
+      - name: Collect Linux artifacts
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          DEB=$(find src-tauri/target/${{ matrix.target }}/release/bundle/deb -name "*.deb" | head -1)
+          APPIMAGE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/appimage -name "*.AppImage" | head -1)
+          DEB_NAME="GeoDownloader_${{ steps.version.outputs.VERSION }}_linux_amd64.deb"
+          APPIMAGE_NAME="GeoDownloader_${{ steps.version.outputs.VERSION }}_linux_amd64.AppImage"
+          cp "$DEB" "$DEB_NAME"
+          cp "$APPIMAGE" "$APPIMAGE_NAME"
+          echo "DEB=$DEB_NAME" >> $GITHUB_OUTPUT
+          echo "APPIMAGE=$APPIMAGE_NAME" >> $GITHUB_OUTPUT
+        id: collect-linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: GeoDownloader_*
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Get version
         id: version
         run: |
-          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\(.*\)".*/\1/')
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Rename installer
-        run: |
-          $exeFile = Get-ChildItem -Path src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
-          $newName = "GeoDownloader_${{ steps.version.outputs.VERSION }}_x64-setup.exe"
-          Rename-Item -Path $exeFile.FullName -NewName $newName
-          echo "SETUP_PATH=src-tauri/target/release/bundle/nsis/$newName" >> $env:GITHUB_OUTPUT
-        id: rename
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           name: 'GeoDownloader v${{ steps.version.outputs.VERSION }}'
-          generate_release_notes: false
-          body: |
-            ## v${{ steps.version.outputs.VERSION }} 更新
-            - 🗺️ 新增 Esri Wayback 历史影像下载（100+ 版本, 2014–2026）
-            - 📅 时间轴组件：竖线标记、前进/后退按钮、年份刻度
-            - 📦 批量下载：多版本勾选、文件夹保存
-            - ✂️ 历史影像按边界裁剪（透明背景）
-            - 🔍 最大缩放级别自动探测
-            - ↔️ 侧边栏可拖拽调整宽度
-            - 🌐 Cesium 3D 球底部经纬度/高度显示
-            - 🔧 下载器修复：Esri Referer、404 瓦片跳过
-          files: |
-            ${{ steps.rename.outputs.SETUP_PATH }}
+          generate_release_notes: true
+          files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

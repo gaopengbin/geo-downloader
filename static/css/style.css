@@ -106,6 +106,251 @@ body {
     color: #fff;
     font-size: 13px;
     font-weight: 600;
+    position: relative;
+}
+
+.brand-logo {
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: 0.3px;
+    display: inline-flex;
+    align-items: baseline;
+    user-select: none;
+}
+
+.brand-accent {
+    font-weight: 800;
+    color: #60a5fa;
+    font-size: 15px;
+    letter-spacing: -0.3px;
+}
+
+.brand-text {
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.85);
+    letter-spacing: 0.2px;
+    font-size: 15px;
+}
+
+.star-wrapper {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    margin-left: 8px;
+}
+
+.github-star-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    line-height: 1;
+}
+
+.github-star-btn:hover {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12);
+    border-color: rgba(251, 191, 36, 0.3);
+}
+
+.star-hint {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    background: rgba(37, 99, 235, 0.95);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 8px;
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    animation: starHintBounce 2s ease-in-out infinite, starHintFadeIn 0.5s ease;
+    z-index: 9999;
+    pointer-events: auto;
+}
+
+.star-hint::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-bottom: 6px solid rgba(37, 99, 235, 0.95);
+}
+
+.star-hint-arrow {
+    animation: starHintPoint 1.5s ease-in-out infinite;
+    display: inline-block;
+}
+
+.star-hint-close {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.6);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 0 0 4px;
+    line-height: 1;
+}
+
+.star-hint-close:hover {
+    color: #fff;
+}
+
+@keyframes starHintBounce {
+    0%, 100% { transform: translateX(-50%) translateY(0); }
+    50% { transform: translateX(-50%) translateY(-4px); }
+}
+
+@keyframes starHintPoint {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+}
+
+@keyframes starHintFadeIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* 赞助按钮 */
+.sponsor-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    cursor: pointer;
+    transition: all 0.2s;
+    line-height: 1;
+}
+
+.sponsor-btn:hover {
+    color: #fb923c;
+    background: rgba(251,146,60,0.12);
+    border-color: rgba(251,146,60,0.3);
+}
+
+/* 赞助弹窗 */
+.sponsor-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    backdrop-filter: blur(4px);
+}
+
+.sponsor-dialog {
+    background: #fff;
+    border-radius: 16px;
+    padding: 24px;
+    width: 340px;
+    max-width: 90vw;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    animation: sponsorFadeIn 0.3s ease;
+}
+
+.sponsor-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.sponsor-dialog-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #1a1a2e;
+}
+
+.sponsor-dialog-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    color: #999;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+}
+
+.sponsor-dialog-close:hover {
+    color: #333;
+}
+
+.sponsor-desc {
+    font-size: 13px;
+    color: #666;
+    margin: 0 0 16px;
+}
+
+.sponsor-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.sponsor-tab {
+    flex: 1;
+    padding: 8px;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.sponsor-tab.active[data-tab="wx"] {
+    border-color: #07c160;
+    color: #07c160;
+    background: rgba(7,193,96,0.05);
+}
+
+.sponsor-tab.active[data-tab="zfb"] {
+    border-color: #1677ff;
+    color: #1677ff;
+    background: rgba(22,119,255,0.05);
+}
+
+.sponsor-qr {
+    text-align: center;
+}
+
+.sponsor-qr img {
+    width: 240px;
+    height: auto;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+}
+
+@keyframes sponsorFadeIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
 }
 
 .titlebar-icon {
@@ -259,6 +504,38 @@ body {
     height: 100%;
     position: relative;
     background: var(--bg);
+}
+
+/* 地图加载遮罩 */
+.map-loading {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    gap: 12px;
+}
+
+.map-loading-spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #60a5fa;
+    border-radius: 50%;
+    animation: mapLoadingSpin 0.8s linear infinite;
+}
+
+.map-loading-text {
+    color: #fff;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+@keyframes mapLoadingSpin {
+    to { transform: rotate(360deg); }
 }
 
 /* GCJ-02 偏移警告 */
@@ -621,6 +898,10 @@ body {
     gap: 12px;
 }
 
+.form-row > .form-group {
+    min-height: 100%;
+}
+
 .form-row-3 {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -681,6 +962,8 @@ body {
     outline: none;
     cursor: pointer;
     -webkit-appearance: none;
+    margin-top: auto;
+    margin-bottom: auto;
 }
 
 .form-range::-webkit-slider-thumb {
