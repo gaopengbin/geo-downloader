@@ -1,3 +1,3 @@
 User-agent: *
 Allow: /
-Sitemap: https://gpb.cc/sitemap.xml
+Sitemap: https://geodownloader.pages.dev/sitemap.xml
