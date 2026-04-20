@@ -1606,6 +1606,11 @@ body {
     margin-bottom: 8px;
 }
 
+.task-card-timer {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+}
+
 .task-progress-bar {
     height: 6px;
     background: var(--bg-active);

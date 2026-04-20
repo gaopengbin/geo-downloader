@@ -16,6 +16,7 @@ let layerControl = null; // 图层控制器引用
 let activeTaskListeners = {}; // 活动任务的事件监听器 { taskId: unlisten函数 }
 let activeTaskLogListeners = {}; // 任务日志事件监听器
 let taskLogs = {}; // 任务日志数据 { taskId: [log1, log2, ...] }
+let taskTimers = {}; // 任务计时器 { taskId: intervalId }
 
 // ============ 工具函数 ============
 
@@ -1753,11 +1754,19 @@ async function estimateDownload() {
             let html = `
                 <strong>${result.tile_count.toLocaleString()}</strong> 个瓦片 (${result.cols}列 × ${result.rows}行) · 约 <strong>${result.estimated_size_mb.toFixed(1)} MB</strong>
             `;
+            // GeoTIFF 显示未压缩大小
+            if (result.raw_size_mb) {
+                html += ` · 未压缩 ${result.raw_size_mb.toFixed(0)} MB`;
+            }
             // 显示预算信息（即使通过也可提示）
             if (result.budget_check && result.budget_check.estimated_peak_bytes) {
                 const peakMB = Math.round(result.budget_check.estimated_peak_bytes / 1024 / 1024);
                 const budgetMB = Math.round(result.budget_check.budget_bytes / 1024 / 1024);
                 html += `<br><small style="color:#888">内存预估 ${peakMB} MB / ${budgetMB} MB</small>`;
+            }
+            // 大小说明（如压缩效率提示）
+            if (result.size_note) {
+                html += `<br><small style="color:#b08800">💡 ${result.size_note}</small>`;
             }
             estimateDiv.innerHTML = html;
             downloadBtn.disabled = false;
@@ -2506,6 +2515,7 @@ function renderHistoryCard(record) {
     const date = new Date(record.created_at).toLocaleString('zh-CN');
     const logFile = record.log_file || '';
     const isFailed = record.status === 'failed';
+    const duration = record.duration_secs != null ? formatDuration(record.duration_secs) : '';
     
     return `
         <div class="history-card" data-id="${escapeAttr(record.id)}" data-path="${escapeAttr(record.file_path)}" data-log-file="${escapeAttr(logFile)}">
@@ -2518,6 +2528,7 @@ function renderHistoryCard(record) {
                 ${record.zoom > 0 ? `<span>z${Number(record.zoom)}</span>` : ''}
                 <span>${Number(record.tile_count)} ${record.zoom > 0 ? '瓦片' : '节点'}</span>
                 ${record.file_size > 0 ? `<span>${escapeHtml(fileSize)}</span>` : ''}
+                ${duration ? `<span>⏱ ${duration}</span>` : ''}
             </div>
             ${isFailed ? '' : `<div class="history-card-path">${escapeHtml(record.file_path)}</div>`}
             <div class="history-card-meta">
@@ -2537,6 +2548,14 @@ function formatFileSize(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+function formatDuration(secs) {
+    if (secs < 60) return secs + 's';
+    if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return h + 'h ' + m + 'm';
 }
 
 // 使用事件委托处理历史记录按钮点击，避免内联 onclick 的路径转义问题
@@ -2658,8 +2677,10 @@ function addTaskCardToUI(taskId, name, sourceName, zoom, tileCount) {
     if (emptyState) emptyState.remove();
     
     taskLogs[taskId] = [];
+    const startTime = Date.now();
+    const startStr = new Date(startTime).toLocaleTimeString();
     const html = `
-        <div class="task-card" data-task-id="${escapeAttr(taskId)}" data-status="pending">
+        <div class="task-card" data-task-id="${escapeAttr(taskId)}" data-status="pending" data-start-time="${startTime}">
             <div class="task-card-header">
                 <span class="task-card-title">${escapeHtml(name)}</span>
                 <span class="task-card-status">等待中</span>
@@ -2668,6 +2689,7 @@ function addTaskCardToUI(taskId, name, sourceName, zoom, tileCount) {
                 <span>${escapeHtml(sourceName)}</span>
                 ${zoom > 0 ? `<span>z${Number(zoom)}</span>` : ''}
                 <span>${Number(tileCount).toLocaleString()} ${zoom > 0 ? '瓦片' : '节点'}</span>
+                <span class="task-card-timer" title="开始于 ${startStr}">⏱ 0s</span>
             </div>
             <div class="task-progress-bar">
                 <div class="task-progress-fill" style="width: 0%"></div>
@@ -2682,6 +2704,17 @@ function addTaskCardToUI(taskId, name, sourceName, zoom, tileCount) {
         </div>
     `;
     listEl.insertAdjacentHTML('afterbegin', html);
+
+    // 启动实时计时器
+    taskTimers[taskId] = setInterval(() => {
+        const card = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
+        if (!card) { clearInterval(taskTimers[taskId]); delete taskTimers[taskId]; return; }
+        const timerEl = card.querySelector('.task-card-timer');
+        if (timerEl) {
+            const elapsed = Math.floor((Date.now() - startTime) / 1000);
+            timerEl.textContent = elapsed >= 60 ? `⏱ ${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `⏱ ${elapsed}s`;
+        }
+    }, 1000);
 }
 
 async function startTaskListener(taskId) {
@@ -2831,6 +2864,22 @@ function updateTaskCard(payload) {
     // 完成/失败/取消时处理
     if (['completed', 'failed', 'cancelled'].includes(status)) {
         stopTaskListener(task_id);
+
+        // 停止计时器，显示最终时长
+        if (taskTimers[task_id]) {
+            clearInterval(taskTimers[task_id]);
+            delete taskTimers[task_id];
+        }
+        const startTs = parseInt(card.dataset.startTime || '0');
+        if (startTs > 0) {
+            const elapsed = Math.floor((Date.now() - startTs) / 1000);
+            const timerEl = card.querySelector('.task-card-timer');
+            if (timerEl) {
+                const durStr = elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`;
+                timerEl.textContent = `⏱ ${durStr}`;
+                timerEl.title = `${new Date(startTs).toLocaleTimeString()} → ${new Date().toLocaleTimeString()}`;
+            }
+        }
         
         if (status === 'completed') {
             // 完成的任务 2 秒后自动移除
@@ -2891,6 +2940,7 @@ function renderTaskCardFromInfo(task) {
                 <span>${task.source_name}</span>
                 <span>z${task.zoom}</span>
                 <span>${task.total.toLocaleString()} 瓦片</span>
+                <span class="task-card-timer">⏱ --</span>
             </div>
             <div class="task-progress-bar">
                 <div class="task-progress-fill" style="width: ${task.progress || 0}%"></div>
@@ -2989,6 +3039,7 @@ function initResumableTaskEvents() {
 }
 
 function removeTaskCardFromUI(taskId) {
+    if (taskTimers[taskId]) { clearInterval(taskTimers[taskId]); delete taskTimers[taskId]; }
     const card = document.querySelector(`.task-card[data-task-id="${taskId}"]`);
     if (card) card.remove();
     

@@ -24,6 +24,9 @@ pub struct DownloadRecord {
     /// 关联的日志文件路径
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_file: Option<String>,
+    /// 任务耗时（秒）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u64>,
 }
 
 /// 下载状态
@@ -62,12 +65,18 @@ impl DownloadRecord {
             created_at: Utc::now(),
             status,
             log_file: None,
+            duration_secs: None,
         }
     }
 
     /// 创建新记录（带日志文件）
     pub fn with_log_file(mut self, log_file: Option<String>) -> Self {
         self.log_file = log_file;
+        self
+    }
+
+    pub fn with_duration(mut self, secs: u64) -> Self {
+        self.duration_secs = Some(secs);
         self
     }
 }
