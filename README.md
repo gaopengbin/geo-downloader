@@ -5,8 +5,7 @@
 **🌐 [官网 geodownloader.pages.dev](https://geodownloader.pages.dev)**
 
 欢迎沟通交流
-<img width="228" height="320" alt="a612400f395ff8c3d9b84db184fe1166" src="https://github.com/user-attachments/assets/65aa67eb-8925-4284-b2fd-c58d1008aaaa" />
-
+<img width="228" height="320" alt="c43b2929c4437ad643932ad31e935f5d" src="https://github.com/user-attachments/assets/d3bf8101-e104-416f-9ceb-d64e793916be" />
 
 ![Rust](https://img.shields.io/badge/rust-1.77+-orange.svg)
 ![Tauri](https://img.shields.io/badge/tauri-2.0-blue.svg)
