@@ -7,6 +7,7 @@ use crate::downloader::TileDownloader;
 use crate::merger;
 use crate::exporter::{self, ExportFormat};
 use crate::streaming_tiff;
+use crate::streaming_raster;
 use crate::admin::{self, AdminRegion, GeocodeResult};
 use crate::history::{DownloadRecord, DownloadStatus, HistoryManager};
 use crate::settings::{AppSettings, SettingsManager};
@@ -73,6 +74,12 @@ pub struct EstimateResult {
     /// 内存预算检查结果（前端可据此展示提示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_check: Option<budget::BudgetCheckResult>,
+    /// GeoTIFF 未压缩原始大小（MB），用于提示用户实际文件大小
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_size_mb: Option<f64>,
+    /// 大小说明（如压缩效率提示）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_note: Option<String>,
 }
 
 
@@ -152,6 +159,8 @@ pub fn estimate_download(bounds: Bounds, zoom: u8, format: Option<String>, crop_
             allowed: false,
             warning: Some(format!("区域过大（{} 个瓦片），超过 {} 个上限。请缩小区域或降低缩放级别。", tile_count, max_tiles)),
             budget_check: None,
+            raw_size_mb: None,
+            size_note: None,
         };
     }
 
@@ -159,12 +168,10 @@ pub fn estimate_download(bounds: Bounds, zoom: u8, format: Option<String>, crop_
     let fmt = format.as_deref().unwrap_or("geotiff");
     let has_crop = crop_to_shape.unwrap_or(false);
     let is_geotiff = ExportFormat::from_str(fmt) == ExportFormat::GeoTiff;
-    let use_streaming = is_geotiff && tile_count > 5_000 && !has_crop;
 
-    let format_class = if use_streaming {
+    // GeoTIFF 一律走流式路径（含裁剪），内存占用极低
+    let format_class = if is_geotiff {
         FormatClass::StreamingTiff
-    } else if is_geotiff {
-        FormatClass::FullTiff
     } else {
         FormatClass::RasterImage
     };
@@ -187,8 +194,23 @@ pub fn estimate_download(bounds: Bounds, zoom: u8, format: Option<String>, crop_
             allowed: false,
             warning: Some("内存预算不足，请查看建议调整参数".to_string()),
             budget_check,
+            raw_size_mb: None,
+            size_note: None,
         };
     }
+
+    // GeoTIFF 预估未压缩原始大小 + 说明
+    let (raw_size_mb, size_note) = if is_geotiff {
+        let raw = cols as f64 * rows as f64 * 256.0 * 256.0 * 3.0 / (1024.0 * 1024.0);
+        let note = if raw > 100.0 {
+            Some("卫星影像 LZW 压缩效率低，实际文件接近未压缩大小；矢量地图可压缩至 1/5~1/10".to_string())
+        } else {
+            None
+        };
+        (Some(raw), note)
+    } else {
+        (None, None)
+    };
 
     EstimateResult {
         tile_count,
@@ -198,6 +220,8 @@ pub fn estimate_download(bounds: Bounds, zoom: u8, format: Option<String>, crop_
         allowed: true,
         warning: None,
         budget_check,
+        raw_size_mb,
+        size_note,
     }
 }
 
@@ -349,7 +373,7 @@ async fn execute_download_task(
     task_id: &str,
     cancel_token: &tokio_util::sync::CancellationToken,
     pause_control: &PauseControl,
-    request: DownloadRequest,
+    mut request: DownloadRequest,
     source: TileSource,
     save_path: String,
     _tile_count: u32,
@@ -358,6 +382,17 @@ async fn execute_download_task(
 ) -> Result<(), String> {
     let event_name = format!("task-progress-{}", task_id);
     let start_time = std::time::Instant::now();
+
+    // 矩形裁剪：用户画矩形时 polygon 为空，自动从 bounds 生成矩形多边形
+    if request.crop_to_shape && request.polygon.is_none() {
+        let b = &request.bounds;
+        request.polygon = Some(vec![vec![
+            PolygonCoord { lat: b.north, lng: b.west },
+            PolygonCoord { lat: b.north, lng: b.east },
+            PolygonCoord { lat: b.south, lng: b.east },
+            PolygonCoord { lat: b.south, lng: b.west },
+        ]]);
+    }
     
     // 记录任务参数
     task_log(app, tm, task_id, "INFO", &format!("=== 任务开始: {} ===", task_name));
@@ -524,45 +559,73 @@ async fn execute_download_task(
         }
     }
     
-    // 判断是否使用流式写入路径 (GeoTIFF + 瓦片数 > 5000)
-    let is_geotiff = ExportFormat::from_str(&request.format) == ExportFormat::GeoTiff;
-    let use_streaming = is_geotiff && actual_count > 5_000
-        && !(request.crop_to_shape && request.polygon.is_some());
+    // 判断是否使用流式写入路径
+    // GeoTIFF: 流式 BigTIFF（streaming_tiff）
+    // PNG: 流式 PNG（streaming_raster）
+    // JPEG: 全量内存路径（需全图编码，但已优化为直写文件）
+    let format = ExportFormat::from_str(&request.format);
+    let is_geotiff = format == ExportFormat::GeoTiff;
+    let is_png = format == ExportFormat::Png;
+    let use_streaming = is_geotiff || is_png;
     
     let file_size;
     
     if use_streaming {
-        // ===== 流式 GeoTIFF 路径：逐行写入，内存极低 =====
-        task_log(app, tm, task_id, "INFO", &format!("使用流式 BigTIFF 导出（{} 张瓦片）", actual_count));
-        tm.update_progress(task_id, TaskStatus::Exporting, 88.0, actual_count - failed_count, failed_count, Some("流式导出 GeoTIFF...".to_string()));
+        // ===== 流式路径：逐行写入，内存极低 =====
+        let has_crop = request.crop_to_shape && request.polygon.is_some();
+        let format_label = if is_geotiff { "BigTIFF" } else { "PNG" };
+        task_log(app, tm, task_id, "INFO", &format!(
+            "使用流式 {} 导出（{} 张瓦片{}）",
+            format_label,
+            actual_count,
+            if has_crop { "，含多边形裁剪" } else { "" }
+        ));
+        tm.update_progress(task_id, TaskStatus::Exporting, 88.0, actual_count - failed_count, failed_count, Some(format!("流式导出 {}...", format_label)));
         let _ = app.emit(&event_name, TaskProgressPayload {
             task_id: task_id.to_string(),
             status: "exporting".to_string(),
             progress: 88.0,
             completed: actual_count - failed_count,
             total: actual_count,
-            message: Some("流式导出 GeoTIFF...".to_string()),
+            message: Some(format!("流式导出 {}...", format_label)),
         });
         
         let merged_bounds = tile::get_merged_bounds(x_min, y_min, x_max, y_max, request.zoom);
         let sp = save_path.clone();
         let compression = request.compression.clone();
+
+        // 构造多边形掩码数据（裁剪模式时传入）
+        let polygon_data: Option<Vec<Vec<merger::PolygonPoint>>> = if has_crop {
+            request.polygon.as_ref().map(|polys| {
+                polys.iter()
+                    .map(|ring| ring.iter().map(|p| merger::PolygonPoint { lat: p.lat, lng: p.lng }).collect())
+                    .collect()
+            })
+        } else {
+            None
+        };
         
         file_size = tokio::task::spawn_blocking(move || {
-            streaming_tiff::merge_and_export_streaming(
-                &tile_files, x_min, y_min, x_max, y_max,
-                &merged_bounds, Path::new(&sp), &compression,
-            )
+            let poly_slices: Option<&[Vec<merger::PolygonPoint>]> = polygon_data.as_deref();
+            if is_geotiff {
+                streaming_tiff::merge_and_export_streaming(
+                    &tile_files, x_min, y_min, x_max, y_max,
+                    &merged_bounds, Path::new(&sp), &compression,
+                    poly_slices,
+                )
+            } else {
+                streaming_raster::merge_and_export_streaming_png(
+                    &tile_files, x_min, y_min, x_max, y_max,
+                    &merged_bounds, Path::new(&sp),
+                    poly_slices,
+                )
+            }
         }).await.map_err(|e| format!("流式导出失败: {}", e))??;
     } else {
-        // ===== 常规路径：内存拼接 + 导出 =====
+        // ===== 常规路径：内存拼接 + 导出（仅 JPEG）=====
         // 内存预算守卫：常规路径会全量加载画布，需检查预算
         let has_crop = request.crop_to_shape && request.polygon.is_some();
-        let format_class = if is_geotiff {
-            FormatClass::FullTiff
-        } else {
-            FormatClass::RasterImage
-        };
+        let format_class = FormatClass::RasterImage;
         let budget_mb = SettingsManager::new()
             .and_then(|m| m.get())
             .map(|s| s.memory_budget_mb)
@@ -612,23 +675,20 @@ async fn execute_download_task(
         // 使用瓦片网格边界（而非用户选区）做多边形裁剪的坐标参考
         let grid_bounds_tuple = (merged_bounds.north, merged_bounds.south, merged_bounds.east, merged_bounds.west);
         let compression = request.compression.clone();
+        let sp = save_path.clone();
         
-        let bytes = tokio::task::spawn_blocking(move || {
+        file_size = tokio::task::spawn_blocking(move || {
             if crop_to_shape && polygon_opt.is_some() {
                 let polygons: Vec<Vec<merger::PolygonPoint>> = polygon_opt.unwrap()
                     .iter()
                     .map(|ring| ring.iter().map(|p| merger::PolygonPoint { lat: p.lat, lng: p.lng }).collect())
                     .collect();
-                let masked = merger::mask_image_by_polygons(&merged, &polygons, grid_bounds_tuple);
-                exporter::export_rgba_image(&masked, format, Some(&merged_bounds), &compression)
+                let masked = merger::mask_image_by_polygons(merged, &polygons, grid_bounds_tuple);
+                exporter::export_rgba_image_to_file(masked, format, Path::new(&sp), Some(&merged_bounds), &compression)
             } else {
-                exporter::export_image(&merged, format, Some(&merged_bounds), &compression)
+                exporter::export_image_to_file(merged, format, Path::new(&sp), Some(&merged_bounds), &compression)
             }
         }).await.map_err(|e| format!("导出失败: {}", e))??;
-        
-        file_size = bytes.len() as u64;
-        std::fs::write(&save_path, &bytes)
-            .map_err(|e| format!("保存文件失败: {}", e))?;
     }
     
     // 标记完成，清理临时文件和持久化任务
@@ -660,7 +720,8 @@ async fn execute_download_task(
         actual_count,
         failed_count,
         if failed_count == 0 { DownloadStatus::Completed } else { DownloadStatus::Completed },
-    ).with_log_file(log_file_path);
+    ).with_log_file(log_file_path)
+     .with_duration(total_elapsed.as_secs());
     if let Ok(manager) = HistoryManager::new() {
         let _ = manager.add(record);
     }

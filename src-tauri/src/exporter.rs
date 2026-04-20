@@ -2,7 +2,7 @@
 
 use crate::tile::TileBounds;
 use image::{DynamicImage, ImageFormat, RgbImage, RgbaImage};
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 
 /// 导出格式
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,10 +48,10 @@ pub fn export_png_bytes(image: &RgbImage) -> Result<Vec<u8>, String> {
     Ok(buffer.into_inner())
 }
 
-/// 导出 RGBA 图片为 PNG 字节
-pub fn export_rgba_png_bytes(image: &RgbaImage) -> Result<Vec<u8>, String> {
+/// 导出 RGBA 图片为 PNG 字节（消费式，无 clone）
+pub fn export_rgba_png_bytes(image: RgbaImage) -> Result<Vec<u8>, String> {
     let mut buffer = Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(image.clone())
+    DynamicImage::ImageRgba8(image)
         .write_to(&mut buffer, ImageFormat::Png)
         .map_err(|e| format!("PNG 导出失败: {}", e))?;
     Ok(buffer.into_inner())
@@ -213,9 +213,9 @@ pub fn export_image(
     }
 }
 
-/// 根据格式导出 RGBA 图片 (带透明通道)
+/// 根据格式导出 RGBA 图片 (带透明通道，消费式)
 pub fn export_rgba_image(
-    image: &RgbaImage,
+    image: RgbaImage,
     format: ExportFormat,
     bounds: Option<&TileBounds>,
     compression: &str,
@@ -223,16 +223,97 @@ pub fn export_rgba_image(
     match format {
         ExportFormat::Png => export_rgba_png_bytes(image),
         ExportFormat::Jpeg => {
-            let rgb = DynamicImage::ImageRgba8(image.clone()).to_rgb8();
+            let rgb = DynamicImage::ImageRgba8(image).to_rgb8();
             export_jpeg_bytes(&rgb, 90)
         }
-        ExportFormat::GeoTiff => export_rgba_tiff_bytes(image, bounds, compression),
+        ExportFormat::GeoTiff => export_rgba_tiff_bytes(&image, bounds, compression),
     }
 }
 
 /// 获取文件扩展名
 pub fn get_file_extension(format: &str) -> &'static str {
     ExportFormat::from_str(format).extension()
+}
+
+/// 直接将 RGB 图片编码写入文件（避免 Vec<u8> 中间缓冲）
+pub fn export_image_to_file(
+    image: RgbImage,
+    format: ExportFormat,
+    path: &std::path::Path,
+    bounds: Option<&TileBounds>,
+    compression: &str,
+) -> Result<u64, String> {
+    use std::io::BufWriter;
+    match format {
+        ExportFormat::Png => {
+            let file = std::fs::File::create(path).map_err(|e| format!("创建文件失败: {}", e))?;
+            let mut w = BufWriter::new(file);
+            DynamicImage::ImageRgb8(image)
+                .write_to(&mut w, ImageFormat::Png)
+                .map_err(|e| format!("PNG 导出失败: {}", e))?;
+            w.flush().map_err(|e| format!("刷新缓冲失败: {}", e))?;
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            Ok(size)
+        }
+        ExportFormat::Jpeg => {
+            let file = std::fs::File::create(path).map_err(|e| format!("创建文件失败: {}", e))?;
+            let mut w = BufWriter::new(file);
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 90);
+            encoder.encode_image(&image).map_err(|e| format!("JPEG 导出失败: {}", e))?;
+            drop(image);
+            w.flush().map_err(|e| format!("刷新缓冲失败: {}", e))?;
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            Ok(size)
+        }
+        ExportFormat::GeoTiff => {
+            let bytes = export_tiff_bytes(&image, bounds, compression)?;
+            drop(image);
+            let size = bytes.len() as u64;
+            std::fs::write(path, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
+            Ok(size)
+        }
+    }
+}
+
+/// 直接将 RGBA 图片编码写入文件（避免 Vec<u8> 中间缓冲，消费式）
+pub fn export_rgba_image_to_file(
+    image: RgbaImage,
+    format: ExportFormat,
+    path: &std::path::Path,
+    bounds: Option<&TileBounds>,
+    compression: &str,
+) -> Result<u64, String> {
+    use std::io::BufWriter;
+    match format {
+        ExportFormat::Png => {
+            let file = std::fs::File::create(path).map_err(|e| format!("创建文件失败: {}", e))?;
+            let mut w = BufWriter::new(file);
+            let dyn_img = DynamicImage::ImageRgba8(image);
+            dyn_img.write_to(&mut w, ImageFormat::Png)
+                .map_err(|e| format!("PNG 导出失败: {}", e))?;
+            w.flush().map_err(|e| format!("刷新缓冲失败: {}", e))?;
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            Ok(size)
+        }
+        ExportFormat::Jpeg => {
+            let rgb = DynamicImage::ImageRgba8(image).to_rgb8();
+            let file = std::fs::File::create(path).map_err(|e| format!("创建文件失败: {}", e))?;
+            let mut w = BufWriter::new(file);
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 90);
+            encoder.encode_image(&rgb).map_err(|e| format!("JPEG 导出失败: {}", e))?;
+            drop(rgb);
+            w.flush().map_err(|e| format!("刷新缓冲失败: {}", e))?;
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            Ok(size)
+        }
+        ExportFormat::GeoTiff => {
+            let bytes = export_rgba_tiff_bytes(&image, bounds, compression)?;
+            drop(image);
+            let size = bytes.len() as u64;
+            std::fs::write(path, &bytes).map_err(|e| format!("写入文件失败: {}", e))?;
+            Ok(size)
+        }
+    }
 }
 
 #[cfg(feature = "geotiff")]

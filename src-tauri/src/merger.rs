@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 /// 纬度 → Mercator Y（归一化值，用于像素映射）
 /// 公式: ln(tan(π/4 + lat_rad/2))，与 Web Mercator 瓦片一致
-fn mercator_y(lat_deg: f64) -> f64 {
+pub fn mercator_y(lat_deg: f64) -> f64 {
     let lat_rad = lat_deg.to_radians();
     (std::f64::consts::PI / 4.0 + lat_rad / 2.0).tan().ln()
 }
@@ -74,8 +74,9 @@ pub struct PolygonPoint {
 
 /// 按多个多边形裁剪图片 (返回 RGBA，多边形外透明)
 /// 支持 MultiPolygon：多个不连续的面都会保留
+/// 消费式 API：接收 RgbImage 所有权，函数内部完成后释放源数据以减少内存峰值
 pub fn mask_image_by_polygons(
-    image: &RgbImage,
+    image: RgbImage,
     polygons: &[Vec<PolygonPoint>],
     image_bounds: (f64, f64, f64, f64), // (north, south, east, west)
 ) -> RgbaImage {
@@ -103,7 +104,7 @@ pub fn mask_image_by_polygons(
         .filter(|ring: &Vec<(i32, i32)>| ring.len() >= 3)
         .collect();
 
-    let src_raw = image.as_raw();
+    let src_raw = image.into_raw();
     let mut dst_raw: Vec<u8> = vec![0; (width as usize) * (height as usize) * 4];
 
     if all_pixel_rings.is_empty() {
@@ -159,6 +160,7 @@ pub fn mask_image_by_polygons(
         }
     }
 
+    drop(src_raw); // 尽早释放 RGB 源数据，减少峰值内存
     RgbaImage::from_raw(width, height, dst_raw).unwrap()
 }
 

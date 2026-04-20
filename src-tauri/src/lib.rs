@@ -9,6 +9,7 @@ pub mod history;
 pub mod settings;
 pub mod task;
 pub mod streaming_tiff;
+pub mod streaming_raster;
 pub mod tiles3d;
 pub mod wayback;
 pub mod budget;
