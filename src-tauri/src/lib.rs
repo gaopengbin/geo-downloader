@@ -15,6 +15,7 @@ pub mod tiles3d;
 pub mod wayback;
 pub mod wayback_metadata;
 pub mod budget;
+pub mod dem;
 
 // Tauri commands
 mod commands;

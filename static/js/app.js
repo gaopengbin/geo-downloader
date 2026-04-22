@@ -191,7 +191,7 @@ function initTitlebar() {
 }
 
 // ============ 模式切换 (TIF / 3D Tiles) ============
-let currentMode = 'tif'; // 'tif' | '3dtiles'
+let currentMode = 'tif'; // 'tif' | 'dem' | '3dtiles' | 'wayback'
 let cesiumViewer = null;
 let cesiumTileset = null;
 
@@ -222,9 +222,14 @@ function switchMode(mode) {
     const tifContent = document.getElementById('tif-mode-content');
     const tiles3dContent = document.getElementById('tiles3d-mode-content');
     const waybackContent = document.getElementById('wayback-mode-content');
-    if (tifContent) tifContent.style.display = mode === 'tif' ? '' : 'none';
+    // 'tif' 与 'dem' 共用同一个下载面板，仅数据源/格式不同
+    const showTif = mode === 'tif' || mode === 'dem';
+    if (tifContent) tifContent.style.display = showTif ? '' : 'none';
     if (tiles3dContent) tiles3dContent.style.display = mode === '3dtiles' ? '' : 'none';
     if (waybackContent) waybackContent.style.display = mode === 'wayback' ? '' : 'none';
+
+    // 重建 source-select 选项以匹配当前模式（DEM 仅显示 DEM 源）
+    rebuildSourceSelectForMode(mode);
 
     // 切换地图引擎（wayback 使用 Leaflet，同 tif）
     const mapEl = document.getElementById('map');
@@ -591,6 +596,8 @@ async function loadMapSources() {
             const firstKey = Object.keys(sources)[0];
             if (firstKey) updateZoomSliderMax(firstKey);
         }
+        // 按当前 mode 过滤 source-select 选项（DEM 模式仅显示 DEM 源）
+        rebuildSourceSelectForMode(currentMode);
         
         // 创建天地图标注叠加图层
         const token = customToken || '436ce7e50d27eede2f2929307e6b33c0';
@@ -652,6 +659,8 @@ function syncDropdownWithMap() {
         }
         // 更新 zoom slider 的最大值
         updateZoomSliderMax(selectedKey);
+        // DEM 源锁定输出格式为 GeoTIFF (Float32)
+        applyDemFormatLock(selectedKey);
     });
     
     // 当地图图层通过控件改变时，更新下拉框
@@ -686,6 +695,60 @@ function hideGcj02Warning() {
     if (warning) {
         warning.style.display = 'none';
     }
+}
+
+// DEM 源识别（与后端 dem::is_dem_source 保持一致）
+function isDemSource(key) {
+    return key === 'dem_terrarium';
+}
+
+// 当选择 DEM 源时锁定输出格式为 GeoTIFF（Float32 单波段）
+function applyDemFormatLock(sourceKey) {
+    const fmtSelect = document.getElementById('format-select');
+    if (!fmtSelect) return;
+    if (isDemSource(sourceKey)) {
+        fmtSelect.value = 'geotiff';
+        fmtSelect.disabled = true;
+        fmtSelect.title = 'DEM 数据仅支持 GeoTIFF Float32 输出';
+    } else {
+        fmtSelect.disabled = false;
+        fmtSelect.title = '';
+    }
+}
+
+// 根据当前 mode 重建数据源下拉框
+// - 'dem'  : 仅显示 DEM 源（dem_*），自动锁格式
+// - 其他   : 显示非 DEM 源
+function rebuildSourceSelectForMode(mode) {
+    const sourceSelect = document.getElementById('source-select');
+    if (!sourceSelect || !tileSourceConfigs) return;
+
+    const wantDem = mode === 'dem';
+    const prevValue = sourceSelect.value;
+
+    // 过滤 + 排序
+    const entries = Object.entries(tileSourceConfigs)
+        .filter(([key]) => isDemSource(key) === wantDem)
+        .sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+    sourceSelect.innerHTML = '';
+    for (const [key, config] of entries) {
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = config.name;
+        sourceSelect.appendChild(opt);
+    }
+
+    // 选择默认值：保留之前的（如果仍存在），否则用首个
+    let nextValue = entries.find(([k]) => k === prevValue)?.[0];
+    if (!nextValue) {
+        nextValue = wantDem ? 'dem_terrarium' : (entries.find(([k]) => k === 'osm')?.[0] || entries[0]?.[0]);
+    }
+    if (nextValue) {
+        sourceSelect.value = nextValue;
+        updateZoomSliderMax(nextValue);
+    }
+    applyDemFormatLock(nextValue || '');
 }
 
 // ============ 绘制控件初始化 ============

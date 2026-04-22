@@ -567,8 +567,10 @@ async fn execute_download_task(
     // GeoTIFF: 流式 BigTIFF（streaming_tiff）
     // PNG: 流式 PNG（streaming_raster）
     // JPEG: 全量内存路径（需全图编码，但已优化为直写文件）
+    // DEM (Terrarium): 强制流式 BigTIFF Float32
     let format = ExportFormat::from_str(&request.format);
-    let is_geotiff = format == ExportFormat::GeoTiff;
+    let is_dem = crate::dem::is_dem_source(&request.source);
+    let is_geotiff = format == ExportFormat::GeoTiff || is_dem;
     let is_png = format == ExportFormat::Png;
     let use_streaming = is_geotiff || is_png;
     
@@ -611,7 +613,13 @@ async fn execute_download_task(
         
         file_size = tokio::task::spawn_blocking(move || {
             let poly_slices: Option<&[Vec<merger::PolygonPoint>]> = polygon_data.as_deref();
-            if is_geotiff {
+            if is_dem {
+                streaming_tiff::merge_and_export_dem_streaming(
+                    &tile_files, x_min, y_min, x_max, y_max,
+                    &merged_bounds, Path::new(&sp), &compression,
+                    poly_slices,
+                )
+            } else if is_geotiff {
                 streaming_tiff::merge_and_export_streaming(
                     &tile_files, x_min, y_min, x_max, y_max,
                     &merged_bounds, Path::new(&sp), &compression,

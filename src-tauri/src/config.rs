@@ -266,6 +266,19 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
         },
     );
 
+    // DEM: AWS Terrain Tiles (Terrarium 编码) - 全球免费
+    sources.insert(
+        "dem_terrarium".to_string(),
+        TileSource {
+            id: "dem_terrarium".to_string(),
+            name: "DEM 高程 (Terrarium)".to_string(),
+            url: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png".to_string(),
+            subdomains: vec![],
+            max_zoom: 15,
+            attribution: "Mapzen / AWS / NASADEM".to_string(),
+        },
+    );
+
     sources
 }
 

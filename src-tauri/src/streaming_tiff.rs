@@ -380,3 +380,293 @@ fn write_bigtiff_entry<W: Write>(w: &mut W, tag: u16, typ: u16, count: u64, valu
     write_u64(w, count)?;
     write_u64(w, value)
 }
+
+// ============================================================
+// DEM 流式导出 (Float32 单波段 GeoTIFF, EPSG:4326)
+// ============================================================
+
+/// Terrarium 编码 PNG → Float32 高程矩阵（单瓦片）
+/// 编码公式：elevation_m = (R * 256 + G + B / 256) - 32768
+fn decode_terrarium_tile(png_bytes: &[u8]) -> Result<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>, String> {
+    let img = image::load_from_memory(png_bytes)
+        .map_err(|e| format!("Terrarium 瓦片解码失败: {}", e))?;
+    Ok(img.to_rgb8())
+}
+
+/// 流式合并 Terrarium 瓦片并直接写入 Float32 GeoTIFF (BigTIFF)
+/// - 单波段 Float32 (BitsPerSample=32, SampleFormat=3 IEEEFP)
+/// - 投影 EPSG:4326 (与 Terrarium 源切片网格一致，无需重投影)
+/// - NoData = -9999.0 (写入 GDAL_NODATA tag 42113)
+/// - 缺失瓦片填 NoData
+/// - 可选多边形裁剪：环外像素强制为 NoData
+pub fn merge_and_export_dem_streaming(
+    tile_files: &HashMap<(u32, u32), PathBuf>,
+    x_min: u32,
+    y_min: u32,
+    x_max: u32,
+    y_max: u32,
+    bounds: &TileBounds,
+    save_path: &Path,
+    compression: &str,
+    polygons: Option<&[Vec<PolygonPoint>]>,
+) -> Result<u64, String> {
+    let cols = x_max - x_min + 1;
+    let rows = y_max - y_min + 1;
+    let width = cols * TILE_SIZE;
+    let height = rows * TILE_SIZE;
+    let rows_per_strip = TILE_SIZE;
+    let num_strips = rows;
+    const NODATA: f32 = -9999.0;
+
+    // Float32 = 4 bytes/pixel, 单波段
+    let strip_byte_size_u64 = width as u64 * rows_per_strip as u64 * 4;
+    let strip_byte_size = strip_byte_size_u64 as usize;
+
+    // 预计算多边形像素坐标环（与像素映射保持一致：经度等距 + 纬度等距）
+    // 注：Terrarium 切片本身在 mercator 上等高，但输出 EPSG:4326 是简化处理；
+    // 裁剪坐标必须与像素坐标系一致，否则会与栅格错位
+    let pixel_rings: Vec<Vec<(i32, i32)>> = if let Some(polys) = polygons {
+        let lng_span = bounds.east - bounds.west;
+        let lat_span = bounds.north - bounds.south;
+        polys.iter()
+            .map(|ring| {
+                ring.iter()
+                    .map(|p| {
+                        let x = ((p.lng - bounds.west) / lng_span * width as f64) as i32;
+                        let y = ((bounds.north - p.lat) / lat_span * height as f64) as i32;
+                        (x, y)
+                    })
+                    .collect()
+            })
+            .filter(|ring: &Vec<(i32, i32)>| ring.len() >= 3)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let has_mask = !pixel_rings.is_empty();
+
+    let file = std::fs::File::create(save_path)
+        .map_err(|e| format!("创建文件失败: {}", e))?;
+    let mut w = BufWriter::new(file);
+
+    // ===== 1. BigTIFF Header =====
+    w.write_all(b"II").map_err(e2s)?;
+    write_u16(&mut w, 43)?;
+    write_u16(&mut w, 8)?;
+    write_u16(&mut w, 0)?;
+    let ifd_offset_pos = stream_pos(&mut w)?;
+    write_u64(&mut w, 0)?;
+
+    // ===== 2. 双缓冲流水线 =====
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(1);
+    let compression_owned = compression.to_string();
+
+    let writer_handle = std::thread::spawn(move || -> Result<(BufWriter<std::fs::File>, Vec<u64>, Vec<u64>), String> {
+        let mut strip_offsets: Vec<u64> = Vec::with_capacity(num_strips as usize);
+        let mut strip_counts: Vec<u64> = Vec::with_capacity(num_strips as usize);
+
+        for strip_data in rx {
+            let (compressed, _) = compress_strip(&strip_data, &compression_owned)?;
+            let offset = stream_pos(&mut w)?;
+            w.write_all(&compressed).map_err(e2s)?;
+            strip_offsets.push(offset);
+            strip_counts.push(compressed.len() as u64);
+        }
+
+        Ok((w, strip_offsets, strip_counts))
+    });
+
+    let nodata_bytes = NODATA.to_le_bytes();
+
+    for tile_y in y_min..=y_max {
+        // 初始化为 NoData
+        let mut strip = vec![0u8; strip_byte_size];
+        for chunk in strip.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&nodata_bytes);
+        }
+
+        // 并行解码本行所有瓦片
+        let tile_xs: Vec<u32> = (x_min..=x_max).collect();
+        let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs.par_iter()
+            .map(|&tile_x| {
+                let file_path = tile_files.get(&(tile_x, tile_y))?;
+                let bytes = std::fs::read(file_path).ok()?;
+                let rgb = decode_terrarium_tile(&bytes).ok()?;
+                let px = ((tile_x - x_min) * TILE_SIZE) as usize;
+                Some((px, rgb))
+            })
+            .collect();
+
+        // RGB → Float32 高程，串行填入 strip
+        for item in &decoded {
+            if let Some((px, rgb)) = item {
+                let tile_w = rgb.width().min(TILE_SIZE) as usize;
+                let tile_h = rgb.height().min(TILE_SIZE) as usize;
+                let raw = rgb.as_raw();
+
+                for row in 0..tile_h {
+                    let src_row_start = row * rgb.width() as usize * 3;
+                    for col in 0..tile_w {
+                        let si = src_row_start + col * 3;
+                        if si + 2 >= raw.len() { continue; }
+                        let r = raw[si] as f32;
+                        let g = raw[si + 1] as f32;
+                        let b = raw[si + 2] as f32;
+                        let elev = (r * 256.0 + g + b / 256.0) - 32768.0;
+                        let di = (row * width as usize + (px + col)) * 4;
+                        if di + 3 < strip.len() {
+                            strip[di..di + 4].copy_from_slice(&elev.to_le_bytes());
+                        }
+                    }
+                }
+            }
+        }
+        drop(decoded);
+
+        // 多边形掩码：环外像素强制为 NoData（扫描线算法）
+        if has_mask {
+            let strip_y_start = (tile_y - y_min) * TILE_SIZE;
+            for local_row in 0..TILE_SIZE {
+                let global_y = (strip_y_start + local_row) as i32;
+
+                // 收集所有多边形环在该行的交点
+                let mut intersections: Vec<i32> = Vec::new();
+                for ring in &pixel_rings {
+                    let n = ring.len();
+                    let mut j = n - 1;
+                    for i in 0..n {
+                        let (xi, yi) = ring[i];
+                        let (xj, yj) = ring[j];
+                        if (yi > global_y) != (yj > global_y) {
+                            let x_int = (xj - xi) * (global_y - yi) / (yj - yi) + xi;
+                            intersections.push(x_int);
+                        }
+                        j = i;
+                    }
+                }
+                intersections.sort_unstable();
+
+                // 标记每列是否在多边形内
+                let mut inside = vec![false; width as usize];
+                let mut k = 0;
+                while k + 1 < intersections.len() {
+                    let x0 = intersections[k].max(0).min(width as i32) as usize;
+                    let x1 = intersections[k + 1].max(0).min(width as i32) as usize;
+                    for x in x0..x1 {
+                        if x < inside.len() { inside[x] = true; }
+                    }
+                    k += 2;
+                }
+
+                // 多边形外像素 → NoData
+                let row_offset = local_row as usize * width as usize * 4;
+                for x in 0..width as usize {
+                    if !inside[x] {
+                        let di = row_offset + x * 4;
+                        if di + 3 < strip.len() {
+                            strip[di..di + 4].copy_from_slice(&nodata_bytes);
+                        }
+                    }
+                }
+            }
+        }
+
+        tx.send(strip).map_err(|e| format!("发送 strip 失败: {}", e))?;
+    }
+    drop(tx);
+
+    let (mut w, strip_offsets, strip_counts) = writer_handle.join()
+        .map_err(|_| "写入线程异常退出".to_string())??;
+
+    // ===== 3. IFD 外数据 =====
+    let res_inline: u64 = 72u64 | (1u64 << 32);
+
+    let strip_offsets_offset = stream_pos(&mut w)?;
+    for &off in &strip_offsets {
+        write_u64(&mut w, off)?;
+    }
+
+    let strip_counts_offset = stream_pos(&mut w)?;
+    for &cnt in &strip_counts {
+        write_u64(&mut w, cnt)?;
+    }
+
+    // GeoTIFF: EPSG:4326 经纬度坐标系
+    let lng_span = bounds.east - bounds.west;
+    let lat_span = bounds.north - bounds.south;
+    let x_res = lng_span / width as f64;
+    let y_res = lat_span / height as f64;
+
+    let pixel_scale_offset = stream_pos(&mut w)?;
+    write_f64(&mut w, x_res)?;
+    write_f64(&mut w, y_res)?;
+    write_f64(&mut w, 0.0)?;
+
+    let tiepoint_offset = stream_pos(&mut w)?;
+    write_f64(&mut w, 0.0)?;
+    write_f64(&mut w, 0.0)?;
+    write_f64(&mut w, 0.0)?;
+    write_f64(&mut w, bounds.west)?;
+    write_f64(&mut w, bounds.north)?;
+    write_f64(&mut w, 0.0)?;
+
+    // GeoKeyDirectory: EPSG:4326 (Geographic)
+    let geokeys_offset = stream_pos(&mut w)?;
+    let geo_keys: [u16; 16] = [
+        1, 1, 0, 3,
+        1024, 0, 1, 2,       // GTModelTypeGeoKey = ModelTypeGeographic
+        1025, 0, 1, 1,       // GTRasterTypeGeoKey = RasterPixelIsArea
+        2048, 0, 1, 4326,    // GeographicTypeGeoKey = WGS84
+    ];
+    for &k in &geo_keys {
+        write_u16(&mut w, k)?;
+    }
+
+    // GDAL_NODATA tag value: ASCII 字符串 "-9999\0"
+    let nodata_str = b"-9999\0";
+    let nodata_offset = stream_pos(&mut w)?;
+    w.write_all(nodata_str).map_err(e2s)?;
+
+    // ===== 4. BigTIFF IFD =====
+    let ifd_pos = stream_pos(&mut w)?;
+
+    // 16 entries
+    let num_entries: u64 = 16;
+    write_u64(&mut w, num_entries)?;
+
+    let comp_tag: u64 = match compression { "lzw" => 5, "deflate" => 8, _ => 1 };
+
+    write_bigtiff_entry(&mut w, 256, 4, 1, width as u64)?;                          // ImageWidth
+    write_bigtiff_entry(&mut w, 257, 4, 1, height as u64)?;                         // ImageLength
+    write_bigtiff_entry(&mut w, 258, 3, 1, 32)?;                                    // BitsPerSample = 32 (inline)
+    write_bigtiff_entry(&mut w, 259, 3, 1, comp_tag)?;                              // Compression
+    write_bigtiff_entry(&mut w, 262, 3, 1, 1)?;                                     // Photometric = BlackIsZero
+    write_bigtiff_entry(&mut w, 273, 16, num_strips as u64, strip_offsets_offset)?; // StripOffsets (LONG8)
+    write_bigtiff_entry(&mut w, 277, 3, 1, 1)?;                                     // SamplesPerPixel = 1
+    write_bigtiff_entry(&mut w, 278, 4, 1, rows_per_strip as u64)?;                 // RowsPerStrip
+    write_bigtiff_entry(&mut w, 279, 16, num_strips as u64, strip_counts_offset)?;  // StripByteCounts (LONG8)
+    write_bigtiff_entry(&mut w, 282, 5, 1, res_inline)?;                            // XResolution
+    write_bigtiff_entry(&mut w, 283, 5, 1, res_inline)?;                            // YResolution
+    write_bigtiff_entry(&mut w, 339, 3, 1, 3)?;                                     // SampleFormat = IEEEFP
+    write_bigtiff_entry(&mut w, 33550, 12, 3, pixel_scale_offset)?;                 // ModelPixelScale
+    write_bigtiff_entry(&mut w, 33922, 12, 6, tiepoint_offset)?;                    // ModelTiepoint
+    write_bigtiff_entry(&mut w, 34735, 3, 16, geokeys_offset)?;                     // GeoKeyDirectory
+    write_bigtiff_entry(&mut w, 42113, 2, nodata_str.len() as u64, nodata_offset)?; // GDAL_NODATA
+
+    write_u64(&mut w, 0)?; // next IFD = 0
+
+    // ===== 5. 回填 IFD offset =====
+    w.seek(SeekFrom::Start(ifd_offset_pos)).map_err(e2s)?;
+    write_u64(&mut w, ifd_pos)?;
+
+    w.flush().map_err(e2s)?;
+    drop(w);
+
+    let file_size = std::fs::metadata(save_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    validate_bigtiff_header(save_path, ifd_pos)?;
+
+    Ok(file_size)
+}
