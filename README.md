@@ -4,6 +4,8 @@
 
 **🌐 [官网 geodownloader.pages.dev](https://geodownloader.pages.dev)**
 
+> **⚠️ 免责声明**：本工具仅是基于开源协议发布的桌面客户端，不内置任何地图数据。所有数据来源于使用者自行配置的第三方服务（Esri / Google / Bing / 天地图 / 高德 / OSM 等）。**使用者须自行获取目标数据源的合法授权**，并遵守其使用条款、Referer / 配额限制以及当地法律法规（包括但不限于《测绘法》《数据安全法》）。下载所得数据的版权归原数据方所有，本项目作者及贡献者不对使用者的下载行为承担任何法律责任。下载、安装或使用本工具即视为已阅读并同意完整的[**使用条款与免责声明**](https://geodownloader.pages.dev/disclaimer.html)。
+
 欢迎沟通交流
 <img width="228" height="320" alt="c43b2929c4437ad643932ad31e935f5d" src="https://github.com/user-attachments/assets/d3bf8101-e104-416f-9ceb-d64e793916be" />
 
