@@ -2104,6 +2104,9 @@ pub struct ScanWaybackRequest {
     pub force_refresh: bool,
     #[serde(default)]
     pub proxy: Option<String>,
+    /// 扫描模式："fast"（默认、单 layer）或 "fine"（多 layer、更准但更慢）
+    #[serde(default)]
+    pub scan_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2130,7 +2133,16 @@ pub async fn scan_wayback_metadata(
     // 2. 启动后台扫描，返回 scan_id
     let scan_id = uuid::Uuid::new_v4().to_string();
     let progress_map = progress.inner().clone();
-    let total_estimate = (192u32) * (crate::wayback_metadata::select_layers(req.zoom_min, req.zoom_max).len() as u32);
+    let scan_mode = req.scan_mode.clone().unwrap_or_else(|| "fast".to_string());
+    let layer_count = if scan_mode == "fine" {
+        crate::wayback_metadata::select_layers(req.zoom_min, req.zoom_max).len() as u32
+    } else {
+        1
+    };
+    let total_estimate = 192u32 * layer_count;
+
+    // 提前在 progress map 中占位，避免前端在 fetch_releases_raw 期间轮询到 None 后误判为"扫描已结束"
+    crate::wayback_metadata::insert_placeholder_progress(&progress_map, &scan_id, total_estimate).await;
 
     let sid = scan_id.clone();
     tokio::spawn(async move {
@@ -2142,6 +2154,7 @@ pub async fn scan_wayback_metadata(
             req.proxy,
             progress_map,
             sid,
+            scan_mode,
         )
         .await;
     });

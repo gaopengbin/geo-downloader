@@ -6,6 +6,13 @@
 use crate::config::TileSource;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex as AsyncMutex;
+
+/// fetch_releases_raw 的进程内缓存：TTL 1 小时
+static RELEASES_CACHE: OnceLock<AsyncMutex<Option<(Instant, HashMap<String, WaybackReleaseRaw>)>>> = OnceLock::new();
+const RELEASES_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 /// Wayback 配置 API 地址
 const WAYBACK_CONFIG_URL: &str =
@@ -98,9 +105,21 @@ pub async fn fetch_versions(proxy: Option<&str>) -> Result<Vec<WaybackVersion>, 
 /// 获取所有 release 的"原始详细信息"（供元数据扫描复用）
 ///
 /// 返回 HashMap<release_id, WaybackReleaseRaw>，过滤掉缺少 metadata_layer_url 的条目。
+/// 进程内缓存 1 小时，避免重复扫描时反复请求 waybackconfig.json。
 pub async fn fetch_releases_raw(
     proxy: Option<&str>,
 ) -> Result<HashMap<String, WaybackReleaseRaw>, String> {
+    let cache = RELEASES_CACHE.get_or_init(|| AsyncMutex::new(None));
+    {
+        let guard = cache.lock().await;
+        if let Some((ts, data)) = guard.as_ref() {
+            if ts.elapsed() < RELEASES_CACHE_TTL {
+                log::debug!("wayback releases: 命中缓存 ({} 个 release)", data.len());
+                return Ok(data.clone());
+            }
+        }
+    }
+
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15));
     if let Some(p) = proxy {
@@ -137,6 +156,11 @@ pub async fn fetch_releases_raw(
             ))
         })
         .collect();
+
+    {
+        let mut guard = cache.lock().await;
+        *guard = Some((Instant::now(), out.clone()));
+    }
 
     Ok(out)
 }

@@ -553,6 +553,10 @@
                                 扫描所有 release 的影像元数据，按 <strong>实际拍摄日期</strong> 去重。同一区域同一时期的影像只会下载一次，避免冗余。<br/>
                                 首次扫描约需 5–10 分钟，结果会缓存 7 天。
                             </div>
+                            <div class="wayback-mode-switch" style="margin-bottom:8px;" title="极速：单层查询，快约 3×；精细：多层叠加，区域占比更准但更慢">
+                                <label><input type="radio" name="wayback-scan-mode" value="fast" checked><span>极速</span></label>
+                                <label><input type="radio" name="wayback-scan-mode" value="fine"><span>精细</span></label>
+                            </div>
                             <button id="wayback-scan-btn" class="btn btn-primary btn-block" style="margin-bottom:8px;">
                                 扫描影像清单
                             </button>
@@ -561,13 +565,22 @@
                                     <span id="wayback-scan-progress-text">扫描中…</span>
                                     <span id="wayback-scan-progress-pct">0%</span>
                                 </div>
-                                <div style="height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;">
-                                    <div id="wayback-scan-progress-bar" style="height:100%;width:0%;background:#4caf50;transition:width 0.3s;"></div>
+                                <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+                                    <div id="wayback-scan-progress-bar" style="height:100%;width:0%;background:var(--primary);transition:width 0.3s;"></div>
                                 </div>
                             </div>
-                            <div id="wayback-scan-summary" style="display:none;font-size:12px;color:rgba(255,255,255,0.7);margin-bottom:8px;"></div>
+                            <div id="wayback-scan-summary" style="display:none;font-size:12px;color:var(--text-secondary);margin-bottom:8px;"></div>
+                            <div id="wayback-result-help" class="wayback-result-help" style="display:none;">
+                                <strong>主导日期</strong>：当前 release 内拍摄面积占比最大的那次飞行/采集日期。<br>
+                                <strong>主导占比</strong>：主导日期面积 / release 内有数据面积。越高说明区域内影像越同期。<br>
+                                <strong>覆盖率</strong>：release 在所选区域内的覆盖面积比例。越高说明区域被该期影像覆盖越完整。
+                            </div>
                             <div id="wayback-incremental-filters" style="display:none;margin-bottom:8px;font-size:12px;">
-                                <label style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;">
+                                <label style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;" title="该 release 内主导拍摄日期的面积占比">
+                                    主导占比 ≥
+                                    <input type="number" id="wayback-dominant-threshold" min="0" max="100" value="0" style="width:50px;padding:2px 4px;font-size:12px;">%
+                                </label>
+                                <label style="display:inline-flex;align-items:center;gap:4px;margin-right:12px;" title="该 release 在区域内有 footprint 覆盖的面积占区域总面积比例">
                                     覆盖率 ≥
                                     <input type="number" id="wayback-coverage-threshold" min="0" max="100" value="0" style="width:50px;padding:2px 4px;font-size:12px;">%
                                 </label>
@@ -575,17 +588,17 @@
                                     <input type="checkbox" id="wayback-only-latest-per-year"> 每年仅最新一期
                                 </label>
                             </div>
-                            <div id="wayback-incremental-list" style="display:none;max-height:280px;overflow-y:auto;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px;margin-bottom:8px;"></div>
+                            <div id="wayback-incremental-list" class="wayback-result-list" style="display:none;margin-bottom:8px;"></div>
                             <div id="wayback-incremental-actions" style="display:none;">
                                 <div style="display:flex;gap:4px;margin-bottom:6px;">
                                     <button type="button" id="wayback-inc-select-all" class="btn btn-sm" style="flex:1;font-size:12px;padding:2px 8px;">全选</button>
                                     <button type="button" id="wayback-inc-select-none" class="btn btn-sm" style="flex:1;font-size:12px;padding:2px 8px;">全不选</button>
                                 </div>
-                                <div style="font-size:12px;color:rgba(255,255,255,0.5);margin-bottom:6px;">
-                                    已选 <span id="wayback-inc-count">0</span> 期影像
+                                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">
+                                    已选 <span id="wayback-inc-count">0</span> 个 release
                                 </div>
                                 <button id="wayback-incremental-download-btn" class="btn btn-cta btn-block" disabled>
-                                    下载选中拍摄日期
+                                    下载选中的服务
                                 </button>
                             </div>
                         </div>

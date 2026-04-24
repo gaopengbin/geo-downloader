@@ -17,12 +17,14 @@ use tokio::sync::{Mutex, Semaphore};
 const CACHE_TTL_SEC: i64 = 7 * 24 * 3600;
 /// 最大缓存条目数
 const CACHE_MAX_ENTRIES: usize = 50;
-/// 扫描并发上限
+/// 扫描并发上限（dead_services 已可保护避免对故障服务持续打击，恢复到 8 提升速度）
 const SCAN_CONCURRENCY: usize = 8;
 /// 单次 metadata 查询超时（秒）
 const QUERY_TIMEOUT_SEC: u64 = 20;
-/// 单 metadata 查询最大重试
-const QUERY_MAX_RETRIES: u32 = 2;
+/// 网络错误最大重试次数（5xx 不重试）
+const QUERY_MAX_RETRIES: u32 = 4;
+/// 重试退避基数（毫秒），实际等待 = 基数 × 2^attempt
+const RETRY_BACKOFF_BASE_MS: u64 = 1500;
 
 // ============================================================
 // 数据结构
@@ -63,7 +65,40 @@ pub struct WaybackScanResult {
     pub scanned_at: String,
     pub expires_at: String,
     pub releases_scanned: u32,
+    /// 全部去重后的 footprint（保留兼容）
     pub footprints: Vec<WaybackFootprint>,
+    /// 服务级聚合：每个 release 在 bbox 内的拍摄日期分布与主导日期
+    #[serde(default)]
+    pub releases: Vec<ReleaseSummary>,
+}
+
+/// 单个 release 在 bbox 内的拍摄日期分布摘要
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseSummary {
+    pub release_id: String,
+    pub release_date: String,
+    pub release_num: u32,
+    /// 主导拍摄日期（占比最高），无数据时为空串
+    pub dominant_capture_date: String,
+    /// 主导日期占该 release 在 bbox 内总 footprint 面积的比例 (0..1)
+    pub dominant_ratio: f64,
+    /// 该 release 在 bbox 内 footprint 合计 / 用户 bbox 面积 (0..1)
+    pub coverage_ratio: f64,
+    /// 主导日期对应的数据源名（如 "Vivid Advanced"）
+    pub source_name: String,
+    /// 主导日期对应的分辨率（米）
+    pub resolution_m: f64,
+    /// 该 release 在 bbox 内的全部拍摄日期分布（按 ratio 倒序）
+    pub captures: Vec<ReleaseCaptureBreakdown>,
+}
+
+/// release 内某个拍摄日期的分布项
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseCaptureBreakdown {
+    pub capture_date_str: String,
+    pub ratio: f64,
+    pub source_name: String,
+    pub resolution_m: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,6 +166,20 @@ pub async fn get_progress(map: &ScanProgressMap, scan_id: &str) -> Option<Waybac
         elapsed_sec: s.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0),
         footprints_so_far: s.footprints_so_far,
     })
+}
+
+/// 命令入口处提前占位，避免 fetch_releases_raw 期间前端轮询拿到 None
+pub async fn insert_placeholder_progress(map: &ScanProgressMap, scan_id: &str, total: u32) {
+    let mut m = map.lock().await;
+    m.insert(
+        scan_id.to_string(),
+        ScanState {
+            current: 0,
+            total,
+            started_at: Some(std::time::Instant::now()),
+            footprints_so_far: 0,
+        },
+    );
 }
 
 // ============================================================
@@ -226,6 +275,7 @@ pub async fn scan_metadata(
     proxy: Option<String>,
     progress: ScanProgressMap,
     scan_id: String,
+    scan_mode: String,
 ) -> Result<WaybackScanResult, String> {
     if !force_refresh {
         if let Some(cached) = load_cache(&bbox, z_min, z_max) {
@@ -238,7 +288,12 @@ pub async fn scan_metadata(
         }
     }
 
-    let layers = select_layers(z_min, z_max);
+    // 扫描模式：fast = 仅 zoom_max 单 layer（默认，3× 速度）；fine = 多 layer（更准）
+    let layers = if scan_mode == "fine" {
+        select_layers(z_min, z_max)
+    } else {
+        select_layers(z_max, z_max)
+    };
     if layers.is_empty() {
         return Err("zoom 范围无效".to_string());
     }
@@ -262,6 +317,8 @@ pub async fn scan_metadata(
     let client = build_client(proxy.as_deref())?;
     let semaphore = Arc::new(Semaphore::new(SCAN_CONCURRENCY));
     let collected: Arc<Mutex<Vec<WaybackFootprint>>> = Arc::new(Mutex::new(Vec::new()));
+    // 死服务名单：扫描期间共享，遇到 5xx 的 metadata 服务直接跳过后续 layer
+    let dead_services: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
     // 按 release_num 排序：从最新到最旧
     let mut releases_sorted: Vec<(String, WaybackReleaseRaw)> = releases.into_iter().collect();
@@ -283,6 +340,7 @@ pub async fn scan_metadata(
             let scan_id = scan_id.clone();
             let release_id = release_id.clone();
             let release_date = release_date.clone();
+            let dead_services = Arc::clone(&dead_services);
 
             let handle = tokio::spawn(async move {
                 let _permit = sem.acquire().await.ok();
@@ -294,6 +352,7 @@ pub async fn scan_metadata(
                     &release_id,
                     &release_date,
                     release_num,
+                    &dead_services,
                 )
                 .await
                 .unwrap_or_else(|e| {
@@ -327,6 +386,7 @@ pub async fn scan_metadata(
         .map_err(|_| "提取扫描结果失败".to_string())?
         .into_inner();
 
+    let releases = summarize_releases(&raw, &bbox);
     let footprints = dedupe_footprints(raw, &bbox);
 
     let now = chrono::Utc::now();
@@ -338,6 +398,7 @@ pub async fn scan_metadata(
         expires_at: (now + chrono::Duration::seconds(CACHE_TTL_SEC)).to_rfc3339(),
         releases_scanned: release_count as u32,
         footprints,
+        releases,
     };
 
     save_cache(&result).ok();
@@ -367,6 +428,46 @@ fn build_client(proxy: Option<&str>) -> Result<reqwest::Client, String> {
     builder.build().map_err(|e| format!("HTTP 客户端创建失败: {}", e))
 }
 
+/// 查询错误分类
+#[derive(Debug)]
+enum QueryError {
+    /// 网络层错误（DNS / connect / timeout / TLS / RST），值得重试
+    Network(String),
+    /// 上游服务 5xx，重试也无意义（Esri 端故障），应拉黑该服务
+    UpstreamServerError(u16, String),
+    /// 其他 HTTP 错误（4xx / 解析失败），不重试
+    Other(String),
+}
+
+impl std::fmt::Display for QueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Network(s) => write!(f, "网络错误: {}", s),
+            Self::UpstreamServerError(code, s) => write!(f, "上游 {} 错误: {}", code, s),
+            Self::Other(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+/// 提取 reqwest 错误的根因链（避免只看到 "error sending request for url"）
+fn format_reqwest_error(e: &reqwest::Error) -> String {
+    use std::error::Error;
+    let mut parts: Vec<String> = vec![e.to_string()];
+    let mut src: Option<&(dyn Error + 'static)> = e.source();
+    while let Some(s) = src {
+        parts.push(s.to_string());
+        src = s.source();
+    }
+    let kind = if e.is_timeout() { "timeout" }
+               else if e.is_connect() { "connect" }
+               else if e.is_request() { "request" }
+               else if e.is_body() { "body" }
+               else if e.is_decode() { "decode" }
+               else { "other" };
+    format!("[{}] {}", kind, parts.join(" → "))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn query_layer_with_retry(
     client: &reqwest::Client,
     metadata_url: &str,
@@ -375,11 +476,21 @@ async fn query_layer_with_retry(
     release_id: &str,
     release_date: &str,
     release_num: u32,
+    dead_services: &Arc<Mutex<HashSet<String>>>,
 ) -> Result<Vec<WaybackFootprint>, String> {
-    let mut last_err = String::new();
+    // 死服务短路：如该 release 已被标记，直接跳过
+    {
+        let s = dead_services.lock().await;
+        if s.contains(metadata_url) {
+            return Ok(Vec::new());
+        }
+    }
+
+    let mut last_err = String::from("未尝试");
     for attempt in 0..=QUERY_MAX_RETRIES {
         if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << attempt))).await;
+            let wait = RETRY_BACKOFF_BASE_MS * (1u64 << attempt.min(4));
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
         }
         match query_layer(
             client,
@@ -393,10 +504,28 @@ async fn query_layer_with_retry(
         .await
         {
             Ok(v) => return Ok(v),
-            Err(e) => last_err = e,
+            Err(QueryError::UpstreamServerError(code, msg)) => {
+                // 5xx：上游故障，拉黑整个 metadata 服务，不重试
+                let mut s = dead_services.lock().await;
+                let newly = s.insert(metadata_url.to_string());
+                if newly {
+                    log::warn!(
+                        "wayback metadata: release={} 上游 {} 错误，拉黑该 metadata 服务: {}",
+                        release_id, code, metadata_url
+                    );
+                }
+                return Err(format!("上游 {}: {}", code, msg));
+            }
+            Err(QueryError::Other(msg)) => {
+                // 4xx / 解析失败：不重试
+                return Err(msg);
+            }
+            Err(QueryError::Network(msg)) => {
+                last_err = msg;
+            }
         }
     }
-    Err(last_err)
+    Err(format!("网络错误经 {} 次重试仍失败: {}", QUERY_MAX_RETRIES, last_err))
 }
 
 async fn query_layer(
@@ -407,7 +536,7 @@ async fn query_layer(
     release_id: &str,
     release_date: &str,
     release_num: u32,
-) -> Result<Vec<WaybackFootprint>, String> {
+) -> Result<Vec<WaybackFootprint>, QueryError> {
     let url = format!(
         "{}/{}/query?geometry={},{},{},{}&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&where=1%3D1&outFields=SRC_DATE2,NICE_NAME,SRC_RES,MinMapLevel,MaxMapLevel&returnGeometry=true&outSR=4326&f=geojson",
         metadata_url.trim_end_matches('/'),
@@ -424,13 +553,22 @@ async fn query_layer(
         )
         .send()
         .await
-        .map_err(|e| format!("请求失败: {}", e))?;
+        .map_err(|e| QueryError::Network(format_reqwest_error(&e)))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+    let status = resp.status();
+    if !status.is_success() {
+        let code = status.as_u16();
+        let body_snippet = resp.text().await.ok().map(|s| {
+            let trimmed: String = s.chars().take(120).collect();
+            trimmed.replace('\n', " ")
+        }).unwrap_or_default();
+        if code >= 500 {
+            return Err(QueryError::UpstreamServerError(code, body_snippet));
+        }
+        return Err(QueryError::Other(format!("HTTP {} {}", code, body_snippet)));
     }
 
-    let json: Value = resp.json().await.map_err(|e| format!("解析 JSON 失败: {}", e))?;
+    let json: Value = resp.json().await.map_err(|e| QueryError::Other(format!("解析 JSON 失败: {}", format_reqwest_error(&e))))?;
 
     let features = json
         .get("features")
@@ -498,6 +636,99 @@ fn dedupe_footprints(raw: Vec<WaybackFootprint>, bbox: &[f64; 4]) -> Vec<Wayback
     // 按拍摄日期倒序
     out.sort_by(|a, b| b.capture_date.cmp(&a.capture_date));
     out
+}
+
+/// 服务级聚合：按 release_id 分组，统计每个 release 在 bbox 内各拍摄日期的 footprint bbox 相交面积占比
+///
+/// 占比定义：
+/// - 单 footprint 面积 = footprint geometry bbox 与用户 bbox 的相交面积（degree²）
+/// - 同 release 内按 capture_date_str 累加 → 该日期在 release 内总面积
+/// - dominant_ratio = 主导日期面积 / release 内全部日期面积合计
+/// - coverage_ratio = release 内全部日期面积合计 / 用户 bbox 面积
+fn summarize_releases(raw: &[WaybackFootprint], user_bbox: &[f64; 4]) -> Vec<ReleaseSummary> {
+    use std::collections::BTreeMap;
+    // release_id -> (release_date, release_num, capture_date_str -> (area, source_name, resolution))
+    #[derive(Default)]
+    struct ReleaseAgg {
+        release_date: String,
+        release_num: u32,
+        captures: HashMap<String, (f64, String, f64)>,
+    }
+    let mut by_release: BTreeMap<String, ReleaseAgg> = BTreeMap::new();
+    let user_area = ((user_bbox[2] - user_bbox[0]) * (user_bbox[3] - user_bbox[1])).max(1e-12);
+    for fp in raw {
+        let area = footprint_intersect_area(&fp.geometry, user_bbox);
+        if area <= 0.0 {
+            continue;
+        }
+        let entry = by_release.entry(fp.release_id.clone()).or_default();
+        entry.release_date = fp.release_date.clone();
+        entry.release_num = fp.release_num;
+        let cap = entry
+            .captures
+            .entry(fp.capture_date_str.clone())
+            .or_insert((0.0, fp.source_name.clone(), fp.resolution_m));
+        cap.0 += area;
+        // 同日期可能多 footprint，取最大分辨率（数值更小）和稳定的 source_name
+        if fp.resolution_m > 0.0 && (cap.2 == 0.0 || fp.resolution_m < cap.2) {
+            cap.2 = fp.resolution_m;
+            cap.1 = fp.source_name.clone();
+        }
+    }
+    let mut out = Vec::with_capacity(by_release.len());
+    for (release_id, agg) in by_release {
+        let total_area: f64 = agg.captures.values().map(|(a, _, _)| *a).sum();
+        if total_area <= 0.0 {
+            continue;
+        }
+        let mut breakdown: Vec<ReleaseCaptureBreakdown> = agg
+            .captures
+            .into_iter()
+            .map(|(date, (area, src, res))| ReleaseCaptureBreakdown {
+                capture_date_str: date,
+                ratio: area / total_area,
+                source_name: src,
+                resolution_m: res,
+            })
+            .collect();
+        breakdown.sort_by(|a, b| b.ratio.partial_cmp(&a.ratio).unwrap_or(std::cmp::Ordering::Equal));
+        let (dom_date, dom_ratio, dom_src, dom_res) = breakdown
+            .first()
+            .map(|b| (b.capture_date_str.clone(), b.ratio, b.source_name.clone(), b.resolution_m))
+            .unwrap_or_default();
+        out.push(ReleaseSummary {
+            release_id,
+            release_date: agg.release_date,
+            release_num: agg.release_num,
+            dominant_capture_date: dom_date,
+            dominant_ratio: dom_ratio,
+            coverage_ratio: (total_area / user_area).clamp(0.0, 1.0),
+            source_name: dom_src,
+            resolution_m: dom_res,
+            captures: breakdown,
+        });
+    }
+    // 按 release 新→旧排序
+    out.sort_by(|a, b| b.release_num.cmp(&a.release_num));
+    out
+}
+
+/// footprint geometry bbox 与用户 bbox 的相交面积（degree²）
+fn footprint_intersect_area(geom: &Value, user_bbox: &[f64; 4]) -> f64 {
+    let fb = geometry_bbox(geom);
+    if fb[2] <= fb[0] || fb[3] <= fb[1] {
+        return 0.0;
+    }
+    let ix = [
+        fb[0].max(user_bbox[0]),
+        fb[1].max(user_bbox[1]),
+        fb[2].min(user_bbox[2]),
+        fb[3].min(user_bbox[3]),
+    ];
+    if ix[2] <= ix[0] || ix[3] <= ix[1] {
+        return 0.0;
+    }
+    (ix[2] - ix[0]) * (ix[3] - ix[1])
 }
 
 /// 简化的覆盖率估算：用 footprint 几何 bbox 与用户 bbox 的相交面积比例

@@ -747,6 +747,10 @@ function rebuildSourceSelectForMode(mode) {
     if (nextValue) {
         sourceSelect.value = nextValue;
         updateZoomSliderMax(nextValue);
+        // 模式切换导致选中源变化时，同步切换地图底图
+        if (nextValue !== prevValue) {
+            sourceSelect.dispatchEvent(new Event('change'));
+        }
     }
     applyDemFormatLock(nextValue || '');
 }
@@ -4790,7 +4794,8 @@ function initWaybackBatch() {
 
 // ==================== Wayback 增量下载（按拍摄日期） ====================
 
-let waybackScanFootprints = []; // 上次扫描结果
+let waybackScanFootprints = []; // 上次扫描结果（兼容保留）
+let waybackScanReleases = []; // 上次扫描的 release 汇总（主用）
 
 function initWaybackIncremental() {
     const scanBtn = document.getElementById('wayback-scan-btn');
@@ -4805,6 +4810,7 @@ function initWaybackIncremental() {
         updateIncrementalCount();
     });
     document.getElementById('wayback-coverage-threshold')?.addEventListener('input', renderIncrementalList);
+    document.getElementById('wayback-dominant-threshold')?.addEventListener('input', renderIncrementalList);
     document.getElementById('wayback-only-latest-per-year')?.addEventListener('change', renderIncrementalList);
     document.getElementById('wayback-incremental-download-btn')?.addEventListener('click', startIncrementalDownload);
 }
@@ -4839,12 +4845,15 @@ async function startWaybackScan() {
     const bbox = [currentBounds.west, currentBounds.south, currentBounds.east, currentBounds.north];
 
     try {
+        const scanModeEl = document.querySelector('input[name="wayback-scan-mode"]:checked');
+        const scanMode = scanModeEl ? scanModeEl.value : 'fast';
         const res = await TifApi.scanWaybackMetadata({
             bbox,
             zoom_min: zMin,
             zoom_max: zMax,
             force_refresh: false,
-            proxy: useProxy && proxyUrl ? proxyUrl : null
+            proxy: useProxy && proxyUrl ? proxyUrl : null,
+            scan_mode: scanMode
         });
 
         if (res.kind === 'result') {
@@ -4910,6 +4919,7 @@ async function pollWaybackScanProgress(scanId, total, bbox, zMin, zMax) {
 function onWaybackScanComplete(res) {
     const result = res.kind === 'result' ? res : res;
     waybackScanFootprints = result.footprints || [];
+    waybackScanReleases = result.releases || [];
     const scanBtn = document.getElementById('wayback-scan-btn');
     const progressEl = document.getElementById('wayback-scan-progress');
     const summaryEl = document.getElementById('wayback-scan-summary');
@@ -4918,12 +4928,14 @@ function onWaybackScanComplete(res) {
     scanBtn.textContent = '重新扫描';
     progressEl.style.display = 'none';
 
-    // 按拍摄日期独立计数（已经去重过）
-    const dateSet = new Set(waybackScanFootprints.map(f => f.capture_date_str));
+    const releasesWithData = waybackScanReleases.length;
+    const dateSet = new Set(waybackScanReleases.map(r => r.dominant_capture_date).filter(Boolean));
     summaryEl.style.display = '';
-    summaryEl.innerHTML = `扫描了 <strong>${result.releases_scanned}</strong> 个 release，去重后得到 <strong>${dateSet.size}</strong> 个独立拍摄日期，共 <strong>${waybackScanFootprints.length}</strong> 个 footprint。`;
+    summaryEl.innerHTML = `扫描了 <strong>${result.releases_scanned}</strong> 个 release，区域内有数据的 <strong>${releasesWithData}</strong> 个，主导拍摄日期 <strong>${dateSet.size}</strong> 个。`;
 
     document.getElementById('wayback-incremental-filters').style.display = '';
+    const helpEl = document.getElementById('wayback-result-help');
+    if (helpEl) helpEl.style.display = '';
     document.getElementById('wayback-incremental-list').style.display = '';
     document.getElementById('wayback-incremental-actions').style.display = '';
     renderIncrementalList();
@@ -4932,42 +4944,59 @@ function onWaybackScanComplete(res) {
 function renderIncrementalList() {
     const listEl = document.getElementById('wayback-incremental-list');
     if (!listEl) return;
-    const threshold = parseFloat(document.getElementById('wayback-coverage-threshold')?.value || '0') / 100;
+    const covThreshold = parseFloat(document.getElementById('wayback-coverage-threshold')?.value || '0') / 100;
+    const domThreshold = parseFloat(document.getElementById('wayback-dominant-threshold')?.value || '0') / 100;
     const onlyLatest = document.getElementById('wayback-only-latest-per-year')?.checked;
 
-    let items = waybackScanFootprints.filter(f => f.coverage_ratio >= threshold);
+    let items = waybackScanReleases.filter(r =>
+        (r.coverage_ratio || 0) >= covThreshold &&
+        (r.dominant_ratio || 0) >= domThreshold &&
+        r.dominant_capture_date
+    );
 
     if (onlyLatest) {
-        const seenYear = new Set();
-        items = items.filter(f => {
-            const year = f.capture_date_str.slice(0, 4);
-            if (seenYear.has(year)) return false;
-            seenYear.add(year);
-            return true;
-        });
+        // 按主导拍摄日期年份去重，保留 release_num 最大（最新 release）
+        const seenYear = new Map();
+        for (const r of items) {
+            const year = r.dominant_capture_date.slice(0, 4);
+            const prev = seenYear.get(year);
+            if (!prev || (r.release_num || 0) > (prev.release_num || 0)) {
+                seenYear.set(year, r);
+            }
+        }
+        items = Array.from(seenYear.values()).sort((a, b) => (b.release_num || 0) - (a.release_num || 0));
     }
 
     if (items.length === 0) {
-        listEl.innerHTML = '<div style="padding:12px;text-align:center;color:rgba(255,255,255,0.4);font-size:12px;">无符合条件的影像</div>';
+        listEl.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:12px;">无符合条件的 release</div>';
+        listEl.dataset.items = '[]';
         updateIncrementalCount();
         return;
     }
 
-    listEl.innerHTML = items.map((f, idx) => {
-        const cov = Math.round((f.coverage_ratio || 0) * 100);
-        const sourceColor = f.source_name.includes('Vivid') ? '#4caf50' : f.source_name.includes('Maxar') ? '#2196f3' : '#9e9e9e';
-        return `<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:pointer;border-radius:4px;font-size:12px;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background=''">
+    listEl.innerHTML = items.map((r, idx) => {
+        const cov = Math.round((r.coverage_ratio || 0) * 100);
+        const dom = Math.round((r.dominant_ratio || 0) * 100);
+        const sourceColor = (r.source_name || '').includes('Vivid') ? '#4caf50' : (r.source_name || '').includes('Maxar') ? '#2196f3' : '#9e9e9e';
+        // 次要拍摄日期 tooltip：列出全部分布
+        const breakdown = (r.captures || []).slice(0, 6).map(c =>
+            `${c.capture_date_str} ${(c.ratio * 100).toFixed(0)}% (${c.source_name || '未知'} ${(c.resolution_m || 0).toFixed(2)}m)`
+        ).join('\n');
+        const moreCount = Math.max(0, (r.captures || []).length - 6);
+        const tooltip = breakdown + (moreCount > 0 ? `\n…还有 ${moreCount} 个` : '');
+        const resStr = r.resolution_m > 0 ? `${r.resolution_m.toFixed(2)}m` : '?';
+        return `<label class="wayback-release-item" title="${tooltip.replace(/"/g, '&quot;')}">
             <input type="checkbox" data-idx="${idx}" class="wayback-inc-cb" checked>
-            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${sourceColor};flex-shrink:0;"></span>
-            <span style="flex:1;">
-                <strong>${f.capture_date_str}</strong>
-                <span style="color:rgba(255,255,255,0.5);"> · ${f.source_name || '未知源'} · ${f.resolution_m.toFixed(2)}m</span>
+            <span class="source-dot" style="background:${sourceColor};"></span>
+            <span class="release-main">
+                <span class="release-title">${r.dominant_capture_date}</span>
+                <span class="release-sub"> · ${r.source_name || '未知源'} · ${resStr}</span>
+                <div class="release-meta">release ${r.release_date} · 主导 ${dom}%${(r.captures || []).length > 1 ? ` · 共 ${r.captures.length} 个日期` : ''}</div>
             </span>
-            <span style="color:rgba(255,255,255,0.6);font-size:11px;">覆盖 ${cov}%</span>
+            <span class="release-coverage">覆盖 ${cov}%</span>
         </label>`;
     }).join('');
 
-    // 保存当前列表索引→footprint 引用，供下载用
     listEl.dataset.items = JSON.stringify(items);
 
     listEl.querySelectorAll('.wayback-inc-cb').forEach(cb => {
@@ -4993,13 +5022,13 @@ async function startIncrementalDownload() {
     if (checked.length === 0) return;
 
     const selectedFootprints = checked.map(cb => {
-        const f = items[parseInt(cb.dataset.idx)];
+        const r = items[parseInt(cb.dataset.idx)];
         return {
-            release_id: f.release_id,
-            release_date: f.release_date,
-            capture_date_str: f.capture_date_str,
-            source_name: f.source_name,
-            resolution_m: f.resolution_m
+            release_id: r.release_id,
+            release_date: r.release_date,
+            capture_date_str: r.dominant_capture_date,
+            source_name: r.source_name,
+            resolution_m: r.resolution_m
         };
     });
 
@@ -5018,7 +5047,7 @@ async function startIncrementalDownload() {
     }
     if (!saveDir) {
         btn.disabled = false;
-        btn.textContent = '下载选中拍摄日期';
+        btn.textContent = '下载选中的服务';
         return;
     }
 
@@ -5058,13 +5087,13 @@ async function startIncrementalDownload() {
         switchToDownloadCenter();
         setTimeout(() => {
             btn.disabled = false;
-            btn.textContent = '下载选中拍摄日期';
+            btn.textContent = '下载选中的服务';
         }, 1500);
     } catch (e) {
         console.error('增量下载失败:', e);
         alert('增量下载失败: ' + (e?.message || e || '未知错误'));
         btn.disabled = false;
-        btn.textContent = '下载选中拍摄日期';
+        btn.textContent = '下载选中的服务';
     }
 }
 
