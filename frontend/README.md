@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# GeoDownloader React Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+这是 GeoDownloader 的新前端工程，用于逐步替换旧版 `static/` 巨石脚本前端。
 
-Currently, two official plugins are available:
+当前阶段只提供 React + Vite + TypeScript + Tailwind + shadcn/ui 空壳，旧版 `static/` 仍是主 Tauri 入口。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 技术栈
 
-## React Compiler
+- React + TypeScript
+- Vite
+- Tailwind CSS v4
+- shadcn/ui 风格的本地组件
+- Tauri 2 JavaScript API
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 常用命令
 
-## Expanding the ESLint configuration
+在仓库根目录执行：
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd frontend
+npm install
+npm run dev
+npm run build
+npm run lint
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Tauri React 预览入口
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+主配置 `src-tauri/tauri.conf.json` 仍指向旧版 `../static`。
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+如需用 React 前端启动 Tauri，使用专用覆盖配置：
+
+```bash
+cd src-tauri
+cargo tauri dev --config tauri.react.conf.json
 ```
+
+该配置会：
+
+- 启动 `../frontend` 的 Vite dev server
+- 使用 `http://127.0.0.1:1420` 作为 Tauri dev URL
+- 构建时输出并读取 `../frontend/dist`
+
+## 迁移原则
+
+1. 保留旧版 `static/`，新前端未覆盖全部核心功能前不删除。
+2. 每个业务域单独迁移、单独提交，避免大爆炸重写。
+3. UI 组件不直接调用 Tauri command，统一走 `src/lib/tauri.ts` 或 feature API 文件。
+4. Leaflet / Cesium 组件必须在 React effect 中清理事件和实例。
+5. 不在 UI 中使用 emoji，图标使用 SVG 或文字。
+
+详细路线见：`../docs/frontend-react-vite-shadcn-refactor-plan.md`。
