@@ -140,19 +140,49 @@ export interface TileProbeResult {
   [key: string]: unknown
 }
 
+export type TaskStatus =
+  | 'pending'
+  | 'downloading'
+  | 'paused'
+  | 'merging'
+  | 'processing'
+  | 'exporting'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
 export interface TaskInfo {
   id: string
-  name?: string
-  status: string
+  name: string
+  source?: string
+  source_name?: string
+  zoom?: number
+  format?: OutputFormat
+  save_path?: string
+  status: TaskStatus | string
   progress?: number
   completed?: number
   total?: number
+  failed_count?: number
+  file_size?: number
   message?: string
+  error?: string
   [key: string]: unknown
 }
 
-export interface TaskProgressPayload extends TaskInfo {
+export interface TaskLog {
+  timestamp: string
+  level: string
+  message: string
+}
+
+export interface TaskProgressPayload {
   task_id: string
+  status: TaskStatus | string
+  progress: number
+  completed: number
+  total: number
+  message?: string
 }
 
 export interface DownloadHistoryRecord {

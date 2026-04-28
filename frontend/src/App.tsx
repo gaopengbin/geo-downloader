@@ -9,6 +9,7 @@ import { AboutDialog } from '@/features/about/about-dialog'
 import { ImageryPage } from '@/features/imagery/imagery-page'
 import { SettingsDialog } from '@/features/settings/settings-dialog'
 import { SourcesDialog } from '@/features/sources/sources-dialog'
+import { TasksDialog } from '@/features/tasks/tasks-dialog'
 import { useAppStore, type AppMode } from '@/store/app-store'
 
 interface ModeMeta {
@@ -110,6 +111,7 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <TasksDialog />
             <SourcesDialog />
             <SettingsDialog />
             <AboutDialog />

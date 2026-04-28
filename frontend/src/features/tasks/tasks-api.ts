@@ -1,5 +1,5 @@
 import { invokeCommand } from '@/lib/tauri'
-import type { TaskInfo } from '@/types/api'
+import type { TaskInfo, TaskLog } from '@/types/api'
 
 export function getActiveTasks() {
   return invokeCommand<TaskInfo[]>('get_active_tasks')
@@ -18,7 +18,7 @@ export function removeTask(taskId: string) {
 }
 
 export function getTaskLogs(taskId: string) {
-  return invokeCommand<string[]>('get_task_logs', { taskId })
+  return invokeCommand<TaskLog[]>('get_task_logs', { taskId })
 }
 
 export function readLogFile(filePath: string) {
