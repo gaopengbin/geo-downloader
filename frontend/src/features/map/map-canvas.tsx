@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet-draw'
 import { useQuery } from '@tanstack/react-query'
@@ -11,11 +11,12 @@ import {
   type LatLngRing,
   type MapBounds,
 } from '@/store/selection-store'
-import { useAppStore } from '@/store/app-store'
+import { useAppStore, type AppMode } from '@/store/app-store'
 import { useVectorLayersStore } from '@/store/vector-layers-store'
 import { useWaybackStore } from '@/store/wayback-store'
 import { getSettings } from '@/features/settings/settings-api'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { getWaybackVersions } from '@/features/wayback/wayback-api'
 import type { TileSource } from '@/types/api'
 
 // 修复 Leaflet 默认图标路径
@@ -72,13 +73,14 @@ export function MapCanvas() {
   const lastRevRef = useRef(-1)
   // 图层管理
   const baseLayersRef = useRef<Map<string, L.TileLayer>>(new Map())
+  const waybackLayersRef = useRef<Map<string, L.TileLayer>>(new Map())
   const currentBaseLayerKeyRef = useRef<string | null>(null)
   const layerControlRef = useRef<L.Control.Layers | null>(null)
+  const customControlRef = useRef<L.Control | null>(null)
+  const customControlRadiosRef = useRef<HTMLInputElement[]>([])
   const overlayLayersRef = useRef<L.TileLayer[]>([])
   // 本地加载的矢量图层
   const vectorLayerMapRef = useRef<Map<string, L.GeoJSON>>(new Map())
-  // Wayback 历史影像预览图层
-  const waybackLayerRef = useRef<L.TileLayer | null>(null)
   const [error] = useState<string | null>(null)
   const [statusCoords, setStatusCoords] = useState<string>('经度: --  纬度: --')
   const [statusZoom, setStatusZoom] = useState<string>('缩放: --')
@@ -87,16 +89,37 @@ export function MapCanvas() {
   const externalRevision = useSelectionStore((s) => s.externalRevision)
   const bounds = useSelectionStore((s) => s.bounds)
   const polygon = useSelectionStore((s) => s.polygon)
-  const selectedSource = useAppStore((s) => s.selectedSource)
+  const mode = useAppStore((s) => s.mode)
+  const selectedSourceByMode = useAppStore((s) => s.selectedSourceByMode)
+  const setSelectedSourceForMode = useAppStore((s) => s.setSelectedSourceForMode)
+  const overlayVisibilityByMode = useAppStore((s) => s.overlayVisibilityByMode)
+  const setOverlayVisibility = useAppStore((s) => s.setOverlayVisibility)
+  // 用 ref 跟踪以避免每次写入都重建 control
+  const overlayMemRef = useRef(overlayVisibilityByMode)
+  useEffect(() => {
+    overlayMemRef.current = overlayVisibilityByMode
+  }, [overlayVisibilityByMode])
   const vectorLayers = useVectorLayersStore((s) => s.layers)
   const vectorRevision = useVectorLayersStore((s) => s.revision)
   const waybackPreviewId = useWaybackStore((s) => s.previewVersionId)
+  const setWaybackPreviewId = useWaybackStore((s) => s.setPreviewVersionId)
 
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
   const tdtToken = settingsQuery.data?.tianditu_token ?? null
+  const proxyUrl = useMemo(() => {
+    const s = settingsQuery.data
+    if (!s?.proxy_enabled) return null
+    return s.proxy_url || null
+  }, [settingsQuery.data])
   const sourcesQuery = useQuery({
     queryKey: ['tile-sources-merged', tdtToken],
     queryFn: () => getTileSourcesMerged(tdtToken),
+  })
+  const waybackVersionsQuery = useQuery({
+    queryKey: ['wayback-versions', proxyUrl ?? ''],
+    queryFn: () => getWaybackVersions(proxyUrl),
+    enabled: mode === 'wayback',
+    staleTime: 5 * 60 * 1000,
   })
 
   // 初始化地图
@@ -240,14 +263,27 @@ export function MapCanvas() {
     }
   }, [externalRevision, bounds, polygon])
 
-  // 根据图源数据 + 当前选中图源构建 / 切换底图，并装配图层控件
+  // 升序版本：oldest → newest（与 timeline 一致）
+  const ascendingWaybackVersions = useMemo(() => {
+    const list = waybackVersionsQuery.data ?? []
+    return [...list].reverse()
+  }, [waybackVersionsQuery.data])
+
+  // 当前 mode 期望的底图 key：'src:<key>' 或 'wb:<id>'
+  const desiredBaseKey = useMemo<string | null>(() => {
+    if (mode === 'wayback') {
+      return waybackPreviewId ? `wb:${waybackPreviewId}` : null
+    }
+    const k = selectedSourceByMode[mode]
+    return k ? `src:${k}` : null
+  }, [mode, selectedSourceByMode, waybackPreviewId])
+
+  // 维护普通图源缓存
   useEffect(() => {
     const map = mapRef.current
     if (!map || !sourcesQuery.data) return
     const sources = sourcesQuery.data
-
     const cache = baseLayersRef.current
-    // 移除已不存在或 url 改变的旧图层
     for (const [k, layer] of cache) {
       if (k === '__fallback') continue
       const cfg = sources[k]
@@ -278,12 +314,48 @@ export function MapCanvas() {
         // skip bad url
       }
     }
+  }, [sourcesQuery.data])
 
-    // 重建天地图标注 overlay
+  // 维护 wayback 版本图层缓存
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const cache = waybackLayersRef.current
+    const validIds = new Set(ascendingWaybackVersions.map((v) => v.id))
+    for (const [id, layer] of cache) {
+      if (!validIds.has(id)) {
+        if (map.hasLayer(layer)) map.removeLayer(layer)
+        cache.delete(id)
+      }
+    }
+    for (const v of ascendingWaybackVersions) {
+      if (cache.has(v.id)) continue
+      const url = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/${v.id}/{z}/{y}/{x}`
+      const layer = L.tileLayer(url, { maxZoom: 19, attribution: 'Esri Wayback' })
+      cache.set(v.id, layer)
+    }
+  }, [ascendingWaybackVersions])
+
+  // 按 mode 重建 LayersControl + 同步天地图标注 overlay
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    // 移除旧 overlay 与控件
     overlayLayersRef.current.forEach((l) => {
       if (map.hasLayer(l)) map.removeLayer(l)
     })
     overlayLayersRef.current = []
+    if (layerControlRef.current) {
+      layerControlRef.current.remove()
+      layerControlRef.current = null
+    }
+    if (customControlRef.current) {
+      customControlRef.current.remove()
+      customControlRef.current = null
+    }
+    customControlRadiosRef.current = []
+
     const tdt = tdtToken || '436ce7e50d27eede2f2929307e6b33c0'
     const tdtSubdomains = ['0', '1', '2', '3', '4', '5', '6', '7']
     const ciaLayer = L.tileLayer(
@@ -296,50 +368,264 @@ export function MapCanvas() {
     )
     overlayLayersRef.current = [ciaLayer, cvaLayer]
 
-    // 重建图层控件
-    if (layerControlRef.current) {
-      layerControlRef.current.remove()
-      layerControlRef.current = null
-    }
-    const baseMaps: Record<string, L.TileLayer> = {}
-    const sortedKeys = [...Object.keys(sources)].sort((a, b) =>
-      ((sources[a] as { name?: string }).name || '').localeCompare(
-        (sources[b] as { name?: string }).name || '',
-      ),
-    )
-    for (const key of sortedKeys) {
-      const layer = cache.get(key)
-      if (layer) baseMaps[(sources[key] as { name?: string }).name || key] = layer
-    }
-    layerControlRef.current = L.control
-      .layers(
-        baseMaps,
-        {
-          '天地图 影像标注': ciaLayer,
-          '天地图 矢量标注': cvaLayer,
-        },
-        { position: 'topleft', collapsed: true },
-      )
-      .addTo(map)
-  }, [sourcesQuery.data, tdtToken])
+    // 按当前 mode 记忆决定 cia/cva 初始可见性（默认两者都不显示）
+    const overlayMem = overlayMemRef.current[mode] ?? {}
+    if (overlayMem.cia) ciaLayer.addTo(map)
+    if (overlayMem.cva) cvaLayer.addTo(map)
 
-  // 监听选中图源 → 切换底图
+    if (mode === 'wayback') {
+      // ---------- Wayback：自定义嵌套 control（按 年/月 分组） ----------
+      const desc = [...ascendingWaybackVersions].reverse() // 最新优先
+      // group: year → month → versions
+      const grouped = new Map<string, Map<string, typeof desc>>()
+      for (const v of desc) {
+        const date = v.date || ''
+        const year = date.slice(0, 4) || '其他'
+        const month = date.slice(5, 7) || '--'
+        if (!grouped.has(year)) grouped.set(year, new Map())
+        const monthMap = grouped.get(year)!
+        if (!monthMap.has(month)) monthMap.set(month, [])
+        monthMap.get(month)!.push(v)
+      }
+
+      const Custom = L.Control.extend({
+        options: { position: 'topleft' as L.ControlPosition },
+        onAdd() {
+          const container = L.DomUtil.create(
+            'div',
+            'leaflet-control-layers leaflet-control',
+          )
+          // 阻止地图捕获滚轮 / 拖拽 / 双击
+          L.DomEvent.disableClickPropagation(container)
+          L.DomEvent.disableScrollPropagation(container)
+
+          const toggle = L.DomUtil.create(
+            'a',
+            'leaflet-control-layers-toggle',
+            container,
+          )
+          toggle.href = '#'
+          toggle.title = 'Wayback 历史影像'
+
+          const list = L.DomUtil.create(
+            'section',
+            'leaflet-control-layers-list',
+            container,
+          )
+          // 默认折叠面板，hover 展开（沿用 leaflet 原生行为）
+          const expand = () => L.DomUtil.addClass(container, 'leaflet-control-layers-expanded')
+          const collapse = () => L.DomUtil.removeClass(container, 'leaflet-control-layers-expanded')
+          L.DomEvent.on(container, 'mouseenter', expand)
+          L.DomEvent.on(container, 'mouseleave', collapse)
+
+          // base 区域
+          const baseDiv = L.DomUtil.create('div', 'leaflet-control-layers-base', list)
+          baseDiv.style.maxHeight = '60vh'
+          baseDiv.style.overflowY = 'auto'
+          baseDiv.style.minWidth = '180px'
+
+          const radios: HTMLInputElement[] = []
+          let firstYear = true
+          for (const [year, monthMap] of grouped) {
+            const yearDetails = document.createElement('details')
+            yearDetails.style.marginLeft = '0'
+            if (firstYear) {
+              yearDetails.open = true
+              firstYear = false
+            }
+            const yearSummary = document.createElement('summary')
+            yearSummary.textContent = `${year} (${[...monthMap.values()].reduce(
+              (s, vs) => s + vs.length,
+              0,
+            )})`
+            yearSummary.style.cursor = 'pointer'
+            yearSummary.style.fontWeight = '600'
+            yearSummary.style.padding = '2px 0'
+            yearDetails.appendChild(yearSummary)
+
+            for (const [month, versions] of monthMap) {
+              const monthDetails = document.createElement('details')
+              monthDetails.style.marginLeft = '12px'
+              const monthSummary = document.createElement('summary')
+              monthSummary.textContent = `${month}月 (${versions.length})`
+              monthSummary.style.cursor = 'pointer'
+              monthSummary.style.color = '#555'
+              monthSummary.style.padding = '1px 0'
+              monthDetails.appendChild(monthSummary)
+
+              for (const v of versions) {
+                const label = document.createElement('label')
+                label.style.display = 'block'
+                label.style.marginLeft = '14px'
+                label.style.padding = '1px 0'
+                label.style.cursor = 'pointer'
+                const radio = document.createElement('input')
+                radio.type = 'radio'
+                radio.name = 'wayback-version'
+                radio.value = v.id
+                radio.style.marginRight = '6px'
+                if (v.id === waybackPreviewId) {
+                  radio.checked = true
+                  // 自动展开当前所在的月份
+                  monthDetails.open = true
+                  yearDetails.open = true
+                }
+                radio.addEventListener('change', () => {
+                  if (radio.checked) setWaybackPreviewId(v.id)
+                })
+                label.appendChild(radio)
+                label.appendChild(document.createTextNode(v.date || v.id))
+                monthDetails.appendChild(label)
+                radios.push(radio)
+              }
+              yearDetails.appendChild(monthDetails)
+            }
+            baseDiv.appendChild(yearDetails)
+          }
+          customControlRadiosRef.current = radios
+
+          // 分隔线
+          const sep = L.DomUtil.create('div', 'leaflet-control-layers-separator', list)
+          sep.style.borderTop = '1px solid #ddd'
+          sep.style.margin = '6px 0'
+
+          // overlays（cia/cva）
+          const overlayDiv = L.DomUtil.create(
+            'div',
+            'leaflet-control-layers-overlays',
+            list,
+          )
+          const makeOverlay = (label: string, layer: L.TileLayer, key: string) => {
+            const lbl = document.createElement('label')
+            lbl.style.display = 'block'
+            lbl.style.cursor = 'pointer'
+            const cb = document.createElement('input')
+            cb.type = 'checkbox'
+            cb.style.marginRight = '6px'
+            cb.checked = map.hasLayer(layer)
+            cb.addEventListener('change', () => {
+              if (cb.checked) layer.addTo(map)
+              else map.removeLayer(layer)
+              setOverlayVisibility(mode as AppMode, key, cb.checked)
+            })
+            lbl.appendChild(cb)
+            lbl.appendChild(document.createTextNode(label))
+            overlayDiv.appendChild(lbl)
+          }
+          makeOverlay('天地图 影像标注', ciaLayer, 'cia')
+          makeOverlay('天地图 矢量标注', cvaLayer, 'cva')
+
+          return container
+        },
+      })
+      const ctrl = new Custom()
+      ctrl.addTo(map)
+      customControlRef.current = ctrl
+    } else {
+      // ---------- 普通 mode：用原生 L.Control.Layers ----------
+      const baseMaps: Record<string, L.TileLayer> = {}
+      const labelToKey = new Map<string, string>()
+      const sources = sourcesQuery.data ?? {}
+      const cache = baseLayersRef.current
+      const keys = Object.keys(sources).sort((a, b) =>
+        ((sources[a] as { name?: string }).name || '').localeCompare(
+          (sources[b] as { name?: string }).name || '',
+        ),
+      )
+      for (const key of keys) {
+        const layer = cache.get(key)
+        if (!layer) continue
+        const label = (sources[key] as { name?: string }).name || key
+        baseMaps[label] = layer
+        labelToKey.set(label, `src:${key}`)
+      }
+
+      layerControlRef.current = L.control
+        .layers(
+          baseMaps,
+          {
+            '天地图 影像标注': ciaLayer,
+            '天地图 矢量标注': cvaLayer,
+          },
+          { position: 'topleft', collapsed: true },
+        )
+        .addTo(map)
+
+      const overlayLabelToKey: Record<string, string> = {
+        '天地图 影像标注': 'cia',
+        '天地图 矢量标注': 'cva',
+      }
+      const onBaseChange = (e: L.LayersControlEvent) => {
+        const fullKey = labelToKey.get(e.name)
+        if (!fullKey) return
+        if (fullKey.startsWith('src:')) {
+          setSelectedSourceForMode(mode as AppMode, fullKey.slice(4))
+        }
+      }
+      const onOverlayAdd = (e: L.LayersControlEvent) => {
+        const k = overlayLabelToKey[e.name]
+        if (k) setOverlayVisibility(mode as AppMode, k, true)
+      }
+      const onOverlayRemove = (e: L.LayersControlEvent) => {
+        const k = overlayLabelToKey[e.name]
+        if (k) setOverlayVisibility(mode as AppMode, k, false)
+      }
+      map.on('baselayerchange', onBaseChange)
+      map.on('overlayadd', onOverlayAdd)
+      map.on('overlayremove', onOverlayRemove)
+      return () => {
+        map.off('baselayerchange', onBaseChange)
+        map.off('overlayadd', onOverlayAdd)
+        map.off('overlayremove', onOverlayRemove)
+      }
+    }
+  }, [
+    mode,
+    sourcesQuery.data,
+    ascendingWaybackVersions,
+    tdtToken,
+    setSelectedSourceForMode,
+    setWaybackPreviewId,
+    // 注意：waybackPreviewId 不放依赖，避免每次切版本都重建 control；下面单独 effect 同步 radio checked
+  ])
+
+  // wayback 自定义 control 的 radio checked 同步（不重建）
+  useEffect(() => {
+    const radios = customControlRadiosRef.current
+    if (!radios.length) return
+    for (const r of radios) {
+      r.checked = r.value === waybackPreviewId
+    }
+  }, [waybackPreviewId])
+
+  // 同步当前期望底图 key → 切换地图上的 base layer
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !selectedSource) return
-    const cache = baseLayersRef.current
-    const target = cache.get(selectedSource)
+    if (!map || !desiredBaseKey) return
+    let target: L.TileLayer | undefined
+    if (desiredBaseKey.startsWith('wb:')) {
+      target = waybackLayersRef.current.get(desiredBaseKey.slice(3))
+    } else if (desiredBaseKey.startsWith('src:')) {
+      target = baseLayersRef.current.get(desiredBaseKey.slice(4))
+    }
     if (!target) return
-    if (currentBaseLayerKeyRef.current === selectedSource) return
+    if (currentBaseLayerKeyRef.current === desiredBaseKey) return
     const prevKey = currentBaseLayerKeyRef.current
     if (prevKey) {
-      const prev = cache.get(prevKey)
+      let prev: L.TileLayer | undefined
+      if (prevKey.startsWith('wb:')) {
+        prev = waybackLayersRef.current.get(prevKey.slice(3))
+      } else if (prevKey.startsWith('src:')) {
+        prev = baseLayersRef.current.get(prevKey.slice(4))
+      } else if (prevKey === '__fallback') {
+        prev = baseLayersRef.current.get('__fallback')
+      }
       if (prev && map.hasLayer(prev)) map.removeLayer(prev)
     }
     target.addTo(map)
     target.bringToBack?.()
-    currentBaseLayerKeyRef.current = selectedSource
-  }, [selectedSource, sourcesQuery.data])
+    currentBaseLayerKeyRef.current = desiredBaseKey
+  }, [desiredBaseKey, sourcesQuery.data, ascendingWaybackVersions])
 
   // 同步本地矢量图层（按 revision 增量 diff）
   useEffect(() => {
@@ -400,23 +686,6 @@ export function MapCanvas() {
       map.fitBounds(lastBounds, { animate: false })
     }
   }, [vectorLayers, vectorRevision])
-
-  // 同步 Wayback 预览图层
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-    if (waybackLayerRef.current) {
-      if (map.hasLayer(waybackLayerRef.current)) map.removeLayer(waybackLayerRef.current)
-      waybackLayerRef.current = null
-    }
-    if (waybackPreviewId) {
-      const url = `https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/${waybackPreviewId}/{z}/{y}/{x}`
-      const layer = L.tileLayer(url, { maxZoom: 19, attribution: 'Esri Wayback' })
-      layer.addTo(map)
-      layer.bringToFront?.()
-      waybackLayerRef.current = layer
-    }
-  }, [waybackPreviewId])
 
   return (
     <div className="relative h-full w-full">

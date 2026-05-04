@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
-import { Boxes, Pencil, Square as SquareIcon, FolderOpen } from 'lucide-react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { Boxes, ChevronDown, ChevronUp, Pencil, RotateCcw, Settings2, Square as SquareIcon, FolderOpen } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { useSelectionStore, type LatLngRing, type MapBounds } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
 import { loadCesium } from '@/lib/cesium-loader'
@@ -51,6 +55,16 @@ export function CesiumCanvas() {
   const [hint, setHint] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+
+  // 模型调控面板状态
+  const [hasTileset, setHasTileset] = useState(false)
+  const [ctrlCollapsed, setCtrlCollapsed] = useState(false)
+  const [sse, setSse] = useState(8)
+  const [opacity, setOpacity] = useState(100)
+  const [offsetLng, setOffsetLng] = useState('0')
+  const [offsetLat, setOffsetLat] = useState('0')
+  const [offsetHeight, setOffsetHeight] = useState('0')
+  const [showBV, setShowBV] = useState(false)
 
   // 仅在第一次显示时初始化（懒加载 Cesium）
   useEffect(() => {
@@ -373,6 +387,74 @@ export function CesiumCanvas() {
     }
   }
 
+  // 模型调控：SSE 实时生效
+  useEffect(() => {
+    if (!hasTileset || !tilesetRef.current) return
+    tilesetRef.current.maximumScreenSpaceError = sse
+  }, [sse, hasTileset])
+
+  // 模型调控：透明度实时生效
+  useEffect(() => {
+    if (!hasTileset || !tilesetRef.current || !cesiumRef.current) return
+    const Cesium = cesiumRef.current
+    if (opacity >= 100) {
+      tilesetRef.current.style = undefined
+    } else {
+      tilesetRef.current.style = new Cesium.Cesium3DTileStyle({
+        color: `color("white", ${opacity / 100})`,
+      })
+    }
+  }, [opacity, hasTileset])
+
+  // 模型调控：包围盒实时生效
+  useEffect(() => {
+    if (!hasTileset || !tilesetRef.current) return
+    tilesetRef.current.debugShowBoundingVolume = showBV
+  }, [showBV, hasTileset])
+
+  const applyOffset = useCallback(() => {
+    const Cesium = cesiumRef.current
+    const tileset = tilesetRef.current
+    if (!Cesium || !tileset) return
+    const lng = Number(offsetLng) || 0
+    const lat = Number(offsetLat) || 0
+    const h = Number(offsetHeight) || 0
+    if (lng === 0 && lat === 0 && h === 0) {
+      tileset.modelMatrix = Cesium.Matrix4.IDENTITY.clone()
+      return
+    }
+    const center = tileset.boundingSphere.center
+    const cart = Cesium.Cartographic.fromCartesian(center)
+    const newCart = new Cesium.Cartographic(
+      cart.longitude + Cesium.Math.toRadians(lng),
+      cart.latitude + Cesium.Math.toRadians(lat),
+      cart.height + h,
+    )
+    const oldT = Cesium.Transforms.eastNorthUpToFixedFrame(Cesium.Cartographic.toCartesian(cart))
+    const newT = Cesium.Transforms.eastNorthUpToFixedFrame(Cesium.Cartographic.toCartesian(newCart))
+    const inverseOld = Cesium.Matrix4.inverse(oldT, new Cesium.Matrix4())
+    const offsetMatrix = Cesium.Matrix4.multiply(newT, inverseOld, new Cesium.Matrix4())
+    tileset.modelMatrix = offsetMatrix
+    toast.success('已应用位置偏移')
+  }, [offsetLng, offsetLat, offsetHeight])
+
+  const resetControls = useCallback(() => {
+    setSse(8)
+    setOpacity(100)
+    setOffsetLng('0')
+    setOffsetLat('0')
+    setOffsetHeight('0')
+    setShowBV(false)
+    const Cesium = cesiumRef.current
+    const tileset = tilesetRef.current
+    if (Cesium && tileset) {
+      tileset.maximumScreenSpaceError = 8
+      tileset.style = undefined
+      tileset.modelMatrix = Cesium.Matrix4.IDENTITY.clone()
+      tileset.debugShowBoundingVolume = false
+    }
+  }, [])
+
   async function handlePreviewLocal() {
     if (!isTauriRuntime()) {
       toast.error('本地预览仅在桌面应用中可用')
@@ -407,7 +489,16 @@ export function CesiumCanvas() {
       }
       const tileset = await Cesium.Cesium3DTileset.fromUrl(tilesetUrl)
       tilesetRef.current = viewer.scene.primitives.add(tileset)
+      // 应用当前面板配置
+      tileset.maximumScreenSpaceError = sse
+      tileset.debugShowBoundingVolume = showBV
+      if (opacity < 100) {
+        tileset.style = new Cesium.Cesium3DTileStyle({
+          color: `color("white", ${opacity / 100})`,
+        })
+      }
       viewer.zoomTo(tileset)
+      setHasTileset(true)
       toast.success('本地 3D Tiles 加载成功')
     } catch (e) {
       console.error('本地 3D Tiles 加载失败', e)
@@ -475,6 +566,111 @@ export function CesiumCanvas() {
       {hint && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-md border bg-background/95 px-3 py-1 text-xs text-foreground shadow backdrop-blur">
           {hint}
+        </div>
+      )}
+
+      {/* 模型调控面板：仅在 tileset 加载后显示 */}
+      {hasTileset && (
+        <div className="absolute right-3 top-44 z-10 w-60 rounded-md border bg-background/95 shadow-sm backdrop-blur">
+          <button
+            type="button"
+            onClick={() => setCtrlCollapsed((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-xs font-medium hover:bg-accent/50"
+          >
+            <span className="flex items-center gap-1.5">
+              <Settings2 className="size-3.5" />
+              模型调控
+            </span>
+            {ctrlCollapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
+          </button>
+          {!ctrlCollapsed && (
+            <div className="space-y-3 border-t p-2.5 text-xs">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">显示精度</Label>
+                  <span className="font-mono text-xs text-primary">{sse}</span>
+                </div>
+                <Slider
+                  min={1}
+                  max={64}
+                  step={1}
+                  value={[sse]}
+                  onValueChange={(v) => setSse(v[0] ?? 8)}
+                />
+                <p className="text-[10px] text-muted-foreground">值越小越精细，性能开销越大</p>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">透明度</Label>
+                  <span className="font-mono text-xs text-primary">{opacity}%</span>
+                </div>
+                <Slider
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={[opacity]}
+                  onValueChange={(v) => setOpacity(v[0] ?? 100)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs">位置偏移</Label>
+                <div className="grid grid-cols-3 gap-1">
+                  <Input
+                    type="number"
+                    value={offsetLng}
+                    onChange={(e) => setOffsetLng(e.target.value)}
+                    step="0.0001"
+                    className="h-7 px-1.5 text-[11px]"
+                    placeholder="经度°"
+                    title="经度偏移 (°)"
+                  />
+                  <Input
+                    type="number"
+                    value={offsetLat}
+                    onChange={(e) => setOffsetLat(e.target.value)}
+                    step="0.0001"
+                    className="h-7 px-1.5 text-[11px]"
+                    placeholder="纬度°"
+                    title="纬度偏移 (°)"
+                  />
+                  <Input
+                    type="number"
+                    value={offsetHeight}
+                    onChange={(e) => setOffsetHeight(e.target.value)}
+                    step="1"
+                    className="h-7 px-1.5 text-[11px]"
+                    placeholder="高度m"
+                    title="高度偏移 (m)"
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 w-full text-xs"
+                  onClick={applyOffset}
+                >
+                  应用位置偏移
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between border-t pt-2">
+                <Label htmlFor="cesium-bv" className="text-xs">显示包围盒</Label>
+                <Switch id="cesium-bv" checked={showBV} onCheckedChange={setShowBV} />
+              </div>
+
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 w-full gap-1 text-xs"
+                onClick={resetControls}
+              >
+                <RotateCcw className="size-3" />
+                重置
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

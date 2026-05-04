@@ -204,9 +204,9 @@ function App() {
             {tab === 'download' && (
               <div className="p-3">
                 {mode === 'imagery' ? (
-                  <ImageryPage mode="imagery" />
+                  <ImageryPage key="imagery" mode="imagery" />
                 ) : mode === 'dem' ? (
-                  <ImageryPage mode="dem" />
+                  <ImageryPage key="dem" mode="dem" />
                 ) : mode === 'wayback' ? (
                   <WaybackPage />
                 ) : mode === 'tiles3d' ? (

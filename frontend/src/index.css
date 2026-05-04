@@ -279,7 +279,7 @@ body {
    contrast() 把灰阶图标推到接近纯白，使所有图标视觉一致。 */
 .dark .leaflet-draw-toolbar a,
 .dark .leaflet-control-layers-toggle {
-  filter: invert(1) hue-rotate(180deg) contrast(1.4) brightness(1.1);
+  filter: invert(1) hue-rotate(180deg) contrast(0.8) brightness(1.1);
   background-color: #ffffff !important;
 }
 .dark .leaflet-draw-toolbar a:hover,

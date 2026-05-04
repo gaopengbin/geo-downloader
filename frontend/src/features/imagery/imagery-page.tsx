@@ -24,7 +24,7 @@ import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
 import { useSelectionStore, type MapBounds } from '@/store/selection-store'
-import { useAppStore } from '@/store/app-store'
+import { useAppStore, type AppMode } from '@/store/app-store'
 import { useImageryParamsStore } from '@/store/imagery-params-store'
 import type { DownloadEstimate, DownloadRequest, OutputFormat } from '@/types/api'
 import { StatCard } from '@/components/layout/stat-card'
@@ -217,11 +217,22 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
     formState: { errors },
   } = form
 
-  const [defaultsApplied, setDefaultsApplied] = useState(false)
-  if (!defaultsApplied && settingsQuery.data && sourcesQuery.data && sourceList.length > 0) {
+  const [initedForMode, setInitedForMode] = useState<AppMode | null>(null)
+  useEffect(() => {
+    if (initedForMode === mode) return
+    if (!settingsQuery.data || !sourcesQuery.data || sourceList.length === 0) return
     const s = settingsQuery.data
+    // 优先从 store 中取本 mode 上次选中的图源（切换 tab 后回来要还原）
+    const remembered = useAppStore.getState().selectedSourceByMode[mode] ?? null
+    const isValidRemembered =
+      remembered != null &&
+      sourcesQuery.data[remembered] != null &&
+      (isDemMode ? isDemSource(remembered) : !isDemSource(remembered))
+
     let firstSourceId: string
-    if (isDemMode) {
+    if (isValidRemembered) {
+      firstSourceId = remembered as string
+    } else if (isDemMode) {
       firstSourceId =
         sourceList.find((x) => ((x.id as string) ?? x.key) === 'dem_terrarium')?.id ??
         sourceList[0]?.id ??
@@ -247,8 +258,9 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
         setValue('format', fmt as DownloadFormValues['format'])
       }
     }
-    setDefaultsApplied(true)
-  }
+    setInitedForMode(mode)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, settingsQuery.data, sourcesQuery.data, sourceList])
 
   const source = useWatch({ control, name: 'source' })
   const format = useWatch({ control, name: 'format' })
@@ -398,10 +410,10 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bounds, zoom, zoomMax, zoomMaxEnabled, format, cropToShape, polygon])
 
-  // 同步当前选中的图源到全局 store，让地图预览跟随切换
+  // 同步当前选中的图源到全局 store（按当前 mode 记忆），让地图预览跟随切换
   useEffect(() => {
-    if (source) useAppStore.getState().setSelectedSource(source)
-  }, [source])
+    if (source) useAppStore.getState().setSelectedSourceForMode(mode, source)
+  }, [source, mode])
 
   // 同步影像下载参数到全局 store，供批量下载对话框读取
   const sourceMetaName =
