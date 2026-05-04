@@ -1,6 +1,6 @@
 [package]
 name = "geo-downloader"
-version = "3.4.0-beta.1"
+version = "3.4.0-beta.2"
 description = "GeoDownloader - 地理空间数据下载与导出工具"
 authors = ["you"]
 license = "MIT"
