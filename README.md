@@ -36,14 +36,17 @@
 
 ## 下载安装
 
-前往 [Releases](https://github.com/gaopengbin/geo-downloader/releases/latest) 下载对应平台安装包：
+前往 [Releases](https://github.com/gaopengbin/geo-downloader/releases) 下载对应平台安装包：
 
-| 平台 | 文件 |
-|---|---|
-| Windows x64 | `GeoDownloader_*_windows_x64-setup.exe` |
-| macOS Apple Silicon | `GeoDownloader_*_macos_arm64.dmg` |
-| macOS Intel | `GeoDownloader_*_macos_x64.dmg` |
-| Linux | `.deb` / `.AppImage` |
+| 平台 | 稳定版 | 预览版 (v3.4.0-beta.2) |
+|---|---|---|
+| Windows x64 | [latest setup.exe](https://github.com/gaopengbin/geo-downloader/releases/latest) | [3.4.0-beta.2 setup.exe](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0-beta.2/GeoDownloader_3.4.0-beta.2_windows_x64-setup.exe) |
+| macOS Apple Silicon | [latest arm64.dmg](https://github.com/gaopengbin/geo-downloader/releases/latest) | [3.4.0-beta.2 arm64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0-beta.2/GeoDownloader_3.4.0-beta.2_macos_arm64.dmg) |
+| macOS Intel | [latest x64.dmg](https://github.com/gaopengbin/geo-downloader/releases/latest) | [3.4.0-beta.2 x64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0-beta.2/GeoDownloader_3.4.0-beta.2_macos_x64.dmg) |
+| Linux (Debian/Ubuntu) | [latest .deb](https://github.com/gaopengbin/geo-downloader/releases/latest) | [3.4.0-beta.2 .deb](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0-beta.2/GeoDownloader_3.4.0-beta.2_linux_amd64.deb) |
+| Linux (AppImage) | [latest AppImage](https://github.com/gaopengbin/geo-downloader/releases/latest) | [3.4.0-beta.2 AppImage](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0-beta.2/GeoDownloader_3.4.0-beta.2_linux_amd64.AppImage) |
+
+> **预览版说明**：v3.4.0-beta.2 是前端整体迁移到 React 19 + shadcn/ui 的首个公开预览版，欢迎尝鲜并反馈，详见 [Release Notes](https://github.com/gaopengbin/geo-downloader/releases/tag/v3.4.0-beta.2)。
 
 > macOS 首次打开提示"无法验证开发者"时：右键安装包 → 打开，或在「系统设置 → 隐私与安全性」放行。
 
