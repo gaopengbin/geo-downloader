@@ -1107,7 +1107,12 @@ function closeUpdateDialog() {
 
 function switchSponsorTab(tab) {
     document.querySelectorAll('.sponsor-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-    document.getElementById('sponsor-qr-img').src = tab === 'wx' ? './images/wx.jpg' : './images/zfb.jpg';
+    const remoteBase = 'https://github.com/gaopengbin/geo-downloader/releases/download/assets';
+    const remote = tab === 'wx' ? `${remoteBase}/wx.jpg` : `${remoteBase}/zfb.jpg`;
+    const local = tab === 'wx' ? './images/wx.jpg' : './images/zfb.jpg';
+    const imgEl = document.getElementById('sponsor-qr-img');
+    imgEl.onerror = function () { this.onerror = null; this.src = local; };
+    imgEl.src = remote;
 }
 
 async function doUpdateNow() {

@@ -9,6 +9,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { QR_ASSETS, fallbackToLocal } from '@/lib/qr-assets'
 
 export function CommunityDialog() {
   return (
@@ -30,7 +31,8 @@ export function CommunityDialog() {
           <div className="flex flex-col items-center gap-2 rounded-md border p-3">
             <div className="text-sm font-medium">微信公众号</div>
             <img
-              src="/images/gzh.jpg"
+              src={QR_ASSETS.gzh.remote}
+              onError={(e) => fallbackToLocal(e, 'gzh')}
               alt="GeoD 公众号"
               className="h-44 w-44 rounded-md border object-contain"
             />
@@ -39,7 +41,8 @@ export function CommunityDialog() {
           <div className="flex flex-col items-center gap-2 rounded-md border p-3">
             <div className="text-sm font-medium">技术交流群</div>
             <img
-              src="/images/wxq_sq.png"
+              src={QR_ASSETS.wxq.remote}
+              onError={(e) => fallbackToLocal(e, 'wxq')}
               alt="GeoD 技术交流群"
               className="h-44 w-44 rounded-md border object-contain"
             />

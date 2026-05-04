@@ -11,6 +11,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { QR_ASSETS, fallbackToLocal } from '@/lib/qr-assets'
 
 export function SponsorDialog() {
   const [tab, setTab] = useState<'wx' | 'zfb'>('wx')
@@ -41,14 +42,16 @@ export function SponsorDialog() {
           </TabsList>
           <TabsContent value="wx" className="mt-3 flex justify-center">
             <img
-              src="/images/wx.jpg"
+              src={QR_ASSETS.wx.remote}
+              onError={(e) => fallbackToLocal(e, 'wx')}
               alt="微信收款码"
               className="h-64 w-64 rounded-md border object-contain"
             />
           </TabsContent>
           <TabsContent value="zfb" className="mt-3 flex justify-center">
             <img
-              src="/images/zfb.jpg"
+              src={QR_ASSETS.zfb.remote}
+              onError={(e) => fallbackToLocal(e, 'zfb')}
               alt="支付宝收款码"
               className="h-64 w-64 rounded-md border object-contain"
             />

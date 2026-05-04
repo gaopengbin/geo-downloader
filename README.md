@@ -153,9 +153,9 @@ MIT License
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
 
 <p align="center">
-  <img src="./static/images/wx.jpg" alt="微信赞赏" width="250">
+  <img src="https://github.com/gaopengbin/geo-downloader/releases/download/assets/wx.jpg" alt="微信赞赏" width="250">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="./static/images/zfb.jpg" alt="支付宝赞赏" width="250">
+  <img src="https://github.com/gaopengbin/geo-downloader/releases/download/assets/zfb.jpg" alt="支付宝赞赏" width="250">
 </p>
 <p align="center">
   <sub>微信</sub>
