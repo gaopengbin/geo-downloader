@@ -38,15 +38,15 @@
 
 前往 [Releases](https://github.com/gaopengbin/geo-downloader/releases) 下载对应平台安装包：
 
-| 平台 | 稳定版 (v3.4.0) |
+| 平台 | 稳定版 (v3.4.1) |
 |---|---|
-| Windows x64 | [setup.exe](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0/GeoDownloader_3.4.0_windows_x64-setup.exe) |
-| macOS Apple Silicon | [arm64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0/GeoDownloader_3.4.0_macos_arm64.dmg) |
-| macOS Intel | [x64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0/GeoDownloader_3.4.0_macos_x64.dmg) |
-| Linux (Debian/Ubuntu) | [.deb](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0/GeoDownloader_3.4.0_linux_amd64.deb) |
-| Linux (AppImage) | [AppImage](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.0/GeoDownloader_3.4.0_linux_amd64.AppImage) |
+| Windows x64 | [setup.exe](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.1/GeoDownloader_3.4.1_windows_x64-setup.exe) |
+| macOS Apple Silicon | [arm64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.1/GeoDownloader_3.4.1_macos_arm64.dmg) |
+| macOS Intel | [x64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.1/GeoDownloader_3.4.1_macos_x64.dmg) |
+| Linux (Debian/Ubuntu) | [.deb](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.1/GeoDownloader_3.4.1_linux_amd64.deb) |
+| Linux (AppImage) | [AppImage](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.1/GeoDownloader_3.4.1_linux_amd64.AppImage) |
 
-> **v3.4.0 GA**：前端整体迁移到 React 19 + shadcn/ui，新增 browse-as-cache、3D Tiles 表面拾取与 Cesium Ion 自动预览等能力，详见 [Release Notes](https://github.com/gaopengbin/geo-downloader/releases/tag/v3.4.0)。
+> **v3.4.1**：修复 v3.4.0 的 CSP 配置遗漏导致 3D Tiles 模块无法加载 CesiumJS 的问题。其他能力沿用 v3.4.0 GA：React 19 前端、browse-as-cache、3D Tiles 表面拾取与 Cesium Ion 自动预览，详见 [Release Notes](https://github.com/gaopengbin/geo-downloader/releases/tag/v3.4.1)。
 
 > macOS 首次打开提示"无法验证开发者"时：右键安装包 → 打开，或在「系统设置 → 隐私与安全性」放行。
 
