@@ -61,15 +61,18 @@ jobs:
         shell: bash
         run: |
           set -e
+          # 使用 npm install 代替 npm ci，避免 lockfile 在不同 npm 版本下
+          # 对 wasm-only optional deps（@emnapi/runtime、@emnapi/core 等）的处理差异
+          # 导致的 EUSAGE Missing 报错。
           for i in 1 2 3; do
-            echo "::group::npm ci attempt $i"
-            npm ci && [ -d node_modules ] && [ -x node_modules/.bin/vite ] && { echo "::endgroup::"; exit 0; }
+            echo "::group::npm install attempt $i"
+            npm install --no-audit --no-fund --prefer-offline && [ -d node_modules ] && [ -x node_modules/.bin/vite ] && { echo "::endgroup::"; exit 0; }
             echo "::endgroup::"
-            echo "npm ci attempt $i failed or produced empty node_modules, retrying..."
+            echo "npm install attempt $i failed or produced empty node_modules, retrying..."
             rm -rf node_modules
             sleep 5
           done
-          echo "npm ci failed after 3 attempts"
+          echo "npm install failed after 3 attempts"
           exit 1
 
       - name: Install Tauri CLI
