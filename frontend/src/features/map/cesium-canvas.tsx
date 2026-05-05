@@ -46,6 +46,7 @@ export function CesiumCanvas() {
   const drawModeRef = useRef<DrawMode>(null)
   const tilesetRef = useRef<Cesium | null>(null)
   const lastRevRef = useRef(-1)
+  const suppressNextFlyRef = useRef(false)
   const mode = useAppStore((s) => s.mode)
   const visible = mode === 'tiles3d'
 
@@ -149,7 +150,9 @@ export function CesiumCanvas() {
     const unsub = useSelectionStore.subscribe((state) => {
       if (state.externalRevision === lastRevRef.current) return
       lastRevRef.current = state.externalRevision
-      drawSelection(state.bounds, state.polygon, true)
+      const fly = !suppressNextFlyRef.current
+      suppressNextFlyRef.current = false
+      drawSelection(state.bounds, state.polygon, fly)
     })
     // 立即同步一次当前状态
     const cur = useSelectionStore.getState()
@@ -251,11 +254,25 @@ export function CesiumCanvas() {
     )
     viewer.canvas.style.cursor = 'crosshair'
 
+    // 优先拾取 3D Tiles 表面，其次地形/椭球
+    const pickPoint = (pos: unknown): unknown => {
+      if (tilesetRef.current && viewer.scene.pickPositionSupported) {
+        const picked = viewer.scene.pickPosition(pos as never)
+        if (
+          Cesium.defined(picked) &&
+          !Cesium.Cartesian3.equals(picked, Cesium.Cartesian3.ZERO)
+        ) {
+          return picked
+        }
+      }
+      return viewer.camera.pickEllipsoid(pos as never, viewer.scene.globe.ellipsoid)
+    }
+
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas)
     drawHandlerRef.current = handler
 
     handler.setInputAction((click: { position: unknown }) => {
-      const cartesian = viewer.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid)
+      const cartesian = pickPoint(click.position)
       if (!cartesian) return
       const carto = Cesium.Cartographic.fromCartesian(cartesian)
       const lng = Cesium.Math.toDegrees(carto.longitude)
@@ -264,7 +281,11 @@ export function CesiumCanvas() {
 
       const pointEntity = viewer.entities.add({
         position: cartesian,
-        point: { pixelSize: 8, color: Cesium.Color.fromCssColorString('#3B82F6') },
+        point: {
+          pixelSize: 8,
+          color: Cesium.Color.fromCssColorString('#3B82F6'),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
       })
       tempEntitiesRef.current.push(pointEntity)
 
@@ -281,10 +302,7 @@ export function CesiumCanvas() {
 
     handler.setInputAction((movement: { endPosition: unknown }) => {
       if (drawPointsRef.current.length === 0) return
-      const cartesian = viewer.camera.pickEllipsoid(
-        movement.endPosition,
-        viewer.scene.globe.ellipsoid,
-      )
+      const cartesian = pickPoint(movement.endPosition)
       if (!cartesian) return
       const carto = Cesium.Cartographic.fromCartesian(cartesian)
       const lng = Cesium.Math.toDegrees(carto.longitude)
@@ -382,6 +400,8 @@ export function CesiumCanvas() {
     if (viewerRef.current) viewerRef.current.canvas.style.cursor = ''
 
     if (bounds || polygon) {
+      // 绘制完成后不重新定位相机：抑制下一次订阅回调中的 flyTo
+      suppressNextFlyRef.current = true
       // 写入 selection store，会触发本组件 + Leaflet 重绘（lastRevRef 拦截避免循环）
       useSelectionStore.getState().setExternalSelection({ bounds, polygon })
     }
@@ -455,6 +475,93 @@ export function CesiumCanvas() {
     }
   }, [])
 
+  const loadTilesetFromUrl = useCallback(
+    async (tilesetUrl: string, opts?: { silent?: boolean }) => {
+      if (!cesiumRef.current || !viewerRef.current) {
+        if (!opts?.silent) toast.error('Cesium 尚未就绪')
+        return
+      }
+      const Cesium = cesiumRef.current
+      const viewer = viewerRef.current
+      try {
+        if (tilesetRef.current) {
+          viewer.scene.primitives.remove(tilesetRef.current)
+          tilesetRef.current = null
+        }
+        const tileset = await Cesium.Cesium3DTileset.fromUrl(tilesetUrl)
+        tilesetRef.current = viewer.scene.primitives.add(tileset)
+        tileset.maximumScreenSpaceError = sse
+        tileset.debugShowBoundingVolume = showBV
+        if (opacity < 100) {
+          tileset.style = new Cesium.Cesium3DTileStyle({
+            color: `color("white", ${opacity / 100})`,
+          })
+        }
+        viewer.zoomTo(tileset)
+        setHasTileset(true)
+        if (!opts?.silent) toast.success('3D Tiles 加载成功')
+      } catch (e) {
+        console.error('3D Tiles 加载失败', e)
+        if (!opts?.silent) toast.error('加载失败：' + (e instanceof Error ? e.message : String(e)))
+      }
+    },
+    [sse, opacity, showBV],
+  )
+
+  const loadTilesetFromIon = useCallback(
+    async (assetId: number, accessToken: string, opts?: { silent?: boolean }) => {
+      if (!cesiumRef.current || !viewerRef.current) {
+        if (!opts?.silent) toast.error('Cesium 尚未就绪')
+        return
+      }
+      const Cesium = cesiumRef.current
+      const viewer = viewerRef.current
+      try {
+        if (tilesetRef.current) {
+          viewer.scene.primitives.remove(tilesetRef.current)
+          tilesetRef.current = null
+        }
+        const resource = await Cesium.IonResource.fromAssetId(assetId, { accessToken })
+        const tileset = await Cesium.Cesium3DTileset.fromUrl(resource)
+        tilesetRef.current = viewer.scene.primitives.add(tileset)
+        tileset.maximumScreenSpaceError = sse
+        tileset.debugShowBoundingVolume = showBV
+        if (opacity < 100) {
+          tileset.style = new Cesium.Cesium3DTileStyle({
+            color: `color("white", ${opacity / 100})`,
+          })
+        }
+        viewer.zoomTo(tileset)
+        setHasTileset(true)
+        if (!opts?.silent) toast.success('Cesium Ion 模型加载成功')
+      } catch (e) {
+        console.error('Cesium Ion 加载失败', e)
+        if (!opts?.silent)
+          toast.error('Ion 加载失败：' + (e instanceof Error ? e.message : String(e)))
+      }
+    },
+    [sse, opacity, showBV],
+  )
+
+  // 监听全局预览请求（来自 tiles3d-page 解析成功后）
+  useEffect(() => {
+    if (!ready) return
+    function onPreview(ev: Event) {
+      const detail = (ev as CustomEvent).detail as
+        | { type: 'url'; url: string }
+        | { type: 'ion'; assetId: number; accessToken: string }
+        | undefined
+      if (!detail) return
+      if (detail.type === 'url') {
+        void loadTilesetFromUrl(detail.url)
+      } else if (detail.type === 'ion') {
+        void loadTilesetFromIon(detail.assetId, detail.accessToken)
+      }
+    }
+    window.addEventListener('gd:preview-tileset', onPreview)
+    return () => window.removeEventListener('gd:preview-tileset', onPreview)
+  }, [ready, loadTilesetFromUrl, loadTilesetFromIon])
+
   async function handlePreviewLocal() {
     if (!isTauriRuntime()) {
       toast.error('本地预览仅在桌面应用中可用')
@@ -479,27 +586,7 @@ export function CesiumCanvas() {
       const fileName = filePath.substring(dirIdx + 1)
       const baseUrl = await invokeCommand<string>('serve_local_tiles', { dirPath })
       const tilesetUrl = baseUrl + '/' + encodeURIComponent(fileName)
-
-      const Cesium = cesiumRef.current
-      const viewer = viewerRef.current
-
-      if (tilesetRef.current) {
-        viewer.scene.primitives.remove(tilesetRef.current)
-        tilesetRef.current = null
-      }
-      const tileset = await Cesium.Cesium3DTileset.fromUrl(tilesetUrl)
-      tilesetRef.current = viewer.scene.primitives.add(tileset)
-      // 应用当前面板配置
-      tileset.maximumScreenSpaceError = sse
-      tileset.debugShowBoundingVolume = showBV
-      if (opacity < 100) {
-        tileset.style = new Cesium.Cesium3DTileStyle({
-          color: `color("white", ${opacity / 100})`,
-        })
-      }
-      viewer.zoomTo(tileset)
-      setHasTileset(true)
-      toast.success('本地 3D Tiles 加载成功')
+      await loadTilesetFromUrl(tilesetUrl)
     } catch (e) {
       console.error('本地 3D Tiles 加载失败', e)
       toast.error('加载失败：' + (e instanceof Error ? e.message : String(e)))

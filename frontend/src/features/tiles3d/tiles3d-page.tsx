@@ -7,13 +7,14 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { isTauriRuntime } from '@/lib/tauri'
 import { PanelSection } from '@/components/layout/panel-section'
 import { StatCard, StatRow } from '@/components/layout/stat-card'
 import { RegionSelector } from '@/features/region/region-selector'
+import { useMultiFeatureSubmit } from '@/features/region/use-multi-feature-submit'
+import { DispatchModeRadio } from '@/features/region/dispatch-mode-radio'
 import { getSettings, saveSettings } from '@/features/settings/settings-api'
 import { useSelectionStore } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
@@ -30,6 +31,15 @@ import type {
 } from '@/types/api'
 
 type SourceMode = 'url' | 'ion'
+
+function sanitizeName(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 80) || 'feature'
+}
+
+function joinPath(dir: string, sub: string): string {
+  const sep = dir.includes('\\') ? '\\' : '/'
+  return dir.endsWith(sep) ? `${dir}${sub}` : `${dir}${sep}${sub}`
+}
 
 function timestampNow() {
   return new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
@@ -64,7 +74,6 @@ export function Tiles3dPage() {
   const [referer, setReferer] = useState('')
   const [assetId, setAssetId] = useState<string>('')
   const [ionToken, setIonToken] = useState('')
-  const [concurrency, setConcurrency] = useState(50)
   const [summary, setSummary] = useState<TilesetSummary | null>(null)
   const [estimate, setEstimate] = useState<Tiles3dEstimate | null>(null)
 
@@ -73,6 +82,8 @@ export function Tiles3dPage() {
     queryFn: getSettings,
     enabled: inTauri,
   })
+
+  const concurrency = settingsQuery.data?.default_concurrency ?? 50
 
   // 初始化 Ion token 从 settings
   useEffect(() => {
@@ -133,6 +144,26 @@ export function Tiles3dPage() {
           console.warn('自动估算失败', e)
         }
       }
+      // 自动在 Cesium viewer 中预览
+      if (source) {
+        if (source.type === 'cesium_ion') {
+          window.dispatchEvent(
+            new CustomEvent('gd:preview-tileset', {
+              detail: {
+                type: 'ion',
+                assetId: source.asset_id,
+                accessToken: source.access_token,
+              },
+            }),
+          )
+        } else if (source.type === 'url') {
+          window.dispatchEvent(
+            new CustomEvent('gd:preview-tileset', {
+              detail: { type: 'url', url: source.tileset_url },
+            }),
+          )
+        }
+      }
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
@@ -144,20 +175,23 @@ export function Tiles3dPage() {
 
   // 下载
   const downloadMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (args: { saveDir: string; nameOverride?: string }) => {
       if (!source) throw new Error('请填写完整的数据源信息')
-      const dir = await openDialog({
-        directory: true,
-        title: '选择 3D Tiles 保存目录',
-      })
-      if (!dir) throw new Error('__user_cancelled__')
       const coords = buildPolygonCoords()
-      const taskName = `3dtiles_${timestampNow()}`
+      const baseName = `3dtiles_${timestampNow()}`
+      const taskName = args.nameOverride
+        ? `${baseName}_${sanitizeName(args.nameOverride)}`
+        : baseName
+      // 始终在保存目录下追加唯一子目录，避免重名覆盖
+      const subDirName = args.nameOverride
+        ? `${sanitizeName(args.nameOverride)}_${timestampNow()}`
+        : `3dtiles_${timestampNow()}`
+      const savePath = joinPath(args.saveDir, subDirName)
       const result = await create3dTilesTask(
         {
           source,
           polygon: coords && coords.length >= 3 ? coords : null,
-          save_path: dir as string,
+          save_path: savePath,
           concurrency,
           proxy,
         },
@@ -178,6 +212,30 @@ export function Tiles3dPage() {
   })
 
   const hasSelection = bounds != null || (polygon != null && polygon.length > 0)
+
+  const dispatchCtx = useMultiFeatureSubmit()
+
+  const onDownloadClick = async () => {
+    if (!source) {
+      toast.error('请填写完整的数据源信息')
+      return
+    }
+    const dir = await openDialog({
+      directory: true,
+      title: '选择 3D Tiles 保存目录',
+    })
+    if (!dir) return
+    try {
+      await dispatchCtx.runSubmit(async (perFeatureName) => {
+        await downloadMutation.mutateAsync({
+          saveDir: dir as string,
+          nameOverride: perFeatureName,
+        })
+      })
+    } catch {
+      /* surfaced by mutation onError */
+    }
+  }
 
   // 自动估算：解析完成后，bounds / polygon 变化 400ms 后触发
   useEffect(() => {
@@ -201,9 +259,10 @@ export function Tiles3dPage() {
         icon={Box}
         title="3D Tiles 数据源"
         description="URL 或 Cesium Ion，自动估算选区瓦片"
+        dataTour="tiles3d-source-section"
       >
         <Tabs value={sourceMode} onValueChange={(v) => setSourceMode(v as SourceMode)}>
-          <TabsList className="grid h-8 w-full grid-cols-2">
+          <TabsList className="grid h-8 w-full grid-cols-2" data-tour="tiles3d-source-tabs">
             <TabsTrigger value="url" className="text-xs">
               <Globe className="mr-1 size-3.5" />
               URL
@@ -260,18 +319,15 @@ export function Tiles3dPage() {
           </TabsContent>
         </Tabs>
 
-        <div className="space-y-1.5">
-          <Label className="text-xs">下载并发：{concurrency}</Label>
-          <Slider
-            min={1}
-            max={100}
-            step={1}
-            value={[concurrency]}
-            onValueChange={(v) => setConcurrency(v[0] ?? concurrency)}
+        {dispatchCtx.showModeSelector && (
+          <DispatchModeRadio
+            count={dispatchCtx.features?.length ?? 0}
+            mode={dispatchCtx.mode}
+            onChange={dispatchCtx.setMode}
           />
-        </div>
+        )}
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2" data-tour="tiles3d-actions">
           <Button
             type="button"
             size="sm"
@@ -289,7 +345,7 @@ export function Tiles3dPage() {
           <Button
             type="button"
             size="sm"
-            onClick={() => downloadMutation.mutate()}
+            onClick={onDownloadClick}
             disabled={downloadMutation.isPending || !summary}
           >
             {downloadMutation.isPending ? (
@@ -330,7 +386,7 @@ export function Tiles3dPage() {
         )}
 
         <p className="text-[11px] text-muted-foreground">
-          提示：3D Tiles 预览（Cesium）尚未在新版界面提供，下载后可在文件管理器中打开 tileset.json 用其它查看器加载。
+          提示：下载完成后可点击右侧地图工具栏的「预览本地」按钮，选择 tileset.json 直接在 Cesium 中加载查看。
         </p>
       </PanelSection>
     </div>
