@@ -145,6 +145,7 @@ export function SettingsPanel() {
     onSuccess: (_d, values) => {
       toast.success('设置已保存')
       queryClient.invalidateQueries({ queryKey: ['settings'] })
+      queryClient.invalidateQueries({ queryKey: ['tile-cache-stats'] })
       reset(values)
     },
     onError: (err: unknown) => {

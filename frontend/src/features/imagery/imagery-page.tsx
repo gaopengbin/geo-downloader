@@ -29,6 +29,7 @@ import {
 import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { isMvtUrl } from '@/features/mvt/is-mvt-url'
 import { useSelectionStore, type MapBounds } from '@/store/selection-store'
 import { useMultiFeatureSubmit } from '@/features/region/use-multi-feature-submit'
 import { DispatchModeRadio } from '@/features/region/dispatch-mode-radio'
@@ -45,6 +46,12 @@ const FORMAT_OPTIONS = [
   { value: 'tiles', label: '原始瓦片目录' },
   { value: 'mbtiles', label: 'MBTiles (.mbtiles)' },
   { value: 'gpkg', label: 'GeoPackage (.gpkg)' },
+] as const
+
+const MVT_FORMAT_OPTIONS = [
+  { value: 'pbf', label: 'PBF 瓦片目录 ({z}/{x}/{y}.pbf)' },
+  { value: 'mbtiles', label: 'MBTiles (.mbtiles，format=pbf)' },
+  { value: 'gpkg', label: 'GeoPackage (.gpkg，format=pbf)' },
 ] as const
 
 function zoomLevelLabel(z: number): string {
@@ -82,7 +89,7 @@ function estimateAreaKm2(b: MapBounds): number {
 const downloadSchema = z.object({
   source: z.string().min(1, '请选择图源'),
   zoom_levels: z.array(z.number().int().min(1).max(22)).min(1, '请至少勾选一个缩放级别'),
-  format: z.enum(['geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg']),
+  format: z.enum(['geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf']),
   compression: z.enum(['none', 'lzw', 'deflate']),
   build_pyramid: z.boolean(),
   concurrency: z.number().int().min(1).max(100),
@@ -116,6 +123,7 @@ const FORMAT_EXT: Record<DownloadFormValues['format'], string> = {
   tiles: '',
   mbtiles: 'mbtiles',
   gpkg: 'gpkg',
+  pbf: '',
 }
 
 // 在文件名扩展名前、或者目录名末尾追加时间戳防重名覆盖
@@ -127,7 +135,7 @@ function tsStamp(d: Date = new Date()): string {
 function appendTimestamp(path: string, format: DownloadFormValues['format']): string {
   if (!path) return path
   const ts = tsStamp()
-  if (format === 'tiles') {
+  if (format === 'tiles' || format === 'pbf') {
     const sep = path.includes('\\') ? '\\' : '/'
     const trimmed = path.endsWith(sep) ? path.slice(0, -1) : path
     return `${trimmed}_${ts}`
@@ -154,7 +162,7 @@ function resolveSavePath(
 ): string {
   const trimmed = (input ?? '').trim()
   if (!trimmed) return trimmed
-  if (format === 'tiles') return trimmed
+  if (format === 'tiles' || format === 'pbf') return trimmed
   const ext = FORMAT_EXT[format] || 'tif'
   const lower = trimmed.toLowerCase()
   // 已含期望扩展名 → 视为文件
@@ -260,8 +268,9 @@ function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
   )
 }
 
-export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } = {}) {
+export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | 'mvt' } = {}) {
   const isDemMode = mode === 'dem'
+  const isMvtMode = mode === 'mvt'
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
   const tiandituToken = settingsQuery.data?.tianditu_token ?? null
   const sourcesQuery = useQuery({
@@ -272,9 +281,14 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
   const sourceList = useMemo(() => {
     const all = Object.entries(sourcesQuery.data ?? {})
       .map(([k, v]) => ({ key: k, ...v }))
-      .filter((s) => isDemSource((s.id as string) ?? s.key) === isDemMode)
+      .filter((s) => {
+        const id = (s.id as string) ?? s.key
+        if (isMvtMode) return isMvtUrl((s as { url?: string }).url)
+        if (isDemMode) return isDemSource(id)
+        return !isDemSource(id) && !isMvtUrl((s as { url?: string }).url)
+      })
     return all.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }, [sourcesQuery.data, isDemMode])
+  }, [sourcesQuery.data, isDemMode, isMvtMode])
 
   const form = useForm<DownloadFormValues>({
     resolver: zodResolver(downloadSchema),
@@ -311,6 +325,8 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
         sourceList[0]?.id ??
         sourceList[0]?.key ??
         ''
+    } else if (isMvtMode) {
+      firstSourceId = sourceList[0]?.id ?? sourceList[0]?.key ?? ''
     } else {
       firstSourceId =
         (s.default_source && sourcesQuery.data[s.default_source] && !isDemSource(s.default_source)
@@ -326,6 +342,9 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
     // 不再还原上次保存路径——每次默认为空，避免意外覆盖之前的下载。
     if (isDemMode) {
       setValue('format', 'geotiff')
+    } else if (isMvtMode) {
+      setValue('format', 'pbf')
+      setValue('zoom_levels', [10, 11, 12, 13, 14])
     } else {
       const fmt = (s.default_format ?? 'geotiff') as OutputFormat
       if (['geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg'].includes(fmt as string)) {
@@ -350,7 +369,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
   const [cropToShape, setCropToShape] = useState(true)
   const qc = useQueryClient()
   const dispatchCtx = useMultiFeatureSubmit()
-  const supportsSelectionCrop = format === 'geotiff' || format === 'png'
+  const supportsSelectionCrop = (format === 'geotiff' || format === 'png') && !isMvtMode
   const effectiveCropToShape = cropToShape && supportsSelectionCrop
 
   const submitMutation = useMutation({
@@ -449,11 +468,12 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
         const ext = FORMAT_EXT[v.format] || 'tif'
         const dir = (v.save_path ?? '').trim()
         let saveOverride = dir
-        if (dir && v.format !== 'tiles') {
+        const isFolderOut = v.format === 'tiles' || v.format === 'pbf'
+        if (dir && !isFolderOut) {
           const sep = dir.includes('\\') ? '\\' : '/'
           const fname = `${safe}.${ext}`
           saveOverride = dir.endsWith(sep) ? `${dir}${fname}` : `${dir}${sep}${fname}`
-        } else if (dir && v.format === 'tiles') {
+        } else if (dir && isFolderOut) {
           const sep = dir.includes('\\') ? '\\' : '/'
           saveOverride = dir.endsWith(sep) ? `${dir}${safe}` : `${dir}${sep}${safe}`
         }
@@ -519,7 +539,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
   const sourceMetaName =
     sourceList.find((s) => s.key === source)?.name ?? source
   useEffect(() => {
-    if (isDemMode) return
+    if (isDemMode || isMvtMode) return
     useImageryParamsStore.getState().set({
       source,
       sourceName: sourceMetaName,
@@ -533,6 +553,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
     })
   }, [
     isDemMode,
+    isMvtMode,
     source,
     sourceMetaName,
     zoom,
@@ -612,6 +633,12 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
           </Select>
           {errors.source && <p className="text-xs text-destructive">{errors.source.message}</p>}
         </div>
+
+        {isMvtMode && (
+          <p className="text-xs text-muted-foreground">
+            MVT 数据已直接渲染到上方主地图（每个矢量图层随机配色）。仍可框选 bbox 进行下载。
+          </p>
+        )}
 
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
@@ -737,7 +764,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {FORMAT_OPTIONS.map((opt) => (
+              {(isMvtMode ? MVT_FORMAT_OPTIONS : FORMAT_OPTIONS).map((opt) => (
                 <SelectItem key={opt.value} value={opt.value} disabled={isDemMode && opt.value !== 'geotiff'}>
                   {opt.label}
                 </SelectItem>
@@ -746,6 +773,9 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' } =
           </Select>
           {isDemMode && (
             <p className="text-xs text-muted-foreground">DEM 仅支持 GeoTIFF Float32 单波段输出</p>
+          )}
+          {isMvtMode && (
+            <p className="text-xs text-muted-foreground">矢量瓦片不拼接/不重编码，PBF 原始字节原样保存</p>
           )}
         </div>
 

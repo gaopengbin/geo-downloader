@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   clearCache,
   getCacheStats,
+  setCacheDir,
   type TileCacheStats,
 } from './tile-cache-api'
 
@@ -76,6 +77,15 @@ export function TileCacheSection({
     const picked = await openDialog({ directory: true, multiple: false })
     if (typeof picked === 'string' && picked.trim()) {
       onDirChange(picked)
+      try {
+        const applied = await setCacheDir(picked)
+        toast.success(`缓存目录已切换并保存: ${applied}`)
+        queryClient.invalidateQueries({ queryKey: ['tile-cache-stats'] })
+        queryClient.invalidateQueries({ queryKey: ['settings'] })
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        toast.error(`切换失败：${msg}`)
+      }
     }
   }
 
@@ -145,7 +155,18 @@ export function TileCacheSection({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => onDirChange('')}
+              onClick={async () => {
+                onDirChange('')
+                try {
+                  const applied = await setCacheDir(null)
+                  toast.success(`已恢复默认缓存目录：${applied}`)
+                  queryClient.invalidateQueries({ queryKey: ['tile-cache-stats'] })
+                  queryClient.invalidateQueries({ queryKey: ['settings'] })
+                } catch (e) {
+                  const msg = e instanceof Error ? e.message : String(e)
+                  toast.error(`重置失败：${msg}`)
+                }
+              }}
               title="重置为默认目录"
             >
               重置

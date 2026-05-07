@@ -42,7 +42,14 @@ fn detect_format(bytes: &[u8]) -> &'static str {
         "png"
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         "webp"
+    } else if bytes.len() >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B {
+        // gzip 头部：MVT 瓦片返回时通常带 Content-Encoding: gzip，
+        // 但 reqwest 在启用 gzip feature 后会自动解压；
+        // 如果未解压则这里会看到 1F 8B。视为 pbf。
+        "pbf"
     } else {
+        // 默认 fallback：MVT 原始 protobuf 没有固定 magic，
+        // 调用方应该使用 detect_tile_format_with_hint 传入外部提示。
         "png"
     }
 }
@@ -356,6 +363,54 @@ pub fn detect_tile_format(tile_files: &HashMap<(u32, u32), PathBuf>) -> String {
         }
     }
     "png".to_string()
+}
+
+/// 推断瓦片格式，允许调用方传入外部提示（如从 ExportFormat / URL 扩展名）。
+/// 提示高于魔数推断（默认 fallback 仅返回 "png"，对 MVT/PBF 会误判）。
+pub fn detect_tile_format_with_hint(
+    tile_files: &HashMap<(u32, u32), PathBuf>,
+    hint: Option<&str>,
+) -> String {
+    if let Some(h) = hint {
+        let h = h.to_lowercase();
+        if matches!(h.as_str(), "pbf" | "mvt" | "png" | "jpg" | "jpeg" | "webp") {
+            // 规范化
+            return match h.as_str() {
+                "jpeg" => "jpg".to_string(),
+                "mvt" => "pbf".to_string(),
+                _ => h,
+            };
+        }
+    }
+    detect_tile_format(tile_files)
+}
+
+/// 不拼接、不重编码，直接把下载下来的瓦片文件拷贝到 {save_dir}/{z}/{x}/{y}.<ext>。
+/// 返回本次写入的总字节数。适用于原始瓦片目录 / MVT PBF 输出。
+pub fn write_raw_tiles_folder(
+    save_dir: &Path,
+    z: u8,
+    tile_files: &HashMap<(u32, u32), PathBuf>,
+    extension: &str, // 不带点，如 "pbf" / "png" / "jpg"
+) -> Result<u64, String> {
+    let ext = extension.trim_start_matches('.');
+    let z_dir = save_dir.join(z.to_string());
+    std::fs::create_dir_all(&z_dir).map_err(|e| format!("创建目录失败 {}: {}", z_dir.display(), e))?;
+    let mut total: u64 = 0;
+    for ((x, y), path) in tile_files.iter() {
+        let x_dir = z_dir.join(x.to_string());
+        std::fs::create_dir_all(&x_dir).map_err(|e| format!("创建目录失败 {}: {}", x_dir.display(), e))?;
+        let dst = if ext.is_empty() {
+            x_dir.join(y.to_string())
+        } else {
+            x_dir.join(format!("{}.{}", y, ext))
+        };
+        match std::fs::copy(path, &dst) {
+            Ok(n) => total = total.saturating_add(n),
+            Err(e) => return Err(format!("拷贝瓦片失败 {} -> {}: {}", path.display(), dst.display(), e)),
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]

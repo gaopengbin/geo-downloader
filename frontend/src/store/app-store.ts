@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type AppMode = 'imagery' | 'dem' | 'wayback' | 'tiles3d' | 'vector'
+export type AppMode = 'imagery' | 'dem' | 'wayback' | 'tiles3d' | 'vector' | 'mvt'
 export type SidebarTab = 'download' | 'history' | 'settings'
 
 export interface AppState {

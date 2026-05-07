@@ -633,11 +633,57 @@ async fn execute_zoom_level(
     let is_geotiff = format == ExportFormat::GeoTiff || is_dem;
     let is_png = format == ExportFormat::Png;
     let is_pack = format == ExportFormat::Mbtiles || format == ExportFormat::Gpkg;
+    let is_raw_tiles = matches!(format, ExportFormat::Tiles | ExportFormat::Pbf);
     let use_streaming = is_geotiff || is_png;
+    let format_hint: Option<&str> = match format {
+        ExportFormat::Pbf => Some("pbf"),
+        ExportFormat::Png => Some("png"),
+        ExportFormat::Jpeg => Some("jpg"),
+        _ => None,
+    };
 
     let file_size;
 
-    if is_pack {
+    if is_raw_tiles {
+        // ===== 原始瓦片目录（{z}/{x}/{y}.<ext>），不拼接不重编码 =====
+        let ext = if format == ExportFormat::Pbf {
+            "pbf"
+        } else {
+            // 原始瓦片：依据魔数推断
+            // 由于 tile_files 所以作为 Cow 换 String 使用
+            let detected = crate::tile_pack::detect_tile_format(&tile_files);
+            // 静态转换为 &'static str 以适配接口
+            match detected.as_str() {
+                "jpg" => "jpg",
+                "png" => "png",
+                "webp" => "webp",
+                "pbf" => "pbf",
+                _ => "bin",
+            }
+        };
+        let label = if format == ExportFormat::Pbf { "PBF 矢量瓦片目录" } else { "原始瓦片目录" };
+        task_log(app, tm, task_id, "INFO", &format!(
+            "使用{}输出（{} 张，扩展名 .{}）", label, actual_count, ext
+        ));
+        let p_export = map_progress(88.0);
+        tm.update_progress(task_id, TaskStatus::Exporting, p_export, completed_after_download, failed_after_download, Some(format!("写出{}...", label)));
+        let _ = app.emit(&event_name, TaskProgressPayload {
+            task_id: task_id.to_string(),
+            status: "exporting".to_string(),
+            progress: p_export,
+            completed: completed_after_download,
+            total: total_tiles,
+            message: Some(format!("写出{}...", label)),
+        });
+        let sp = save_path.clone();
+        let cz = current_zoom;
+        let tile_files_clone = tile_files.clone();
+        file_size = tokio::task::spawn_blocking(move || -> Result<u64, String> {
+            let dir = std::path::Path::new(&sp);
+            std::fs::create_dir_all(dir).map_err(|e| format!("创建输出目录失败 {}: {}", dir.display(), e))?;
+            crate::tile_pack::write_raw_tiles_folder(dir, cz, &tile_files_clone, ext)
+        }).await.map_err(|e| format!("原始瓦片写盘失败: {}", e))??;
+    } else if is_pack {
         // ===== MBTiles / GPKG 直接打包瓦片（不拼接、不重投影）=====
         let format_label = if format == ExportFormat::Mbtiles { "MBTiles" } else { "GPKG" };
         task_log(app, tm, task_id, "INFO", &format!(
@@ -667,7 +713,7 @@ async fn execute_zoom_level(
         file_size = tokio::task::spawn_blocking(move || -> Result<u64, String> {
             let path = std::path::Path::new(&sp);
             let needs_init = !path.exists();
-            let tile_format = crate::tile_pack::detect_tile_format(&tile_files_clone);
+            let tile_format = crate::tile_pack::detect_tile_format_with_hint(&tile_files_clone, format_hint);
             let meta = if needs_init {
                 Some(crate::tile_pack::PackMetadata {
                     name: source_name,
@@ -1029,7 +1075,11 @@ async fn execute_download_task(
         };
         // MBTiles/GPKG 多 zoom 写入同一个文件，不需要为每个 zoom 单独建文件
         let req_format = ExportFormat::from_str(&request.format);
-        let pack_single_file = matches!(req_format, ExportFormat::Mbtiles | ExportFormat::Gpkg);
+        // 单文件输出（mbtiles/gpkg）和原始瓦片目录（tiles/pbf）都共用一个 save_path，不按 zoom 切分
+        let pack_single_file = matches!(
+            req_format,
+            ExportFormat::Mbtiles | ExportFormat::Gpkg | ExportFormat::Tiles | ExportFormat::Pbf
+        );
         let level_save_path = if pack_single_file {
             save_path.clone()
         } else {
@@ -1534,17 +1584,34 @@ pub async fn build_pyramid_for_file(
 }
 
 /// 打开文件所在目录
+///
+/// 多 zoom 下载（GeoTIFF/PNG/JPEG）时，历史记录里的 `file_path` 只是原始基准路径，
+/// 真实文件分布在 `z<N>/` 子目录，因此原路径并不存在。这里逐级向上回退到第一个
+/// 实际存在的目录，保证「打开文件夹」按钮始终能定位到下载产物所在目录。
 #[tauri::command]
 pub fn open_file_location(file_path: String) -> Result<(), String> {
     let path = Path::new(&file_path);
-    
-    // 获取父目录
-    let dir = if path.is_file() {
-        path.parent().unwrap_or(path)
+
+    let dir: std::path::PathBuf = if path.is_dir() {
+        path.to_path_buf()
+    } else if path.is_file() {
+        path.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| path.to_path_buf())
     } else {
-        path
+        // 路径不存在：向上回退寻找最近的现有目录
+        let mut cur = path.parent();
+        let mut found: Option<std::path::PathBuf> = None;
+        while let Some(p) = cur {
+            if p.exists() && p.is_dir() {
+                found = Some(p.to_path_buf());
+                break;
+            }
+            cur = p.parent();
+        }
+        found.unwrap_or_else(|| std::path::PathBuf::from("."))
     };
-    
+
     open::that(dir)
         .map_err(|e| format!("打开文件夹失败: {}", e))
 }
@@ -2552,6 +2619,9 @@ pub struct WaybackIncrementalRequest {
     pub zoom: u8,
     #[serde(default)]
     pub zoom_max: Option<u8>,
+    /// 任意级别多选（Wayback 前端 chip 多选）；非空时优先于 zoom..=zoom_max
+    #[serde(default)]
+    pub zoom_levels: Option<Vec<u8>>,
     pub format: String,
     pub save_path: String,
     pub footprints: Vec<WaybackFootprintSelect>,
@@ -2617,7 +2687,7 @@ pub async fn download_wayback_incremental(
             bounds: req.bounds.clone(),
             zoom: req.zoom,
             zoom_max: req.zoom_max,
-            zoom_levels: None,
+            zoom_levels: req.zoom_levels.clone(),
             source: format!("wayback_{}", fp.release_id),
             format: req.format.clone(),
             proxy: req.proxy.clone(),
@@ -2786,13 +2856,21 @@ pub async fn cache_set_max_size_mb(mb: u64) -> Result<u64, String> {
 
 #[tauri::command]
 pub async fn cache_set_dir(dir: Option<String>) -> Result<String, String> {
-    let path = match dir {
-        Some(s) if !s.trim().is_empty() => std::path::PathBuf::from(s),
+    let path = match &dir {
+        Some(s) if !s.trim().is_empty() => std::path::PathBuf::from(s.trim()),
         _ => tile_cache::CacheConfig::default_root(),
     };
     std::fs::create_dir_all(&path)
         .map_err(|e| format!("创建缓存目录失败: {}", e))?;
     tile_cache::set_root_dir(path.clone());
+    // 同时持久化到 settings.json，避免用户需要额外点击「保存」才生效
+    let manager = SettingsManager::new()?;
+    let mut s = manager.get()?;
+    s.tile_cache_dir = match &dir {
+        Some(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+        _ => None,
+    };
+    manager.save(&s)?;
     Ok(path.to_string_lossy().to_string())
 }
 

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet-draw'
+import '@maplibre/maplibre-gl-leaflet'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import { useQuery } from '@tanstack/react-query'
 
 import 'leaflet/dist/leaflet.css'
@@ -23,6 +25,8 @@ import {
 } from '@/features/wayback/wayback-api'
 import type { TileSource } from '@/types/api'
 import { createCachedTileLayer } from '@/features/map/cached-tile-layer'
+import { isMvtUrl } from '@/features/mvt/is-mvt-url'
+import { discoverLayers as discoverMvtLayers, buildStyle as buildMvtStyle } from '@/features/mvt/mvt-style'
 
 // 修复 Leaflet 默认图标路径
 const iconRetinaUrl = new URL(
@@ -107,6 +111,9 @@ export function MapCanvas() {
   // 图层管理
   const baseLayersRef = useRef<Map<string, L.TileLayer>>(new Map())
   const waybackLayersRef = useRef<Map<string, L.TileLayer>>(new Map())
+  // MVT 专用：MapLibre GL 作为 Leaflet 图层涪加（@maplibre/maplibre-gl-leaflet）
+  const mvtLayerRef = useRef<L.Layer | null>(null)
+  const mvtKeyRef = useRef<string | null>(null)
   const currentBaseLayerKeyRef = useRef<string | null>(null)
   const layerControlRef = useRef<L.Control.Layers | null>(null)
   const customControlRef = useRef<L.Control | null>(null)
@@ -373,6 +380,8 @@ export function MapCanvas() {
         attribution?: string
       }
       if (!c.url) continue
+      // 跳过 MVT 矢量瓦片源：Leaflet 选区底图只能渲染光栅，请求 PBF 浪费带宽且会报 404
+      if (isMvtUrl(c.url)) continue
       try {
         const layer = createCachedTileLayer(c.url, {
           sourceKey: key,
@@ -704,16 +713,10 @@ export function MapCanvas() {
   useEffect(() => {
     const map = mapRef.current
     if (!map || !desiredBaseKey) return
-    let target: L.TileLayer | undefined
-    if (desiredBaseKey.startsWith('wb:')) {
-      target = waybackLayersRef.current.get(desiredBaseKey.slice(3))
-    } else if (desiredBaseKey.startsWith('src:')) {
-      target = baseLayersRef.current.get(desiredBaseKey.slice(4))
-    }
-    if (!target) return
-    if (currentBaseLayerKeyRef.current === desiredBaseKey) return
-    const prevKey = currentBaseLayerKeyRef.current
-    if (prevKey) {
+
+    const removePrevRaster = () => {
+      const prevKey = currentBaseLayerKeyRef.current
+      if (!prevKey) return
       let prev: L.TileLayer | undefined
       if (prevKey.startsWith('wb:')) {
         prev = waybackLayersRef.current.get(prevKey.slice(3))
@@ -724,6 +727,66 @@ export function MapCanvas() {
       }
       if (prev && map.hasLayer(prev)) map.removeLayer(prev)
     }
+
+    const removeMvtLayer = () => {
+      if (mvtLayerRef.current && map.hasLayer(mvtLayerRef.current)) {
+        map.removeLayer(mvtLayerRef.current)
+      }
+      mvtLayerRef.current = null
+      mvtKeyRef.current = null
+    }
+
+    // MVT 分支：根据 src:<key> 找到 MVT URL 后通过 maplibreGL 图层挂载
+    if (desiredBaseKey.startsWith('src:') && sourcesQuery.data) {
+      const key = desiredBaseKey.slice(4)
+      const cfg = sourcesQuery.data[key] as
+        | { url?: string; max_zoom?: number; name?: string }
+        | undefined
+      if (cfg?.url && isMvtUrl(cfg.url)) {
+        if (mvtKeyRef.current === desiredBaseKey) return
+        let cancelled = false
+        const center = map.getCenter()
+        discoverMvtLayers(cfg.url, center.lng, center.lat)
+          .then((result) => {
+            if (cancelled) return
+            const effectiveUrl = result.canonicalTileUrl ?? cfg.url!
+            const style = buildMvtStyle({
+              urlTemplate: effectiveUrl,
+              layers: result.layers,
+              maxZoom: cfg.max_zoom ?? 14,
+              includeBaseRaster: false,
+            })
+            removePrevRaster()
+            removeMvtLayer()
+            const layer = L.maplibreGL({
+              style,
+              attributionControl: false,
+            })
+            layer.addTo(map)
+            mvtLayerRef.current = layer
+            mvtKeyRef.current = desiredBaseKey
+            currentBaseLayerKeyRef.current = desiredBaseKey
+          })
+          .catch((err) => {
+            console.warn('[map-canvas] MVT layer build failed:', err)
+          })
+        return () => {
+          cancelled = true
+        }
+      }
+    }
+
+    // 非 MVT 分支：使用 Leaflet 栅格图层；若之前是 MVT，先清理
+    removeMvtLayer()
+    let target: L.TileLayer | undefined
+    if (desiredBaseKey.startsWith('wb:')) {
+      target = waybackLayersRef.current.get(desiredBaseKey.slice(3))
+    } else if (desiredBaseKey.startsWith('src:')) {
+      target = baseLayersRef.current.get(desiredBaseKey.slice(4))
+    }
+    if (!target) return
+    if (currentBaseLayerKeyRef.current === desiredBaseKey) return
+    removePrevRaster()
     target.addTo(map)
     target.bringToBack?.()
     currentBaseLayerKeyRef.current = desiredBaseKey

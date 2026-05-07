@@ -15,7 +15,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { Slider } from '@/components/ui/slider'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { isTauriRuntime } from '@/lib/tauri'
@@ -55,15 +54,31 @@ const FORMAT_OPTIONS = [
   { value: 'geotiff', label: 'GeoTIFF (.tif)' },
   { value: 'png', label: 'PNG (.png)' },
   { value: 'jpeg', label: 'JPEG (.jpg)' },
+  { value: 'mbtiles', label: 'MBTiles (.mbtiles)' },
+  { value: 'gpkg', label: 'GeoPackage (.gpkg)' },
 ]
 
 function extOf(format: string) {
-  return format === 'geotiff' ? 'tif' : format === 'png' ? 'png' : 'jpg'
+  switch (format) {
+    case 'geotiff':
+      return 'tif'
+    case 'png':
+      return 'png'
+    case 'mbtiles':
+      return 'mbtiles'
+    case 'gpkg':
+      return 'gpkg'
+    default:
+      return 'jpg'
+  }
 }
 
-function formatZoomLabel(zoom: number, zoomMax: number | null) {
-  if (zoomMax && zoomMax > zoom) return `z${zoom}-${zoomMax}`
-  return `z${zoom}`
+function formatZoomLabel(levels: number[]) {
+  if (levels.length === 0) return 'z?'
+  if (levels.length === 1) return `z${levels[0]}`
+  const isContig = levels.every((z, i) => i === 0 || z === levels[i - 1] + 1)
+  if (isContig) return `z${levels[0]}-${levels[levels.length - 1]}`
+  return `z${levels.join('-')}`
 }
 
 function timestampNow() {
@@ -94,8 +109,7 @@ export function WaybackPage() {
 
   const [wbMode, setWbMode] = useState<WbMode>('single')
   const [versionId, setVersionId] = useState<string>('')
-  const [zoom, setZoom] = useState<number>(13)
-  const [zoomMax, setZoomMax] = useState<number | ''>('')
+  const [zoomLevels, setZoomLevels] = useState<number[]>([13])
   const [format, setFormat] = useState<string>('geotiff')
   const [compression, setCompression] = useState<string>('lzw')
   const [cropToShape, setCropToShape] = useState<boolean>(true)
@@ -122,7 +136,8 @@ export function WaybackPage() {
   const [estimating, setEstimating] = useState(false)
   const [incSelected, setIncSelected] = useState<Set<string>>(new Set())
   const scanAbortRef = useRef(false)
-  const supportsSelectionCrop = format === 'geotiff' || format === 'png'
+  const supportsSelectionCrop =
+    format === 'geotiff' || format === 'png' || format === 'mbtiles' || format === 'gpkg'
   const effectiveCropToShape = cropToShape && supportsSelectionCrop
 
   const settingsQuery = useQuery({
@@ -183,8 +198,15 @@ export function WaybackPage() {
   )
 
   const selectedVersion = sortedVersions.find((v) => v.id === versionId) ?? null
-  const zMaxValue = typeof zoomMax === 'number' && zoomMax > zoom ? zoomMax : null
-  const zLabel = formatZoomLabel(zoom, zMaxValue)
+  const sortedLevels = useMemo(
+    () => [...new Set(zoomLevels)].sort((a, b) => a - b),
+    [zoomLevels],
+  )
+  const zoom = sortedLevels[0] ?? 13
+  const zMaxLevel = sortedLevels[sortedLevels.length - 1] ?? zoom
+  const zMaxValue = zMaxLevel > zoom ? zMaxLevel : null
+  const zLevelsForApi: number[] | null = sortedLevels.length > 0 ? sortedLevels : null
+  const zLabel = formatZoomLabel(sortedLevels.length > 0 ? sortedLevels : [zoom])
   const currentOutputPath =
     wbMode === 'single'
       ? singleSaveDir
@@ -230,7 +252,7 @@ export function WaybackPage() {
       return probeWaybackMaxZoom(versionId, lat, lng, proxy)
     },
     onSuccess: (z) => {
-      setZoom(z)
+      setZoomLevels([z])
       toast.success(`最大缩放 z${z}`)
     },
     onError: (err: unknown) => {
@@ -246,16 +268,15 @@ export function WaybackPage() {
       setEstimate(null)
       return
     }
-    const zMax = typeof zoomMax === 'number' && zoomMax > zoom ? zoomMax : null
     const t = window.setTimeout(() => {
       setEstimating(true)
-      estimateDownload(bounds, zoom, format, effectiveCropToShape, zMax)
+      estimateDownload(bounds, zoom, format, effectiveCropToShape, zMaxValue, zLevelsForApi)
         .then((res) => setEstimate(res))
         .catch(() => setEstimate(null))
         .finally(() => setEstimating(false))
     }, 400)
     return () => window.clearTimeout(t)
-  }, [wbMode, bounds, zoom, zoomMax, format, cropToShape, effectiveCropToShape])
+  }, [wbMode, bounds, zoom, zMaxValue, zLevelsForApi, format, cropToShape, effectiveCropToShape])
 
   // ========== 单个下载 ==========
   const singleMutation = useMutation({
@@ -287,6 +308,7 @@ export function WaybackPage() {
         bounds,
         zoom,
         zoom_max: zMaxValue,
+        zoom_levels: zLevelsForApi,
         source: 'esri_wayback',
         format,
         save_path: savePath,
@@ -341,6 +363,7 @@ export function WaybackPage() {
           bounds,
           zoom,
           zoom_max: zMaxValue,
+          zoom_levels: zLevelsForApi,
           source: 'esri_wayback',
           format,
           save_path: savePath,
@@ -508,6 +531,7 @@ export function WaybackPage() {
         bounds,
         zoom,
         zoom_max: zMaxValue,
+        zoom_levels: zLevelsForApi,
         format,
         save_path: savePathBase,
         footprints,
@@ -578,50 +602,108 @@ export function WaybackPage() {
           </Select>
         </div>
 
-        {/* 缩放 */}
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1.5">
-            <Label className="text-xs">缩放级别 z{zoom}</Label>
-            <div className="flex items-center gap-2">
-              <Slider
-                min={1}
-                max={22}
-                step={1}
-                value={[zoom]}
-                onValueChange={(v) => setZoom(v[0] ?? zoom)}
-                className="flex-1"
-              />
+        {/* 缩放级别（任意多选 chip） */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs">缩放级别（任意多选）</Label>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">
+                已选 {sortedLevels.length} 级
+                {sortedLevels.length > 0 ? ` · ${zLabel}` : ''}
+              </span>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-8 px-2 text-xs"
+                className="h-7 px-2 text-xs"
                 onClick={() => probeMutation.mutate()}
                 disabled={probeMutation.isPending}
+                title="探测当前选区可达的最大 zoom"
               >
                 {probeMutation.isPending ? (
                   <Loader2 className="size-3 animate-spin" />
                 ) : (
-                  <Search className="size-3" />
+                  <>
+                    <Search className="size-3" />
+                    <span className="ml-1">探测</span>
+                  </>
                 )}
               </Button>
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs">最大缩放（可选）</Label>
-            <Input
-              type="number"
-              min={zoom}
-              max={22}
-              value={zoomMax}
-              onChange={(e) => {
-                const v = e.target.value
-                setZoomMax(v === '' ? '' : Math.max(zoom, Math.min(22, Number(v))))
-              }}
-              placeholder="留空=单层"
-              className="h-8 text-xs"
-            />
+          <div className="grid grid-cols-11 gap-1">
+            {Array.from({ length: 22 }, (_, i) => i + 1).map((z) => {
+              const checked = sortedLevels.includes(z)
+              return (
+                <button
+                  key={z}
+                  type="button"
+                  onClick={() => {
+                    setZoomLevels((prev) => {
+                      const set = new Set(prev)
+                      if (set.has(z)) set.delete(z)
+                      else set.add(z)
+                      const next = Array.from(set).sort((a, b) => a - b)
+                      return next.length > 0 ? next : [z]
+                    })
+                  }}
+                  className={`h-7 rounded border text-xs transition ${
+                    checked
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-background text-foreground hover:bg-muted'
+                  }`}
+                  title={`z${z}`}
+                >
+                  {z}
+                </button>
+              )
+            })}
           </div>
+          <div className="flex flex-wrap gap-1 text-xs">
+            <button
+              type="button"
+              className="rounded border px-2 py-0.5 hover:bg-muted"
+              onClick={() => {
+                const arr: number[] = []
+                for (let z = 10; z <= 14; z++) arr.push(z)
+                setZoomLevels(arr)
+              }}
+            >
+              z10-14
+            </button>
+            <button
+              type="button"
+              className="rounded border px-2 py-0.5 hover:bg-muted"
+              onClick={() => {
+                const arr: number[] = []
+                for (let z = 14; z <= 18; z++) arr.push(z)
+                setZoomLevels(arr)
+              }}
+            >
+              z14-18
+            </button>
+            <button
+              type="button"
+              className="rounded border px-2 py-0.5 hover:bg-muted"
+              onClick={() => {
+                const arr: number[] = []
+                for (let z = 15; z <= 19; z++) arr.push(z)
+                setZoomLevels(arr)
+              }}
+            >
+              z15-19
+            </button>
+            <button
+              type="button"
+              className="rounded border px-2 py-0.5 hover:bg-muted text-muted-foreground"
+              onClick={() => setZoomLevels([13])}
+            >
+              重置(z13)
+            </button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            点击数字勾选/取消，可任意离散组合（如 z10、z15、z18 同时下载）。多级别会按 z&lt;N&gt; 子目录分级保存。
+          </p>
         </div>
 
         {/* 自动估算结果 */}

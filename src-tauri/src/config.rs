@@ -279,6 +279,35 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
         },
     );
 
+    // MVT 矢量瓦片：OpenFreeMap (Planet)，免 token / 免费 / 公开
+    // 注意：OpenFreeMap 要求版本化 URL；裸 /planet/{z}/{x}/{y}.pbf 返回 200 空体。
+    // 当版本过期时，重新访问 https://tiles.openfreemap.org/planet 取 tiles[0] 更新。
+    sources.insert(
+        "mvt_openfreemap".to_string(),
+        TileSource {
+            id: "mvt_openfreemap".to_string(),
+            name: "OpenFreeMap (MVT 全球)".to_string(),
+            url: "https://tiles.openfreemap.org/planet/20260429_001001_pt/{z}/{x}/{y}.pbf"
+                .to_string(),
+            subdomains: vec![],
+            max_zoom: 14,
+            attribution: "© OpenStreetMap / OpenMapTiles / OpenFreeMap".to_string(),
+        },
+    );
+
+    // MVT 矢量瓦片：VersaTiles OSM，免 token / 免费 / 公开
+    sources.insert(
+        "mvt_versatiles_osm".to_string(),
+        TileSource {
+            id: "mvt_versatiles_osm".to_string(),
+            name: "VersaTiles OSM (MVT 全球)".to_string(),
+            url: "https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}".to_string(),
+            subdomains: vec![],
+            max_zoom: 14,
+            attribution: "© OpenStreetMap / VersaTiles".to_string(),
+        },
+    );
+
     sources
 }
 

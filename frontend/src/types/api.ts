@@ -308,6 +308,8 @@ export interface WaybackIncrementalRequest {
   bounds: Bounds
   zoom: number
   zoom_max?: Nullable<number>
+  /** 任意级别多选；非空时优先 */
+  zoom_levels?: Nullable<number[]>
   format: OutputFormat
   save_path: string
   footprints: WaybackFootprintSelect[]

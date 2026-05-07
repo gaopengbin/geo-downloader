@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Boxes, CalendarClock, ClipboardList, History as HistoryIcon, Image as ImageIcon, ListChecks, Mountain, Settings, Shapes } from 'lucide-react'
+import { Boxes, CalendarClock, ClipboardList, History as HistoryIcon, Image as ImageIcon, Layers3, ListChecks, Mountain, Settings, Shapes } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
 import { AppShell } from '@/components/layout/app-shell'
@@ -66,10 +66,17 @@ const MODES: ModeMeta[] = [
     icon: Boxes,
   },
   {
+    value: 'mvt',
+    label: '矢量切片',
+    short: 'MVT',
+    description: 'MVT / PBF 矢量瓦片下载（需自定义图源，如 Maptiler / Mapbox）。',
+    icon: Layers3,
+  },
+  {
     value: 'vector',
-    label: '矢量瓦片',
-    short: '矢量',
-    description: '矢量瓦片 / Shapefile 批量下载。',
+    label: '矢量数据 (OSM)',
+    short: 'OSM',
+    description: 'OSM Overpass 道路 / 建筑 / POI 等要素数据下载（GeoJSON）。',
     icon: Shapes,
   },
 ]
@@ -264,6 +271,8 @@ function App() {
                 <Tiles3dPage />
               ) : mode === 'vector' ? (
                 <VectorPage />
+              ) : mode === 'mvt' ? (
+                <ImageryPage mode="mvt" />
               ) : (
                 <ModePlaceholder mode={currentMode} />
               )}
