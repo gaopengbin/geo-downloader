@@ -52,19 +52,89 @@ export function compareVersions(a: string, b: string): number {
   return 0
 }
 
-export function extractKeyUpdates(body?: string): string[] {
+export interface ReleaseNoteGroup {
+  section: string
+  items: string[]
+}
+
+/**
+ * 从 GitHub Release body（Markdown）中提取关键更新点，按 `## 小节` 分组。
+ *
+ * 解析规则：
+ * 1. 优先识别 `## 关键改进` 小节（如有），直接返回其内容作为单组结果。
+ * 2. 否则按 `## 小节标题` 分组，只取**顶级** bullet（行首无缩进 `- ` / `* `），
+ *    跳过子 bullet 避免噪音。
+ * 3. 每个 bullet 提取主题：
+ *    - 有 `**粗体**` 取粗体；
+ *    - 否则取 ` — ` / ` -- ` / ` - ` 破折号前部分；
+ *    - 否则取整行（去 markdown 标记）。
+ * 4. 字符上限 200，返回小节数 ≤ 6，每小节 items ≤ 6。
+ */
+export function extractKeyUpdates(body?: string): ReleaseNoteGroup[] {
   if (!body) return []
-  const updates: string[] = []
-  for (const line of body.split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
-      let content = trimmed.slice(1).trim()
-      const boldMatch = content.match(/\*\*(.+?)\*\*/)
-      if (boldMatch) content = boldMatch[1]
-      if (content.length > 0 && content.length < 60) updates.push(content)
+
+  const lines = body.split('\n')
+  const groups: ReleaseNoteGroup[] = []
+  let currentGroup: ReleaseNoteGroup | null = null
+
+  const stripMarkdown = (s: string): string =>
+    s
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // markdown 链接 [text](url) → text
+      .replace(/\*\*/g, '') // 去粗体标记
+      .replace(/`([^`]+)`/g, '$1') // 去代码反引号
+      .replace(/\s+/g, ' ') // 折叠多空格
+      .trim()
+
+  const extractTopic = (raw: string): string => {
+    // 优先：起始处的 **加粗主题**
+    const headBoldMatch = raw.match(/^\*\*(.+?)\*\*/)
+    if (headBoldMatch) return stripMarkdown(headBoldMatch[1])
+
+    // 其次：包含 ` — `（破折号）则取破折号前的主题
+    const dashMatch = raw.match(/^(.+?)\s+[—–-]{1,2}\s+/)
+    if (dashMatch) return stripMarkdown(dashMatch[1])
+
+    // 否则：整行（截断到 200）
+    const stripped = stripMarkdown(raw)
+    return stripped.length > 200 ? stripped.slice(0, 197) + '…' : stripped
+  }
+
+  for (const rawLine of lines) {
+    // 识别 `## 小节标题`
+    const headingMatch = rawLine.match(/^##\s+(.+?)\s*$/)
+    if (headingMatch) {
+      const title = headingMatch[1].trim()
+      // 跳过「已知问题 / Known issues / Notes」类附录
+      if (/^(已知|known|notes?|注意)/i.test(title)) {
+        currentGroup = null
+        continue
+      }
+      currentGroup = { section: title, items: [] }
+      groups.push(currentGroup)
+      continue
+    }
+
+    // 识别**顶级** bullet（行首必须是 `- ` 或 `* `，不允许前导空格 / Tab）
+    const topBulletMatch = rawLine.match(/^[-*]\s+(.+?)\s*$/)
+    if (!topBulletMatch) continue
+    if (!currentGroup) continue
+
+    const topic = extractTopic(topBulletMatch[1])
+    if (topic.length > 0 && currentGroup.items.length < 6) {
+      currentGroup.items.push(topic)
     }
   }
-  return updates.slice(0, 8)
+
+  // 「关键改进」/「亮点」/「Highlights」小节存在时只取它（避免重复）
+  const highlight = groups.find((g) =>
+    /^(关键改进|亮点|highlights?|tl;?dr)/i.test(g.section),
+  )
+  if (highlight && highlight.items.length > 0) {
+    return [highlight]
+  }
+
+  // 否则返回所有非空小节，限制 6 个小节
+  return groups.filter((g) => g.items.length > 0).slice(0, 6)
 }
 
 async function getCurrentVersion(): Promise<string> {
@@ -101,7 +171,7 @@ export async function checkForUpdates(silent: boolean) {
       store.showDialog({
         currentVersion,
         latestVersion,
-        notes: extractKeyUpdates(data.body),
+        noteGroups: extractKeyUpdates(data.body),
         downloadUrl: setupAsset?.browser_download_url ?? null,
         releaseUrl: data.html_url,
       })

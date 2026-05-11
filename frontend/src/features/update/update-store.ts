@@ -1,9 +1,11 @@
 import { create } from 'zustand'
 
+import type { ReleaseNoteGroup } from './update-api'
+
 export interface UpdateInfo {
   currentVersion: string
   latestVersion: string
-  notes: string[]
+  noteGroups: ReleaseNoteGroup[]
   downloadUrl: string | null
   releaseUrl: string
 }

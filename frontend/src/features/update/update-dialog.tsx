@@ -112,14 +112,18 @@ export function UpdateDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        {info.notes.length > 0 && (
-          <div className="rounded-md border bg-muted/30 p-3 text-sm">
-            <p className="mb-2 font-medium text-foreground">主要更新</p>
-            <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
-              {info.notes.map((note, idx) => (
-                <li key={idx}>{note}</li>
-              ))}
-            </ul>
+        {info.noteGroups.length > 0 && (
+          <div className="max-h-[40vh] overflow-y-auto rounded-md border bg-muted/30 p-3 text-sm">
+            {info.noteGroups.map((group, gIdx) => (
+              <div key={gIdx} className={gIdx > 0 ? 'mt-3' : ''}>
+                <p className="mb-1.5 font-medium text-foreground">{group.section}</p>
+                <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                  {group.items.map((item, iIdx) => (
+                    <li key={iIdx}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         )}
 
