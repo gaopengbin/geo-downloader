@@ -311,7 +311,7 @@ impl TileDownloader {
         // ===== 缓存命中批量预过滤（Issue #25）=====
         // 在并发循环之前，先用一条 SQL 批量识别已缓存的瓦片，单线程拉 bytes 写 temp_dir，
         // 避免每张瓦片占用一个并发槽位 + 一次 SQL prepare/query 的开销。
-        // 100% 命中场景下，1 万张瓦片应在秒级完成（原先需几分钟走完 buffer_unordered）。
+        // 实测：1258 张全命中预过滤总耗时 ~480ms（OS 缓存暖时），SQL 仅 3-5ms。
         let mut cache_hit_count = 0u32;
         if tcache::get_config().enabled && !need_download.is_empty() {
             let coords: Vec<CacheCoord> = need_download
