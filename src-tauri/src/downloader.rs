@@ -1,6 +1,7 @@
 //! 异步瓦片下载器模块
 
 use crate::config::{self, TileSource, USER_AGENTS};
+use crate::merger::TileSource as MergerTileSource;
 use crate::task::PauseControl;
 use crate::tile::TileCoord;
 use crate::tile_cache::{
@@ -9,7 +10,7 @@ use crate::tile_cache::{
 use image::RgbImage;
 use reqwest::Client;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -258,7 +259,7 @@ impl TileDownloader {
         cancel_token: Option<&CancellationToken>,
         pause_control: Option<&PauseControl>,
         mut progress_callback: F,
-    ) -> Result<HashMap<(u32, u32), PathBuf>, String>
+    ) -> Result<HashMap<(u32, u32), MergerTileSource>, String>
     where
         F: FnMut(DownloadProgress),
     {
@@ -266,7 +267,8 @@ impl TileDownloader {
         let total = tiles.len() as u32;
         let mut completed = 0u32;
         let mut failed = 0u32;
-        let mut tile_files: HashMap<(u32, u32), PathBuf> = HashMap::with_capacity(tiles.len());
+        let mut tile_files: HashMap<(u32, u32), MergerTileSource> =
+            HashMap::with_capacity(tiles.len());
         let temp_dir = temp_dir.to_path_buf();
 
         // 打乱瓦片顺序，避免限速时失败集中在同一列
@@ -278,7 +280,7 @@ impl TileDownloader {
         for tile in &tiles {
             let file_path = temp_dir.join(format!("{}_{}.png", tile.x, tile.y));
             if file_path.exists() && std::fs::metadata(&file_path).map_or(false, |m| m.len() > 0) {
-                tile_files.insert((tile.x, tile.y), file_path);
+                tile_files.insert((tile.x, tile.y), MergerTileSource::from_path(file_path));
                 completed += 1;
             } else {
                 need_download.push(tile.clone());
@@ -308,10 +310,14 @@ impl TileDownloader {
             let _ = tcache::Store::global().ensure_source(&cache_src, (*cache_info).clone());
         }
 
-        // ===== 缓存命中批量预过滤（Issue #25）=====
-        // 在并发循环之前，先用一条 SQL 批量识别已缓存的瓦片，单线程拉 bytes 写 temp_dir，
-        // 避免每张瓦片占用一个并发槽位 + 一次 SQL prepare/query 的开销。
-        // 实测：1258 张全命中预过滤总耗时 ~480ms（OS 缓存暖时），SQL 仅 3-5ms。
+        // ===== 缓存命中批量预过滤（Issue #25 + #26）=====
+        // 在并发循环之前，先用一条 SQL 批量识别已缓存的瓦片，单线程拉 bytes 直接装进
+        // `tile_files`（TileSource::Bytes），由 merger 零拷贝读取。
+        //
+        // - #25 起：用 `contains_batch` 一条 SQL 批量识别，避免每张瓦片占用并发槽位
+        //   + 一次 SQL prepare/query。实测：1258 张全命中 SQL 仅 3-5ms。
+        // - #26 起：跳过 `temp_dir` 写盘 + merger 再 read 的双重 IO，命中瓦片 bytes
+        //   直接装进 `MergerTileSource::Bytes`，由 `Arc<Vec<u8>>` 引用计数共享。
         let mut cache_hit_count = 0u32;
         if tcache::get_config().enabled && !need_download.is_empty() {
             let coords: Vec<CacheCoord> = need_download
@@ -330,17 +336,17 @@ impl TileDownloader {
                             })
                         });
 
-                    // 同步把命中的 bytes 拉出来落到 temp_dir，让 merger 走原读文件路径
+                    // #26：命中瓦片直接装进 tile_files（内存路径），跳过 temp_dir 写盘 IO
                     for tile in cached_tiles {
                         let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cache_src, coord) {
                             if !stored.bytes.is_empty() {
-                                let file_path = temp_dir.join(format!("{}_{}.png", tile.x, tile.y));
-                                if std::fs::write(&file_path, &stored.bytes).is_ok() {
-                                    tile_files.insert((tile.x, tile.y), file_path);
-                                    completed += 1;
-                                    cache_hit_count += 1;
-                                }
+                                tile_files.insert(
+                                    (tile.x, tile.y),
+                                    MergerTileSource::from_bytes(stored.bytes),
+                                );
+                                completed += 1;
+                                cache_hit_count += 1;
                             }
                         }
                     }
@@ -372,24 +378,27 @@ impl TileDownloader {
                 let file_path = td.join(format!("{}_{}.png", tile.x, tile.y));
                 let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
 
-                // 1) 优先查缓存
+                // 1) 优先查缓存（#26：直接返回 Bytes，不写 temp_dir）
+                //    主循环已有批量预过滤兜底，此分支只覆盖预过滤后短窗口内新写入的缓存
                 if tcache::get_config().enabled {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
                         if !stored.bytes.is_empty() {
-                            if tokio::fs::write(&file_path, &stored.bytes).await.is_ok() {
-                                return (tile, Ok(file_path));
-                            }
+                            return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
                         }
                     }
                 }
 
-                // 2) 网络下载
+                // 2) 网络下载（保留 Path 路径让 merger 顺序读盘，避免 buffer_unordered 全量驻留内存）
                 let result = Self::download_one_tile(&client, &url, &headers, &file_path, retry_times, Some(&rc)).await;
-                let final_result = result.and_then(|_| {
-                    if file_path.exists() { Ok(file_path.clone()) } else { Err("no_data".to_string()) }
+                let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
+                    if file_path.exists() {
+                        Ok(MergerTileSource::from_path(file_path.clone()))
+                    } else {
+                        Err("no_data".to_string())
+                    }
                 });
 
-                // 3) 写回缓存
+                // 3) 写回缓存（仅网络下载成功；Bytes 路径数据本就来自缓存，不再回写）
                 if final_result.is_ok() && tcache::get_config().enabled {
                     if let Ok(bytes) = tokio::fs::read(&file_path).await {
                         if !bytes.is_empty() && bytes.len() <= 4 * 1024 * 1024 {
@@ -525,20 +534,23 @@ impl TileDownloader {
                     let file_path = td.join(format!("{}_{}.png", tile.x, tile.y));
                     let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
 
+                    // 缓存命中直接返回 Bytes，跳过 temp_dir IO（#26）
                     if tcache::get_config().enabled {
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                            if !stored.bytes.is_empty()
-                                && tokio::fs::write(&file_path, &stored.bytes).await.is_ok()
-                            {
-                                return (tile, Ok(file_path));
+                            if !stored.bytes.is_empty() {
+                                return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
                             }
                         }
                     }
 
                     // 重试轮只给 1 次重试机会
                     let result = Self::download_one_tile(&client, &url, &headers, &file_path, 1, None).await;
-                    let final_result = result.and_then(|_| {
-                        if file_path.exists() { Ok(file_path.clone()) } else { Err("no_data".to_string()) }
+                    let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
+                        if file_path.exists() {
+                            Ok(MergerTileSource::from_path(file_path.clone()))
+                        } else {
+                            Err("no_data".to_string())
+                        }
                     });
 
                     if final_result.is_ok() && tcache::get_config().enabled {

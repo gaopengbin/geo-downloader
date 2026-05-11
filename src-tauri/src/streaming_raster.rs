@@ -4,18 +4,18 @@
 //! JPEG: 需全量画布，退化为 merger 路径 + 直写文件（见 exporter::export_image_to_file）
 
 use crate::config::TILE_SIZE;
-use crate::merger::{self, PolygonPoint};
+use crate::merger::{self, PolygonPoint, TileSource};
 use crate::tile::TileBounds;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 流式 PNG 导出：strip-by-strip 逐行写入
 /// 内存占用: 仅 width × TILE_SIZE × channels 字节（一行瓦片）
 /// 支持多边形裁剪：传入 polygons 后自动切换 RGBA 模式
 pub fn merge_and_export_streaming_png(
-    tile_files: &HashMap<(u32, u32), PathBuf>,
+    tile_files: &HashMap<(u32, u32), TileSource>,
     x_min: u32,
     y_min: u32,
     x_max: u32,
@@ -88,8 +88,8 @@ pub fn merge_and_export_streaming_png(
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
         let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs.par_iter()
             .map(|&tile_x| {
-                let file_path = tile_files.get(&(tile_x, tile_y))?;
-                let bytes = std::fs::read(file_path).ok()?;
+                let source = tile_files.get(&(tile_x, tile_y))?;
+                let bytes = source.bytes().ok()?;
                 let img = image::load_from_memory(&bytes).ok()?;
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
                 Some((px, img.to_rgb8()))

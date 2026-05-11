@@ -8,8 +8,9 @@
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::merger::TileSource;
 use crate::tile::TileBounds;
 use crate::tile_cache::xyz_to_tms_row;
 
@@ -32,8 +33,17 @@ pub struct PackMetadata {
     pub description: Option<String>,
 }
 
-fn read_tile_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("读取瓦片失败 {}: {}", path.display(), e))
+fn read_tile_bytes(source: &TileSource) -> Result<Vec<u8>, String> {
+    source
+        .bytes()
+        .map(|cow| cow.into_owned())
+        .map_err(|e| {
+            let where_str = source
+                .as_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<memory>".to_string());
+            format!("读取瓦片失败 {}: {}", where_str, e)
+        })
 }
 
 /// 把字节流按 gzip 压缩。已经是 gzip（魔数 1F 8B）则原样返回。
@@ -265,7 +275,7 @@ fn open_mbtiles(path: &Path, init_meta: Option<&PackMetadata>) -> Result<Connect
 pub fn append_zoom_to_mbtiles(
     output: &Path,
     zoom: u8,
-    tile_files: &HashMap<(u32, u32), PathBuf>,
+    tile_files: &HashMap<(u32, u32), TileSource>,
     init_meta: Option<&PackMetadata>,
 ) -> Result<u64, String> {
     let mut conn = open_mbtiles(output, init_meta)?;
@@ -321,8 +331,8 @@ pub fn append_zoom_to_mbtiles(
                  VALUES (?1, ?2, ?3, ?4)",
             )
             .map_err(|e| e.to_string())?;
-        for ((x, y), path) in tile_files {
-            let bytes = match read_tile_bytes(path) {
+        for ((x, y), source) in tile_files {
+            let bytes = match read_tile_bytes(source) {
                 Ok(b) if !b.is_empty() => b,
                 _ => continue,
             };
@@ -512,7 +522,7 @@ fn lonlat_bbox_to_mercator(b: &TileBounds) -> (f64, f64, f64, f64) {
 pub fn append_zoom_to_gpkg(
     output: &Path,
     zoom: u8,
-    tile_files: &HashMap<(u32, u32), PathBuf>,
+    tile_files: &HashMap<(u32, u32), TileSource>,
     init_meta: Option<&PackMetadata>,
 ) -> Result<u64, String> {
     // GeoPackage 标准的 raster tiles 表不支持矢量瓦片（QGIS 会按栅格尝试解码 PBF 失败）。
@@ -547,8 +557,8 @@ pub fn append_zoom_to_gpkg(
                  VALUES (?1, ?2, ?3, ?4)",
             )
             .map_err(|e| e.to_string())?;
-        for ((x, y), path) in tile_files {
-            let bytes = match read_tile_bytes(path) {
+        for ((x, y), source) in tile_files {
+            let bytes = match read_tile_bytes(source) {
                 Ok(b) if !b.is_empty() => b,
                 _ => continue,
             };
@@ -563,10 +573,10 @@ pub fn append_zoom_to_gpkg(
     Ok(size)
 }
 
-/// 推断瓦片文件实际格式（基于第一个非空文件的魔数）
-pub fn detect_tile_format(tile_files: &HashMap<(u32, u32), PathBuf>) -> String {
-    for path in tile_files.values() {
-        if let Ok(bytes) = std::fs::read(path) {
+/// 推断瓦片文件实际格式（基于第一个非空瓦片的魔数）
+pub fn detect_tile_format(tile_files: &HashMap<(u32, u32), TileSource>) -> String {
+    for source in tile_files.values() {
+        if let Ok(bytes) = source.bytes() {
             if !bytes.is_empty() {
                 return detect_format(&bytes).to_string();
             }
@@ -578,7 +588,7 @@ pub fn detect_tile_format(tile_files: &HashMap<(u32, u32), PathBuf>) -> String {
 /// 推断瓦片格式，允许调用方传入外部提示（如从 ExportFormat / URL 扩展名）。
 /// 提示高于魔数推断（默认 fallback 仅返回 "png"，对 MVT/PBF 会误判）。
 pub fn detect_tile_format_with_hint(
-    tile_files: &HashMap<(u32, u32), PathBuf>,
+    tile_files: &HashMap<(u32, u32), TileSource>,
     hint: Option<&str>,
 ) -> String {
     if let Some(h) = hint {
@@ -596,19 +606,20 @@ pub fn detect_tile_format_with_hint(
     detect_tile_format(tile_files)
 }
 
-/// 不拼接、不重编码，直接把下载下来的瓦片文件拷贝到 {save_dir}/{z}/{x}/{y}.<ext>。
+/// 不拼接、不重编码，直接把下载下来的瓦片字节写入 {save_dir}/{z}/{x}/{y}.<ext>。
 /// 返回本次写入的总字节数。适用于原始瓦片目录 / MVT PBF 输出。
+/// 瓦片源若为文件路径走 `std::fs::copy`，缓存命中的内存字节走 `std::fs::write`。
 pub fn write_raw_tiles_folder(
     save_dir: &Path,
     z: u8,
-    tile_files: &HashMap<(u32, u32), PathBuf>,
+    tile_files: &HashMap<(u32, u32), TileSource>,
     extension: &str, // 不带点，如 "pbf" / "png" / "jpg"
 ) -> Result<u64, String> {
     let ext = extension.trim_start_matches('.');
     let z_dir = save_dir.join(z.to_string());
     std::fs::create_dir_all(&z_dir).map_err(|e| format!("创建目录失败 {}: {}", z_dir.display(), e))?;
     let mut total: u64 = 0;
-    for ((x, y), path) in tile_files.iter() {
+    for ((x, y), source) in tile_files.iter() {
         let x_dir = z_dir.join(x.to_string());
         std::fs::create_dir_all(&x_dir).map_err(|e| format!("创建目录失败 {}: {}", x_dir.display(), e))?;
         let dst = if ext.is_empty() {
@@ -616,9 +627,15 @@ pub fn write_raw_tiles_folder(
         } else {
             x_dir.join(format!("{}.{}", y, ext))
         };
-        match std::fs::copy(path, &dst) {
+        match source.copy_to(&dst) {
             Ok(n) => total = total.saturating_add(n),
-            Err(e) => return Err(format!("拷贝瓦片失败 {} -> {}: {}", path.display(), dst.display(), e)),
+            Err(e) => {
+                let src_str = source
+                    .as_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<memory>".to_string());
+                return Err(format!("写入瓦片失败 {} -> {}: {}", src_str, dst.display(), e));
+            }
         }
     }
     Ok(total)
@@ -666,9 +683,9 @@ mod tests {
         let png_path = tmp.path().join("tile.png");
         write_png(&png_path);
 
-        let mut tiles: HashMap<(u32, u32), PathBuf> = HashMap::new();
+        let mut tiles: HashMap<(u32, u32), TileSource> = HashMap::new();
         // z=2, y=0 (top in XYZ) → TMS row = 3
-        tiles.insert((1, 0), png_path.clone());
+        tiles.insert((1, 0), TileSource::from_path(png_path.clone()));
 
         let mbtiles_path = tmp.path().join("out.mbtiles");
         let mut meta = sample_metadata();
@@ -730,8 +747,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let png_path = tmp.path().join("tile.png");
         write_png(&png_path);
-        let mut tiles: HashMap<(u32, u32), PathBuf> = HashMap::new();
-        tiles.insert((0, 0), png_path.clone());
+        let mut tiles: HashMap<(u32, u32), TileSource> = HashMap::new();
+        tiles.insert((0, 0), TileSource::from_path(png_path.clone()));
 
         let mbtiles_path = tmp.path().join("out.mbtiles");
         let mut meta = sample_metadata();
@@ -766,9 +783,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let png_path = tmp.path().join("tile.png");
         write_png(&png_path);
-        let mut tiles: HashMap<(u32, u32), PathBuf> = HashMap::new();
+        let mut tiles: HashMap<(u32, u32), TileSource> = HashMap::new();
         // z=2, x=1, y=0 (XYZ, top edge)
-        tiles.insert((1, 0), png_path.clone());
+        tiles.insert((1, 0), TileSource::from_path(png_path.clone()));
 
         let gpkg_path = tmp.path().join("out.gpkg");
         let meta = sample_metadata();
@@ -818,15 +835,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let png = tmp.path().join("a.bin");
         write_png(&png);
-        let mut tiles: HashMap<(u32, u32), PathBuf> = HashMap::new();
-        tiles.insert((0, 0), png);
+        let mut tiles: HashMap<(u32, u32), TileSource> = HashMap::new();
+        tiles.insert((0, 0), TileSource::from_path(png));
         assert_eq!(detect_tile_format(&tiles), "png");
 
         // jpg 魔数
         let jpg = tmp.path().join("b.bin");
         fs::write(&jpg, &[0xFF, 0xD8, 0xFF, 0xE0, 0x00]).unwrap();
-        let mut t2: HashMap<(u32, u32), PathBuf> = HashMap::new();
-        t2.insert((0, 0), jpg);
+        let mut t2: HashMap<(u32, u32), TileSource> = HashMap::new();
+        t2.insert((0, 0), TileSource::from_path(jpg));
         assert_eq!(detect_tile_format(&t2), "jpg");
 
         // webp 魔数
@@ -835,9 +852,15 @@ mod tests {
         buf.extend_from_slice(&[0u8; 4]);
         buf.extend_from_slice(b"WEBP");
         fs::write(&webp, &buf).unwrap();
-        let mut t3: HashMap<(u32, u32), PathBuf> = HashMap::new();
-        t3.insert((0, 0), webp);
+        let mut t3: HashMap<(u32, u32), TileSource> = HashMap::new();
+        t3.insert((0, 0), TileSource::from_path(webp));
         assert_eq!(detect_tile_format(&t3), "webp");
+
+        // Issue #26：Bytes 变体应同样被 detect_tile_format 识别（不写盘）
+        let mut t4: HashMap<(u32, u32), TileSource> = HashMap::new();
+        let png_bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        t4.insert((0, 0), TileSource::from_bytes(png_bytes));
+        assert_eq!(detect_tile_format(&t4), "png");
     }
 
     #[test]

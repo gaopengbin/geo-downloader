@@ -672,7 +672,7 @@ async fn execute_zoom_level(
     
     let prog_off_dl = prog_off;
     let prog_span_dl = prog_span;
-    let tile_files = downloader.download_tiles(tiles, concurrency, &temp_dir, Some(cancel_token), Some(pause_control), move |progress| {
+    let mut tile_files = downloader.download_tiles(tiles, concurrency, &temp_dir, Some(cancel_token), Some(pause_control), move |progress| {
         no_data_tracker_c.store(progress.no_data, std::sync::atomic::Ordering::Relaxed);
         let p = progress.percent();
         // 映射到本级 0-85% 范围，再映射到全局
@@ -801,7 +801,7 @@ async fn execute_zoom_level(
                 .collect();
 
             // 收集每层 overlay 的 tile_files
-            let mut per_layer_files: Vec<HashMap<(u32, u32), std::path::PathBuf>> = Vec::with_capacity(overlay_list.len());
+            let mut per_layer_files: Vec<HashMap<(u32, u32), crate::merger::TileSource>> = Vec::with_capacity(overlay_list.len());
             for (idx, ov_src) in overlay_list.iter().enumerate() {
                 if cancel_token.is_cancelled() {
                     return Err("任务已取消".to_string());
@@ -835,13 +835,15 @@ async fn execute_zoom_level(
                 per_layer_files.push(ov_files);
             }
 
-            // 对每张主瓦片做合成（in-place 覆写为 PNG）
+            // 对每张主瓦片做合成（合成结果直接更新 tile_files entry 为 Bytes，跳过临时落盘）
             let p_composite = map_progress(87.0);
             tm.update_progress(task_id, TaskStatus::Downloading, p_composite, completed_after_download, failed_after_download, Some("合成叠加瓦片...".to_string()));
             let mut composite_ok = 0usize;
             let mut composite_err = 0usize;
-            for (&(x, y), main_path) in tile_files.iter() {
-                let main_bytes = match std::fs::read(main_path) {
+            // 先在不可变借用下收集合成产物，循环外批量 apply 到 tile_files
+            let mut composites_to_apply: Vec<((u32, u32), Vec<u8>)> = Vec::new();
+            for (&(x, y), main_source) in tile_files.iter() {
+                let main_bytes = match main_source.bytes() {
                     Ok(b) => b,
                     Err(_) => { composite_err += 1; continue; }
                 };
@@ -851,8 +853,8 @@ async fn execute_zoom_level(
                 };
                 let mut layered = false;
                 for ov_files in per_layer_files.iter() {
-                    if let Some(ov_path) = ov_files.get(&(x, y)) {
-                        if let Ok(ob) = std::fs::read(ov_path) {
+                    if let Some(ov_source) = ov_files.get(&(x, y)) {
+                        if let Ok(ob) = ov_source.bytes() {
                             if let Ok(ov_img) = image::load_from_memory(&ob) {
                                 let ov_rgba = ov_img.to_rgba8();
                                 if ov_rgba.dimensions() == base_img.dimensions() {
@@ -869,13 +871,16 @@ async fn execute_zoom_level(
                         .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
                         .is_ok()
                     {
-                        if std::fs::write(main_path, &out).is_ok() {
-                            composite_ok += 1;
-                            continue;
-                        }
+                        composites_to_apply.push(((x, y), out));
+                        composite_ok += 1;
+                        continue;
                     }
                 }
                 composite_err += 1;
+            }
+            // 批量替换：合成后的 PNG bytes 直接作为后续 merger / 打包阶段的瓦片源
+            for ((x, y), bytes) in composites_to_apply {
+                tile_files.insert((x, y), crate::merger::TileSource::from_bytes(bytes));
             }
             // 清理 overlay 临时目录
             for idx in 0..overlay_list.len() {

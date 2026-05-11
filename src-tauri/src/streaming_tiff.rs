@@ -4,12 +4,12 @@
 //! M5: strip 内瓦片解码使用 rayon 并行，8核机器加速 4-6×。
 
 use crate::config::TILE_SIZE;
-use crate::merger::{self, PolygonPoint};
+use crate::merger::{self, PolygonPoint, TileSource};
 use crate::tile::{TileBounds, bounds_to_mercator};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::{Write, Seek, SeekFrom, BufWriter};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// LZW 压缩一个 strip（TIFF 规范：MSB 位序，最小码长 8，early code size switch）
 fn lzw_compress(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -39,7 +39,7 @@ fn compress_strip(data: &[u8], compression: &str) -> Result<(Vec<u8>, u64), Stri
 /// 内存占用: 仅 width × TILE_SIZE × channels 字节（一行瓦片）
 /// 支持多边形裁剪：传入 polygons 后自动切换 RGBA 模式，多边形外像素透明
 pub fn merge_and_export_streaming(
-    tile_files: &HashMap<(u32, u32), PathBuf>,
+    tile_files: &HashMap<(u32, u32), TileSource>,
     x_min: u32,
     y_min: u32,
     x_max: u32,
@@ -134,8 +134,8 @@ pub fn merge_and_export_streaming(
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
         let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs.par_iter()
             .map(|&tile_x| {
-                let file_path = tile_files.get(&(tile_x, tile_y))?;
-                let bytes = std::fs::read(file_path).ok()?;
+                let source = tile_files.get(&(tile_x, tile_y))?;
+                let bytes = source.bytes().ok()?;
                 let img = image::load_from_memory(&bytes).ok()?;
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
                 Some((px, img.to_rgb8()))
@@ -400,7 +400,7 @@ fn decode_terrarium_tile(png_bytes: &[u8]) -> Result<image::ImageBuffer<image::R
 /// - 缺失瓦片填 NoData
 /// - 可选多边形裁剪：环外像素强制为 NoData
 pub fn merge_and_export_dem_streaming(
-    tile_files: &HashMap<(u32, u32), PathBuf>,
+    tile_files: &HashMap<(u32, u32), TileSource>,
     x_min: u32,
     y_min: u32,
     x_max: u32,
@@ -489,8 +489,8 @@ pub fn merge_and_export_dem_streaming(
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
         let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs.par_iter()
             .map(|&tile_x| {
-                let file_path = tile_files.get(&(tile_x, tile_y))?;
-                let bytes = std::fs::read(file_path).ok()?;
+                let source = tile_files.get(&(tile_x, tile_y))?;
+                let bytes = source.bytes().ok()?;
                 let rgb = decode_terrarium_tile(&bytes).ok()?;
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
                 Some((px, rgb))
