@@ -60,6 +60,7 @@ npx --yes wrangler@latest pages deploy site --project-name=geodownloader --branc
 - **`multi_replace_string_in_file` 同形替换 bug**：跨文件相似 oldString 会拼接成乱码。必须 per-file 单次 replace + 立即 `cargo check`
 - **PowerShell UTF-8 输出**：执行 `gh` 等输出中文的命令前先 `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8; chcp 65001 > $null`
 - **PowerShell stdout 截断（Cascade 终端）**：直调 `gh ... --json ... | Out-File / Set-Content / Out-Host` 经常截断或显示空输出，即使 exit 0。绕开：`cmd /c "gh ... 2>&1"` 包装 + 文件中转 + `Get-Content -Encoding UTF8` 读
+- **`code_search` 子代理幻觉**：其返回的 "believes that the following snippets are relevant" 代码片可能是推测补全而非真实文件内容。修改前必须 `read_file` / `grep_search` 二次确认，不可直接依据其 snippet 决定代码结构
 - **`gh api -f` 类型**：sub-issues 等需要整数参数时必须用 `-F`，`-f` 总是字符串会 422
 - **`gh issue comment` 传中文 body**：必须用 `--body-file <path>`，避免 ConvertTo-Json 中文转义坑
 
@@ -89,7 +90,7 @@ npx --yes wrangler@latest pages deploy site --project-name=geodownloader --branc
 | #30 | 下载预估偏低 17x | ✅ **已关，待发版**（commit `3bbde23` 修完，Cargo.toml 仍 3.4.4） |
 | #31 | 部分失败任务的导出策略 | 🟡 设计稿 `docs/partial-export-design.md` 已出，实现未开始 |
 | #27 | 多 strip 并行解码 + 大内存缓冲 | 🟡 行内 rayon 已实现（4-6×），跨 strip 缓冲未做（P3 / v3.4.6） |
-| #25 | 换格式重导出走完整下载循环 | ❌ **P0 perf bug**，`downloader.rs` 无 `contains_batch`，per-tile SQL |
+| #25 | 换格式重导出走完整下载循环 | 🟡 主循环已实现（commit `213f3f8`），retry 循环留后续 PR |
 | #24 | zustand persist 启动恢复 | ❌ P1，3 个 store 未接 `persist` |
 | #26 | 缓存命中绕过 `temp_dir`，bytes 直接交 merger | ❌ P2，无 `TileSource::Bytes` enum |
 | #29 | Sentinel-2 / Landsat 集成 | ❌ P2，`imagery_scene/` 模块未建 |
@@ -101,6 +102,8 @@ npx --yes wrangler@latest pages deploy site --project-name=geodownloader --branc
 未发版本变更（main HEAD 领先 v3.4.4）：
 - `3bbde23` (2026-05-10) — 估算精度修复 + 部分失败设计稿 + 5 项顺手 bug 修
 - `97e9973` (2026-05-11) — 建立 memories/ 与 `.windsurf/rules/memory.md`
+- `f6f7a06` (2026-05-11) — 补充 PowerShell 截断踩坑 + 更新 issue 状态索引
+- `213f3f8` (2026-05-11) — #25 主循环批量预过滤（`contains_batch` + 4 单测）
 
 ## 历史决策摘要
 
