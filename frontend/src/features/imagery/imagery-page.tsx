@@ -324,9 +324,47 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     return all.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
   }, [sourcesQuery.data, isDemMode, isMvtMode])
 
+  // 同步从 store 读取持久化值作为表单初值，避免组件每次重挂时表单
+  // 短暂闪现 DEFAULT_VALUES（mode 切换时 ImageryPage 销毁重挂特别明显）。
+  // 注意：不依赖 settings/sources 异步数据，仅用持久化值；后续 init effect
+  // 仍会在数据到达后做 fallback 与校验。
+  const initialFormValues = useMemo<DownloadFormValues>(() => {
+    const persisted = useImageryParamsStore.getState()
+    const remembered = useAppStore.getState().selectedSourceByMode[mode] ?? ''
+    const fmt: DownloadFormValues['format'] = isDemMode
+      ? 'geotiff'
+      : isMvtMode
+        ? 'pbf'
+        : (persisted.format as DownloadFormValues['format']) ?? 'geotiff'
+    const rememberedZooms = persisted.zoomLevelsByMode?.[mode]
+    const rememberedOverlays = persisted.overlaySourcesByMode?.[mode]
+    return {
+      ...DEFAULT_VALUES,
+      source: remembered,
+      format: fmt,
+      compression: persisted.compression,
+      build_pyramid: persisted.buildPyramid,
+      concurrency:
+        typeof persisted.concurrency === 'number'
+          ? Math.min(100, Math.max(1, persisted.concurrency))
+          : DEFAULT_VALUES.concurrency,
+      zoom_levels:
+        rememberedZooms && rememberedZooms.length > 0
+          ? rememberedZooms
+          : isMvtMode
+            ? [10, 11, 12, 13, 14]
+            : DEFAULT_VALUES.zoom_levels,
+      overlay_sources:
+        rememberedOverlays && !isMvtMode && !isDemMode ? rememberedOverlays : [],
+      save_path: persisted.savePathByMode?.[mode] ?? '',
+    }
+    // mode 是 prop，组件 mount 时确定，不会在生命周期中变化
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const form = useForm<DownloadFormValues>({
     resolver: zodResolver(downloadSchema),
-    defaultValues: DEFAULT_VALUES,
+    defaultValues: initialFormValues,
     mode: 'onSubmit',
     reValidateMode: 'onSubmit',
   })
@@ -339,7 +377,9 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   } = form
 
   const [initedForMode, setInitedForMode] = useState<AppMode | null>(null)
-  const [cropToShape, setCropToShape] = useState(true)
+  const [cropToShape, setCropToShape] = useState(
+    () => useImageryParamsStore.getState().cropToShape,
+  )
   useEffect(() => {
     if (initedForMode === mode) return
     if (!settingsQuery.data || !sourcesQuery.data || sourceList.length === 0) return
@@ -373,21 +413,31 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         ''
     }
     setValue('source', firstSourceId ?? '')
+    // 同步写入 store，避免依赖下方 useEffect[source, mode] 在 StrictMode 下双挂载
+    // 时可能被 fallback 到默认值覆盖。
+    if (firstSourceId) {
+      useAppStore.getState().setSelectedSourceForMode(mode, firstSourceId)
+    }
     if (typeof persistedParams.concurrency === 'number') {
       setValue('concurrency', Math.min(100, Math.max(1, persistedParams.concurrency)))
     } else if (typeof s.default_concurrency === 'number') {
       setValue('concurrency', s.default_concurrency)
     }
-    if (typeof s.default_zoom === 'number') setValue('zoom_levels', [s.default_zoom])
+    // 仅在未持久化过本 mode 的 zoom_levels 时才用 settings 默认值，
+    // 避免覆盖刚从 store 恢复的值。
+    const hasRememberedZooms = (persistedParams.zoomLevelsByMode?.[mode]?.length ?? 0) > 0
+    if (!hasRememberedZooms && typeof s.default_zoom === 'number') {
+      setValue('zoom_levels', [s.default_zoom])
+    }
     setValue('compression', persistedParams.compression)
     setValue('build_pyramid', persistedParams.buildPyramid)
     setCropToShape(persistedParams.cropToShape)
-    // 不再还原上次保存路径——每次默认为空，避免意外覆盖之前的下载。
+    // save_path 仅在 useForm defaultValues 从 store 恢复一次，这里不覆盖。
     if (isDemMode) {
       setValue('format', 'geotiff')
     } else if (isMvtMode) {
+      if (!hasRememberedZooms) setValue('zoom_levels', [10, 11, 12, 13, 14])
       setValue('format', 'pbf')
-      setValue('zoom_levels', [10, 11, 12, 13, 14])
     } else {
       const fmt = (persistedParams.format ?? s.default_format ?? 'geotiff') as OutputFormat
       if (['geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg'].includes(fmt as string)) {
@@ -544,10 +594,12 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
 
   const pickSavePath = async () => {
     try {
+      const current = (form.getValues('save_path') ?? '').trim()
       const chosen = await openDialog({
         directory: true,
         multiple: false,
         title: '选择保存目录',
+        defaultPath: current || undefined,
       })
       if (chosen) {
         setValue('save_path', chosen as string, { shouldValidate: true })
@@ -587,10 +639,9 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bounds, zoom, zoomMax, sortedLevels, format, cropToShape, polygon, source, compression, buildPyramid])
 
-  // 同步当前选中的图源到全局 store（按当前 mode 记忆），让地图预览跟随切换
-  useEffect(() => {
-    if (source) useAppStore.getState().setSelectedSourceForMode(mode, source)
-  }, [source, mode])
+  // 注意：此处不再用 useEffect[source, mode] 写 store，因为 useWatch 是异步更新
+  // + StrictMode 双挂载，可能出现“上一个 mode 的 source 被临时写入新 mode”的错误。
+  // 改为在 init effect 末尾与 Select onValueChange 处同步写 store。
 
   // 同步影像下载参数到全局 store，供批量下载对话框读取
   const sourceMetaName =
@@ -621,6 +672,21 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     effectiveCropToShape,
     concurrency,
   ])
+
+  // 按 mode 持久化 zoom_levels / overlay_sources，供下次启动恢复。
+  useEffect(() => {
+    if (zoomLevels.length === 0) return
+    useImageryParamsStore.getState().setZoomLevelsForMode(mode, zoomLevels)
+  }, [mode, zoomLevels])
+  useEffect(() => {
+    if (isDemMode || isMvtMode) return
+    useImageryParamsStore.getState().setOverlaySourcesForMode(mode, overlaySources)
+  }, [mode, isDemMode, isMvtMode, overlaySources])
+  // 保存目录按 mode 持久化（submit 时会自动 appendTimestamp，不会覆盖以前的下载）。
+  const savePath = useWatch({ control, name: 'save_path' }) ?? ''
+  useEffect(() => {
+    useImageryParamsStore.getState().setSavePathForMode(mode, savePath)
+  }, [mode, savePath])
 
   return (
     <div className="space-y-3">
@@ -671,7 +737,10 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             <Label className="text-xs uppercase tracking-wider text-muted-foreground">图源</Label>
           <Select
             value={source}
-            onValueChange={(v) => setValue('source', v, { shouldValidate: true })}
+            onValueChange={(v) => {
+              setValue('source', v, { shouldValidate: true })
+              if (v) useAppStore.getState().setSelectedSourceForMode(mode, v)
+            }}
             disabled={sourcesLoading}
           >
             <SelectTrigger>

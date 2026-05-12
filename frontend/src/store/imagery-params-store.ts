@@ -4,6 +4,8 @@ import { persist } from 'zustand/middleware'
 import { createSafeJSONStorage } from '@/store/persist-storage'
 import type { OutputFormat } from '@/types/api'
 
+export type ImageryMode = 'imagery' | 'dem' | 'mvt'
+
 export interface ImageryParamsSnapshot {
   source: string
   sourceName: string
@@ -18,6 +20,15 @@ export interface ImageryParamsSnapshot {
 }
 
 interface ImageryParamsState extends ImageryParamsSnapshot {
+  /** 按 mode 记忆的缩放级别 */
+  zoomLevelsByMode: Partial<Record<ImageryMode, number[]>>
+  setZoomLevelsForMode: (mode: ImageryMode, levels: number[]) => void
+  /** 按 mode 记忆的叠加图层 */
+  overlaySourcesByMode: Partial<Record<ImageryMode, string[]>>
+  setOverlaySourcesForMode: (mode: ImageryMode, ids: string[]) => void
+  /** 按 mode 记忆的保存目录 */
+  savePathByMode: Partial<Record<ImageryMode, string>>
+  setSavePathForMode: (mode: ImageryMode, path: string) => void
   set: (v: Partial<ImageryParamsSnapshot>) => void
 }
 
@@ -34,6 +45,21 @@ export const useImageryParamsStore = create<ImageryParamsState>()(
       cropToShape: true,
       concurrency: 30,
       ready: false,
+      zoomLevelsByMode: {},
+      setZoomLevelsForMode: (mode, levels) =>
+        set((s) => ({
+          zoomLevelsByMode: { ...s.zoomLevelsByMode, [mode]: levels },
+        })),
+      overlaySourcesByMode: {},
+      setOverlaySourcesForMode: (mode, ids) =>
+        set((s) => ({
+          overlaySourcesByMode: { ...s.overlaySourcesByMode, [mode]: ids },
+        })),
+      savePathByMode: {},
+      setSavePathForMode: (mode, path) =>
+        set((s) => ({
+          savePathByMode: { ...s.savePathByMode, [mode]: path },
+        })),
       set: (v) => set((prev) => ({ ...prev, ...v, ready: true })),
     }),
     {
@@ -46,6 +72,9 @@ export const useImageryParamsStore = create<ImageryParamsState>()(
         buildPyramid: state.buildPyramid,
         cropToShape: state.cropToShape,
         concurrency: state.concurrency,
+        zoomLevelsByMode: state.zoomLevelsByMode,
+        overlaySourcesByMode: state.overlaySourcesByMode,
+        savePathByMode: state.savePathByMode,
       }),
     },
   ),

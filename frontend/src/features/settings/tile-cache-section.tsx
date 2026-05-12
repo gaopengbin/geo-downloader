@@ -74,7 +74,14 @@ export function TileCacheSection({
   })
 
   const handlePickDir = async () => {
-    const picked = await openDialog({ directory: true, multiple: false })
+    // 用户未自定义时 dir 为空，输入框显示的是 placeholder（即当前生效的默认目录）。
+    // 选择对话框也应当从这个实际目录出发，方便就近调整。
+    const current = (dir ?? '').trim() || (statsQuery.data?.rootDir ?? '').trim()
+    const picked = await openDialog({
+      directory: true,
+      multiple: false,
+      defaultPath: current || undefined,
+    })
     if (typeof picked === 'string' && picked.trim()) {
       onDirChange(picked)
       try {
