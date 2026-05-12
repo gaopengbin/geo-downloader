@@ -1,0 +1,45 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "天安门广场", "id": 1, "code": "BJ001" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[116.386, 39.899], [116.395, 39.899], [116.395, 39.907], [116.386, 39.907], [116.386, 39.899]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "颐和园", "id": 2, "code": "BJ002" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[116.260, 39.988], [116.280, 39.988], [116.280, 40.002], [116.260, 40.002], [116.260, 39.988]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "故宫博物院", "id": 3, "code": "BJ003" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[116.388, 39.912], [116.400, 39.912], [116.400, 39.924], [116.388, 39.924], [116.388, 39.912]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "奥林匹克公园", "id": 4, "code": "BJ004" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[116.380, 39.985], [116.400, 39.985], [116.400, 40.000], [116.380, 40.000], [116.380, 39.985]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "圆明园", "id": 5, "code": "BJ005" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[116.290, 40.002], [116.310, 40.002], [116.310, 40.015], [116.290, 40.015], [116.290, 40.002]]]
+      }
+    }
+  ]
+}

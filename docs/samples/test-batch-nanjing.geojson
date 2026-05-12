@@ -1,0 +1,13 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "中山陵", "type": "historic" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[118.840, 32.050], [118.860, 32.050], [118.860, 32.065], [118.840, 32.065], [118.840, 32.050]]]
+      }
+    }
+  ]
+}

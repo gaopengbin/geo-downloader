@@ -1,0 +1,13 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "外滩", "type": "landmark" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[121.484, 31.230], [121.498, 31.230], [121.498, 31.245], [121.484, 31.245], [121.484, 31.230]]]
+      }
+    }
+  ]
+}

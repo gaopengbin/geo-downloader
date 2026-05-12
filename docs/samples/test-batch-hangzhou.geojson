@@ -1,0 +1,13 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "西湖", "type": "lake" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[120.130, 30.240], [120.160, 30.240], [120.160, 30.260], [120.130, 30.260], [120.130, 30.240]]]
+      }
+    }
+  ]
+}
