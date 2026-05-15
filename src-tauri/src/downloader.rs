@@ -5,7 +5,8 @@ use crate::merger::TileSource as MergerTileSource;
 use crate::task::PauseControl;
 use crate::tile::TileCoord;
 use crate::tile_cache::{
-    self as tcache, SourceInfo, SourceKey, StoredTile, TileCoord as CacheCoord,
+    self as tcache, active_downloads, SourceInfo, SourceKey, StoredTile,
+    TileCoord as CacheCoord,
 };
 use image::RgbImage;
 use reqwest::Client;
@@ -25,6 +26,7 @@ pub struct DownloadProgress {
     pub completed: u32,
     pub failed: u32,
     pub no_data: u32,
+    pub browse_filled: u32,
     pub status: String,
 }
 
@@ -290,7 +292,7 @@ impl TileDownloader {
 
         // 报告初始进度
         progress_callback(DownloadProgress {
-            total, completed, failed, no_data: 0, status: if skipped > 0 {
+            total, completed, failed, no_data: 0, browse_filled: 0, status: if skipped > 0 {
                 format!("已跳过 {} 个已下载瓦片", skipped)
             } else {
                 "downloading".to_string()
@@ -360,9 +362,18 @@ impl TileDownloader {
                 completed,
                 failed,
                 no_data: 0,
+                browse_filled: 0,
                 status: format!("缓存命中 {} 个瓦片，剩余 {} 个走网络", cache_hit_count, need_download.len()),
             });
         }
+
+        // ===== Issue #28：注册待下载坐标，让浏览写缓存时能通知跳过 =====
+        let active_src_key = cache_src.as_str().to_string();
+        let active_coords: Vec<CacheCoord> = need_download
+            .iter()
+            .map(|t| CacheCoord { z: t.z as u8, x: t.x, y: t.y })
+            .collect();
+        let _download_guard = active_downloads::DownloadGuard::new(&active_src_key, &active_coords);
 
         let all_futures = need_download.into_iter().map(|tile| {
             let url = self.get_tile_url(&tile);
@@ -373,13 +384,22 @@ impl TileDownloader {
             let rc = retrying_counter.clone();
             let cs = cache_src.clone();
             let ci = cache_info.clone();
+            let ask = active_src_key.clone();
 
             async move {
                 let file_path = td.join(format!("{}_{}.png", tile.x, tile.y));
                 let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
 
-                // 1) 优先查缓存（#26：直接返回 Bytes，不写 temp_dir）
-                //    主循环已有批量预过滤兜底，此分支只覆盖预过滤后短窗口内新写入的缓存
+                // 1) 检查是否已被浏览补齐（Issue #28）
+                if !active_downloads::is_still_pending(&ask, coord) {
+                    if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
+                        if !stored.bytes.is_empty() {
+                            return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
+                        }
+                    }
+                }
+
+                // 2) 优先查缓存（#26：直接返回 Bytes，不写 temp_dir）
                 if tcache::get_config().enabled {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
                         if !stored.bytes.is_empty() {
@@ -388,7 +408,7 @@ impl TileDownloader {
                     }
                 }
 
-                // 2) 网络下载（保留 Path 路径让 merger 顺序读盘，避免 buffer_unordered 全量驻留内存）
+                // 3) 网络下载
                 let result = Self::download_one_tile(&client, &url, &headers, &file_path, retry_times, Some(&rc)).await;
                 let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
                     if file_path.exists() {
@@ -398,7 +418,7 @@ impl TileDownloader {
                     }
                 });
 
-                // 3) 写回缓存（仅网络下载成功；Bytes 路径数据本就来自缓存，不再回写）
+                // 4) 写回缓存（仅网络下载成功）
                 if final_result.is_ok() && tcache::get_config().enabled {
                     if let Ok(bytes) = tokio::fs::read(&file_path).await {
                         if !bytes.is_empty() && bytes.len() <= 4 * 1024 * 1024 {
@@ -426,11 +446,11 @@ impl TileDownloader {
             if let Some(pc) = pause_control {
                 if pc.is_paused() {
                     progress_callback(DownloadProgress {
-                        total, completed, failed, no_data: no_data_count, status: "paused".to_string(),
+                        total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: "paused".to_string(),
                     });
                     pc.wait_if_paused().await;
                     progress_callback(DownloadProgress {
-                        total, completed, failed, no_data: no_data_count, status: "downloading".to_string(),
+                        total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: "downloading".to_string(),
                     });
                 }
             }
@@ -443,7 +463,6 @@ impl TileDownloader {
                         }
                         Some((_tile, Err(e))) => {
                             if e == "no_data" {
-                                // 404 无数据，不重试，不算失败
                                 no_data_count += 1;
                                 completed += 1;
                             } else {
@@ -451,7 +470,7 @@ impl TileDownloader {
                                 failed += 1;
                             }
                         }
-                        None => break, // 所有瓦片处理完毕
+                        None => break,
                     }
                     if let Some(token) = cancel_token {
                         if token.is_cancelled() { return Err("任务已取消".to_string()); }
@@ -464,7 +483,7 @@ impl TileDownloader {
                             "downloading".to_string()
                         };
                         progress_callback(DownloadProgress {
-                            total, completed, failed, no_data: no_data_count, status,
+                            total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status,
                         });
                     }
                 }
@@ -476,7 +495,7 @@ impl TileDownloader {
                     let retrying = retrying_counter.load(Ordering::Relaxed);
                     if retrying > 0 {
                         progress_callback(DownloadProgress {
-                            total, completed, failed, no_data: no_data_count,
+                            total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
                             status: format!("下载中，{} 个瓦片正在重试", retrying),
                         });
                     }
@@ -505,7 +524,7 @@ impl TileDownloader {
             let retry_count = failed_tiles.len();
             let wait_secs = retry_delays_secs[round];
             progress_callback(DownloadProgress {
-                total, completed, failed, no_data: no_data_count,
+                total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
                 status: format!("重试第{}轮: {} 个失败瓦片，等待 {}s 后重试...", round + 1, retry_count, wait_secs),
             });
 
@@ -513,7 +532,7 @@ impl TileDownloader {
             tokio::time::sleep(Duration::from_secs(wait_secs)).await;
 
             progress_callback(DownloadProgress {
-                total, completed, failed, no_data: no_data_count,
+                total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
                 status: format!("重试第{}轮: 开始重试 {} 个瓦片，并发 {}", round + 1, retry_count, retry_concurrencies[round]),
             });
 
@@ -593,7 +612,7 @@ impl TileDownloader {
                     }
                 }
                 progress_callback(DownloadProgress {
-                    total, completed, failed, no_data: no_data_count,
+                    total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
                     status: format!("重试第{}轮...", round + 1),
                 });
             }
@@ -610,7 +629,7 @@ impl TileDownloader {
             "completed_with_errors"
         };
         progress_callback(DownloadProgress {
-            total, completed, failed, no_data: no_data_count, status: status.to_string(),
+            total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: status.to_string(),
         });
 
         if tile_files.is_empty() {

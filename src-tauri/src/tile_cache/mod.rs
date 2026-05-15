@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod store;
 pub mod pool;
+pub mod active_downloads;
 
 pub use pool::Store;
 

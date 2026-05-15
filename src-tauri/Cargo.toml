@@ -47,6 +47,9 @@ flate2 = "1.0"
 # Parallel processing
 rayon = "1.10"
 
+# Lock-free concurrent collections
+dashmap = "6"
+
 # Random
 rand = "0.8"
 

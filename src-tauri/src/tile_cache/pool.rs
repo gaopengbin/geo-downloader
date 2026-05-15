@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use super::{
-    get_config, store::TileStore, PruneReport, SourceInfo, SourceKey, SourceStats, StoredTile,
-    TileCoord,
+    active_downloads, get_config, store::TileStore, PruneReport, SourceInfo, SourceKey,
+    SourceStats, StoredTile, TileCoord,
 };
 
 const POOL_MAX: usize = 8;
@@ -161,10 +161,11 @@ impl Store {
         if let Some(info) = info {
             store.ensure_metadata(&info)?;
         } else {
-            // 至少确保 metadata 表里有一条 last_used_at
             store.touch().ok();
         }
-        store.put(coord, &tile)
+        store.put(coord, &tile)?;
+        active_downloads::notify_cached(src.as_str(), coord);
+        Ok(())
     }
 
     pub fn put_batch(
