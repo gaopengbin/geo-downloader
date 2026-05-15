@@ -5,6 +5,7 @@ import { Download, FolderOpen, History, Loader2, RefreshCw, Search } from 'lucid
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { DatePicker } from '@/components/ui/date-picker'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -127,6 +128,8 @@ export function WaybackPage() {
   const [incrementalSaveDir, setIncrementalSaveDir] = useState<string>('')
   const [batchSelected, setBatchSelected] = useState<Set<string>>(new Set())
   const [scanMode, setScanMode] = useState<'fast' | 'fine' | 'official'>('official')
+  const [releaseDateFrom, setReleaseDateFrom] = useState<string>('')
+  const [releaseDateTo, setReleaseDateTo] = useState<string>('')
   const [coverageThreshold, setCoverageThreshold] = useState<number>(5)
   const [dominantThreshold, setDominantThreshold] = useState<number>(50)
   const [onlyLatestPerYear, setOnlyLatestPerYear] = useState<boolean>(false)
@@ -411,7 +414,8 @@ export function WaybackPage() {
 
   // ========== 增量扫描 ==========
   const scanMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (opts: { forceRefresh?: boolean } = {}) => {
+      const forceRefresh = opts.forceRefresh ?? false
       if (!bounds) throw new Error('请先选择下载区域')
       const zMin = Math.max(zoom - 1, 1)
       const zMaxScan = Math.min(zoom + 1, 22)
@@ -430,9 +434,11 @@ export function WaybackPage() {
         bbox,
         zoom_min: zMin,
         zoom_max: zMaxScan,
-        force_refresh: false,
+        force_refresh: forceRefresh,
         proxy,
         scan_mode: scanMode,
+        release_date_from: releaseDateFrom || null,
+        release_date_to: releaseDateTo || null,
       })
 
       if (res.kind === 'result') {
@@ -441,7 +447,6 @@ export function WaybackPage() {
 
       // 后台扫描中，轮询进度
       const scanId = res.scan_id
-      const total = res.total
       while (!scanAbortRef.current) {
         await new Promise((r) => setTimeout(r, 1500))
         const prog = await getWaybackScanProgress(scanId).catch(() => null)
@@ -454,13 +459,15 @@ export function WaybackPage() {
             force_refresh: false,
             proxy,
             scan_mode: scanMode,
+            release_date_from: releaseDateFrom || null,
+            release_date_to: releaseDateTo || null,
           })
           if (final.kind === 'result') return final
           throw new Error('扫描完成但未取得结果')
         }
         setScanProgress({
           current: prog.current,
-          total,
+          total: prog.total,
           footprints: prog.footprints_so_far,
           elapsed: prog.elapsed_sec,
         })
@@ -931,7 +938,7 @@ export function WaybackPage() {
               <Button
                 size="sm"
                 className="ml-auto h-7 text-xs"
-                onClick={() => scanMutation.mutate()}
+                onClick={() => scanMutation.mutate({})}
                 disabled={scanMutation.isPending || !bounds}
               >
                 {scanMutation.isPending ? (
@@ -941,6 +948,33 @@ export function WaybackPage() {
                 )}
                 {scanReleases.length > 0 ? '重新扫描' : '扫描影像清单'}
               </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                onClick={() => scanMutation.mutate({ forceRefresh: true })}
+                disabled={scanMutation.isPending || !bounds}
+                title="跳过本地缓存，强制向 ESRI 服务器重新扫描"
+              >
+                <RefreshCw className="mr-1 size-3" />
+                强制刷新
+              </Button>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <Label className="text-xs">时间范围</Label>
+              <DatePicker
+                value={releaseDateFrom}
+                onChange={setReleaseDateFrom}
+                placeholder="起始日期"
+                maxDate={releaseDateTo || undefined}
+              />
+              <span className="text-muted-foreground">~</span>
+              <DatePicker
+                value={releaseDateTo}
+                onChange={setReleaseDateTo}
+                placeholder="截止日期"
+                minDate={releaseDateFrom || undefined}
+              />
             </div>
 
             {scanProgress && (

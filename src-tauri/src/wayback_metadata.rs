@@ -244,6 +244,30 @@ pub fn try_load_cache(bbox: &[f64; 4], z_min: u32, z_max: u32, scan_mode: &str) 
     load_cache(bbox, z_min, z_max, scan_mode)
 }
 
+/// 按 release_date 范围过滤扫描结果（不改写缓存，仅返回视图）
+pub fn filter_result_by_date(
+    mut result: WaybackScanResult,
+    date_from: Option<&str>,
+    date_to: Option<&str>,
+) -> WaybackScanResult {
+    let from_ok = date_from.map(|s| !s.is_empty()).unwrap_or(false);
+    let to_ok = date_to.map(|s| !s.is_empty()).unwrap_or(false);
+    if !from_ok && !to_ok {
+        return result;
+    }
+    let from = date_from.unwrap_or("");
+    let to = date_to.unwrap_or("");
+    let pass = |d: &str| -> bool {
+        if from_ok && d < from { return false; }
+        if to_ok && d > to { return false; }
+        true
+    };
+    result.footprints.retain(|f| pass(&f.release_date));
+    result.releases.retain(|r| pass(&r.release_date));
+    result.releases_scanned = result.releases.len() as u32;
+    result
+}
+
 fn save_cache(result: &WaybackScanResult) -> Result<(), String> {
     let path = cache_path(&result.bbox, result.zoom_min, result.zoom_max, &result.scan_mode)?;
     let json = serde_json::to_vec(result).map_err(|e| format!("序列化缓存失败: {}", e))?;
@@ -359,6 +383,7 @@ pub async fn scan_metadata(
     releases_sorted.sort_by(|a, b| b.0.cmp(&a.0));
 
     let release_count = releases_sorted.len();
+
     let mut handles = Vec::new();
 
     for (release_id, release) in releases_sorted {

@@ -716,7 +716,11 @@ async fn execute_zoom_level(
                 format!("下载完成 {}/{}", progress.completed, progress.total)
             }
         } else if progress.status == "downloading" {
-            format!("下载中 {}/{}", progress.completed, progress.total)
+            if progress.browse_filled > 0 {
+                format!("下载中 {}/{}（浏览补齐 {}）", progress.completed, progress.total, progress.browse_filled)
+            } else {
+                format!("下载中 {}/{}", progress.completed, progress.total)
+            }
         } else {
             format!("{} ({}/{})", progress.status, progress.completed, progress.total)
         };
@@ -3459,6 +3463,10 @@ pub struct ScanWaybackRequest {
     /// 扫描模式："fast"（默认、单 layer）或 "fine"（多 layer、更准但更慢）
     #[serde(default)]
     pub scan_mode: Option<String>,
+    #[serde(default)]
+    pub release_date_from: Option<String>,
+    #[serde(default)]
+    pub release_date_to: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3480,7 +3488,12 @@ pub async fn scan_wayback_metadata(
     // 1. 缓存优先（除非强制刷新）
     if !req.force_refresh {
         if let Some(cached) = crate::wayback_metadata::try_load_cache(&req.bbox, req.zoom_min, req.zoom_max, &scan_mode) {
-            return Ok(ScanWaybackResponse::Result(cached));
+            let view = crate::wayback_metadata::filter_result_by_date(
+                cached,
+                req.release_date_from.as_deref(),
+                req.release_date_to.as_deref(),
+            );
+            return Ok(ScanWaybackResponse::Result(view));
         }
     }
 
@@ -3591,10 +3604,12 @@ pub async fn download_wayback_incremental(
             .unwrap_or(default_task_name);
         // 输出文件按拍摄日期命名，避免多个任务覆盖同一文件
         let safe_date = fp.capture_date_str.replace('-', "");
+        let safe_release = fp.release_date.replace('-', "");
         let task_save_path = format!(
-            "{}_{}_{}m.{}",
+            "{}_{}_{}_{}m.{}",
             strip_ext(&req.save_path),
             safe_date,
+            safe_release,
             (fp.resolution_m * 100.0).round() as i64,
             ext_of(&req.save_path).unwrap_or_else(|| req.format.clone()),
         );

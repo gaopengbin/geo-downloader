@@ -271,6 +271,8 @@ export interface WaybackScanRequest {
   force_refresh?: boolean
   proxy?: Nullable<string>
   scan_mode?: 'fast' | 'fine' | 'official'
+  release_date_from?: Nullable<string>
+  release_date_to?: Nullable<string>
   [key: string]: unknown
 }
 
