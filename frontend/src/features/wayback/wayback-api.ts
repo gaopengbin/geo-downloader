@@ -8,7 +8,6 @@ import type {
   WaybackIncrementalResult,
   WaybackScanProgress,
   WaybackScanRequest,
-  WaybackVersion,
   WaybackVersionsResponse,
 } from '@/types/api'
 
