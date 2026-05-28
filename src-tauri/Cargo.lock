@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "geo-downloader"
-version = "3.5.1"
+version = "3.5.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
