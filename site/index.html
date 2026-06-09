@@ -67,6 +67,7 @@
         <a href="#screenshots" class="hover:text-blue-600 transition">截图</a>
         <a href="#comparison" class="hover:text-blue-600 transition">对比</a>
         <a href="#download" class="hover:text-blue-600 transition">下载</a>
+        <a href="./history.html" class="hover:text-blue-600 transition">历史版本</a>
         <a href="#community" class="hover:text-blue-600 transition">社区</a>
         <a href="./disclaimer.html" class="hover:text-blue-600 transition">免责声明</a>
         <a href="https://github.com/gaopengbin/geo-downloader" target="_blank" class="hover:text-blue-600 transition flex items-center gap-1">
@@ -273,12 +274,25 @@
       <h2 class="text-3xl font-bold mb-4">立即下载</h2>
       <p class="text-gray-500 mb-2">当前最新版本：<span id="latest-version" class="font-mono text-blue-600">加载中...</span></p>
       <p class="text-gray-400 text-sm mb-4" id="download-stats"></p>
+
+      <!-- 线路切换 -->
+      <div class="inline-flex items-center gap-1 p-1 bg-gray-100 rounded-lg mt-2 mb-2">
+        <button id="src-mirror" class="px-4 py-1.5 rounded-md text-sm font-medium transition bg-white text-blue-600 shadow-sm" data-src="mirror">
+          国内高速 <span class="text-xs text-gray-400 font-normal">(阿里云)</span>
+        </button>
+        <button id="src-github" class="px-4 py-1.5 rounded-md text-sm font-medium transition text-gray-600 hover:text-gray-900" data-src="github">
+          GitHub <span class="text-xs text-gray-400 font-normal">(海外)</span>
+        </button>
+      </div>
+
       <div id="download-grid" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-8">
         <!-- JS 动态填充 -->
       </div>
 
       <p class="mt-8 text-sm text-gray-400">
-        或前往 <a href="https://github.com/gaopengbin/geo-downloader/releases" target="_blank" class="text-blue-600 hover:underline">GitHub Releases</a> 查看所有版本
+        <a href="./history.html" class="text-blue-600 hover:underline">查看历史版本</a>
+        <span class="mx-2">·</span>
+        <a href="https://github.com/gaopengbin/geo-downloader/releases" target="_blank" class="text-blue-600 hover:underline">GitHub Releases</a>
       </p>
     </div>
   </section>
@@ -330,21 +344,21 @@
     const REPO = 'gaopengbin/geo-downloader';
     const API = `https://api.github.com/repos/${REPO}/releases/latest`;
     const MIRROR_BASE = 'http://8.140.249.31:8080/packages/latest/';
+    const GITHUB_DL_BASE = `https://github.com/${REPO}/releases/download/`;
 
-    // 静态 fallback — 每次发版时更新这里
     const FALLBACK_VERSION = 'v3.5.3';
     const FALLBACK_ASSETS = [
-      { name: 'GeoDownloader_3.5.3_windows_x64-setup.exe',   size: 0, os: 'windows', label: 'Windows (EXE)' },
-      { name: 'GeoDownloader_3.5.3_macos_arm64.dmg',         size: 0, os: 'macos',   label: 'macOS (Apple Silicon)' },
-      { name: 'GeoDownloader_3.5.3_macos_x64.dmg',           size: 0, os: 'macos',   label: 'macOS (Intel)' },
-      { name: 'GeoDownloader_3.5.3_linux_amd64.deb',         size: 0, os: 'linux',   label: 'Linux (deb)' },
-      { name: 'GeoDownloader_3.5.3_linux_amd64.AppImage',    size: 0, os: 'linux',   label: 'Linux (AppImage)' },
+      { name: 'GeoDownloader_3.5.3_windows_x64-setup.exe',   size: 8787480,  os: 'windows', label: 'Windows (EXE)' },
+      { name: 'GeoDownloader_3.5.3_macos_arm64.dmg',         size: 12302795, os: 'macos',   label: 'macOS (Apple Silicon)' },
+      { name: 'GeoDownloader_3.5.3_macos_x64.dmg',           size: 12752364, os: 'macos',   label: 'macOS (Intel)' },
+      { name: 'GeoDownloader_3.5.3_linux_amd64.deb',         size: 14010658, os: 'linux',   label: 'Linux (deb)' },
+      { name: 'GeoDownloader_3.5.3_linux_amd64.AppImage',    size: 92477944, os: 'linux',   label: 'Linux (AppImage)' },
     ];
 
     const PLATFORM_MAP = [
       { match: /\.msi$/i,           name: 'Windows (MSI)',         icon: winIcon(),   os: 'windows' },
       { match: /\.exe$/i,           name: 'Windows (EXE)',         icon: winIcon(),   os: 'windows' },
-      { match: /aarch64.*\.dmg$/i,  name: 'macOS (Apple Silicon)', icon: macIcon(),   os: 'macos' },
+      { match: /arm64.*\.dmg$/i,    name: 'macOS (Apple Silicon)', icon: macIcon(),   os: 'macos' },
       { match: /x64.*\.dmg$/i,      name: 'macOS (Intel)',         icon: macIcon(),   os: 'macos' },
       { match: /\.dmg$/i,           name: 'macOS',                 icon: macIcon(),   os: 'macos' },
       { match: /\.deb$/i,           name: 'Linux (deb)',           icon: linuxIcon(), os: 'linux' },
@@ -371,6 +385,7 @@
     }
 
     function formatSize(bytes) {
+      if (!bytes) return '';
       if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
       if (bytes > 1024) return (bytes / 1024).toFixed(0) + ' KB';
       return bytes + ' B';
@@ -382,10 +397,31 @@
       return linuxIcon();
     }
 
-    function renderCards(cards, version) {
+    // 当前状态
+    var currentSource = 'mirror';
+    var currentVersion = FALLBACK_VERSION;
+    var currentAssets = [];
+
+    function getDownloadUrl(asset, source) {
+      if (source === 'mirror') {
+        return MIRROR_BASE + asset.name;
+      }
+      return GITHUB_DL_BASE + currentVersion + '/' + asset.name;
+    }
+
+    function renderCards() {
       var userOS = detectOS();
       var grid = document.getElementById('download-grid');
-      var heroSet = false;
+
+      var cards = currentAssets.map(function(a) {
+        return {
+          url: getDownloadUrl(a, currentSource),
+          label: a.label,
+          icon: getOSIcon(a.os),
+          size: a.size,
+          isUserOS: a.os === userOS,
+        };
+      });
 
       cards.sort(function(a, b) { return (b.isUserOS ? 1 : 0) - (a.isUserOS ? 1 : 0); });
 
@@ -396,48 +432,44 @@
         var badge = c.isUserOS
           ? '<span class="ml-auto text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full shrink-0">推荐</span>'
           : '';
-        var sizeText = c.size ? formatSize(c.size) : '';
-        var mirrorBadge = c.mirror
-          ? '<span class="text-xs text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">国内高速</span>'
-          : '';
+        var sizeText = formatSize(c.size);
         return '<a href="' + c.url + '" '
           + 'class="flex items-center gap-4 p-5 rounded-xl border ' + highlight + ' hover:shadow-md transition group">'
           + '<div class="text-gray-400 group-hover:text-blue-600 transition shrink-0">' + c.icon + '</div>'
           + '<div class="text-left min-w-0">'
           + '<div class="font-medium text-gray-900 truncate">' + c.label + '</div>'
-          + '<div class="text-xs text-gray-400 mt-0.5 flex items-center gap-2">' + sizeText + mirrorBadge + '</div>'
+          + '<div class="text-xs text-gray-400 mt-0.5">' + sizeText + '</div>'
           + '</div>'
           + badge
           + '</a>';
       }).join('');
 
-      // 设置 hero 按钮
+      // hero 按钮
       for (var i = 0; i < cards.length; i++) {
         if (cards[i].isUserOS) {
           document.getElementById('hero-download-btn').href = cards[i].url;
-          document.getElementById('hero-download-text').textContent = '下载 ' + version + ' (' + cards[i].label + ')';
-          heroSet = true;
+          document.getElementById('hero-download-text').textContent = '下载 ' + currentVersion + ' (' + cards[i].label + ')';
           break;
         }
       }
-      if (!heroSet && cards.length > 0) {
-        document.getElementById('hero-download-btn').href = cards[0].url;
-        document.getElementById('hero-download-text').textContent = '下载 ' + version;
-      }
     }
 
-    function buildFallbackCards() {
-      var userOS = detectOS();
-      return FALLBACK_ASSETS.map(function(a) {
-        return {
-          url: MIRROR_BASE + a.name,
-          label: a.label,
-          icon: getOSIcon(a.os),
-          size: a.size,
-          isUserOS: a.os === userOS,
-          mirror: true
-        };
-      });
+    // 线路切换
+    document.getElementById('src-mirror').addEventListener('click', function() { switchSource('mirror'); });
+    document.getElementById('src-github').addEventListener('click', function() { switchSource('github'); });
+
+    function switchSource(src) {
+      currentSource = src;
+      var mirrorBtn = document.getElementById('src-mirror');
+      var githubBtn = document.getElementById('src-github');
+      if (src === 'mirror') {
+        mirrorBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition bg-white text-blue-600 shadow-sm';
+        githubBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition text-gray-600 hover:text-gray-900';
+      } else {
+        githubBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition bg-white text-blue-600 shadow-sm';
+        mirrorBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition text-gray-600 hover:text-gray-900';
+      }
+      renderCards();
     }
 
     async function loadRelease() {
@@ -445,12 +477,10 @@
         var res = await fetch(API);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         var data = await res.json();
-        var version = data.tag_name;
-        document.getElementById('latest-version').textContent = version;
+        currentVersion = data.tag_name;
+        document.getElementById('latest-version').textContent = currentVersion;
 
-        var userOS = detectOS();
         var statsEl = document.getElementById('download-stats');
-
         var totalDownloads = 0;
         for (var k = 0; k < data.assets.length; k++) {
           totalDownloads += data.assets[k].download_count || 0;
@@ -478,34 +508,23 @@
           return /\.(msi|exe|dmg|deb|AppImage|rpm)$/i.test(a.name);
         });
 
-        var cards = [];
+        currentAssets = [];
         for (var i = 0; i < assets.length; i++) {
           var asset = assets[i];
           var pm = null;
           for (var j = 0; j < PLATFORM_MAP.length; j++) {
-            if (PLATFORM_MAP[j].match.test(asset.name)) {
-              pm = PLATFORM_MAP[j];
-              break;
-            }
+            if (PLATFORM_MAP[j].match.test(asset.name)) { pm = PLATFORM_MAP[j]; break; }
           }
           if (!pm) continue;
-          // 优先用国内镜像链接
-          cards.push({
-            url: MIRROR_BASE + asset.name,
-            label: pm.name,
-            icon: pm.icon,
-            size: asset.size,
-            isUserOS: pm.os === userOS,
-            mirror: true
-          });
+          currentAssets.push({ name: asset.name, size: asset.size, os: pm.os, label: pm.name });
         }
 
-        renderCards(cards, version);
-
+        renderCards();
       } catch (e) {
-        // GitHub API 不可用，使用静态 fallback
-        document.getElementById('latest-version').textContent = FALLBACK_VERSION;
-        renderCards(buildFallbackCards(), FALLBACK_VERSION);
+        currentVersion = FALLBACK_VERSION;
+        document.getElementById('latest-version').textContent = currentVersion;
+        currentAssets = FALLBACK_ASSETS;
+        renderCards();
       }
     }
 

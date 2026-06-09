@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>历史版本 — GeoDownloader</title>
+  <meta name="description" content="GeoDownloader 所有历史版本下载，支持国内高速镜像和 GitHub 双线路。">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html { scroll-behavior: smooth; }
+    .source-btn-active { background: white; color: #2563eb; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .source-btn { color: #6b7280; }
+    .source-btn:hover { color: #111827; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 antialiased">
+
+  <!-- Nav -->
+  <nav class="fixed top-0 w-full bg-white/80 backdrop-blur-md border-b border-gray-100 z-50">
+    <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="./" class="font-bold text-xl">
+        <span class="text-blue-600">GeoD</span><span class="text-gray-700">ownloader</span>
+      </a>
+      <div class="flex items-center gap-6 text-sm text-gray-600">
+        <a href="./" class="hover:text-blue-600 transition">首页</a>
+        <a href="./#download" class="hover:text-blue-600 transition">下载最新版</a>
+        <a href="https://github.com/gaopengbin/geo-downloader" target="_blank" class="hover:text-blue-600 transition">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pt-28 pb-20 max-w-4xl mx-auto px-6">
+    <h1 class="text-3xl font-bold mb-2">历史版本</h1>
+    <p class="text-gray-500 mb-6">所有正式发布版本，支持选择下载线路</p>
+
+    <!-- 线路切换 -->
+    <div class="inline-flex items-center gap-1 p-1 bg-gray-100 rounded-lg mb-8">
+      <button id="src-mirror" class="px-4 py-1.5 rounded-md text-sm font-medium transition source-btn-active" data-src="mirror">
+        国内高速 <span class="text-xs text-gray-400 font-normal">(阿里云)</span>
+      </button>
+      <button id="src-github" class="px-4 py-1.5 rounded-md text-sm font-medium transition source-btn" data-src="github">
+        GitHub <span class="text-xs text-gray-400 font-normal">(海外)</span>
+      </button>
+    </div>
+
+    <div id="releases-list">
+      <div class="text-gray-400 py-8 text-center">加载中...</div>
+    </div>
+  </main>
+
+  <footer class="bg-gray-900 text-gray-400 py-8">
+    <div class="max-w-6xl mx-auto px-6 text-center text-sm">
+      <a href="./" class="text-white hover:underline">GeoDownloader</a> &copy; 2024-2025
+    </div>
+  </footer>
+
+  <script>
+    var REPO = 'gaopengbin/geo-downloader';
+    var MIRROR_BASE = 'http://8.140.249.31:8080/packages/';
+    var GITHUB_DL_BASE = 'https://github.com/' + REPO + '/releases/download/';
+    var currentSource = 'mirror';
+    var releasesData = [];
+
+    var PLATFORM_MAP = [
+      { match: /\.msi$/i,         label: 'Windows (MSI)',         os: 'windows' },
+      { match: /\.exe$/i,         label: 'Windows (EXE)',         os: 'windows' },
+      { match: /arm64.*\.dmg$/i,  label: 'macOS (Apple Silicon)', os: 'macos' },
+      { match: /x64.*\.dmg$/i,    label: 'macOS (Intel)',         os: 'macos' },
+      { match: /\.dmg$/i,         label: 'macOS',                 os: 'macos' },
+      { match: /\.deb$/i,         label: 'Linux (deb)',           os: 'linux' },
+      { match: /\.AppImage$/i,    label: 'Linux (AppImage)',      os: 'linux' },
+      { match: /\.rpm$/i,         label: 'Linux (rpm)',           os: 'linux' },
+    ];
+
+    // 静态版本列表 — GitHub API 不可用时的兜底
+    var FALLBACK_RELEASES = [
+      { tag: 'v3.5.3', date: '2026-05-29', name: 'GeoDownloader v3.5.3' },
+      { tag: 'v3.5.2', date: '2026-05-28', name: 'GeoDownloader v3.5.2' },
+      { tag: 'v3.5.1', date: '2026-05-28', name: 'GeoDownloader v3.5.1' },
+      { tag: 'v3.5.0', date: '2026-05-20', name: 'GeoDownloader v3.5.0' },
+      { tag: 'v3.4.5', date: '2026-05-11', name: 'GeoDownloader v3.4.5' },
+      { tag: 'v3.4.4', date: '2026-05-08', name: 'GeoDownloader v3.4.4' },
+      { tag: 'v3.4.3', date: '2026-05-06', name: 'GeoDownloader v3.4.3' },
+      { tag: 'v3.4.2', date: '2026-05-06', name: 'GeoDownloader v3.4.2' },
+      { tag: 'v3.4.1', date: '2026-05-05', name: 'GeoDownloader v3.4.1' },
+      { tag: 'v3.4.0', date: '2026-05-05', name: 'GeoDownloader v3.4.0' },
+      { tag: 'v3.3.0', date: '2026-04-20', name: 'GeoDownloader v3.3.0' },
+      { tag: 'v3.2.2', date: '2026-04-14', name: 'GeoDownloader v3.2.2' },
+      { tag: 'v3.2.1', date: '2026-04-14', name: 'GeoDownloader v3.2.1' },
+      { tag: 'v3.2.0', date: '2026-04-10', name: 'GeoDownloader v3.2.0' },
+      { tag: 'v3.1.0', date: '2026-04-08', name: 'GeoDownloader v3.1.0' },
+      { tag: 'v3.0.0', date: '2026-04-07', name: 'GeoDownloader v3.0.0' },
+    ];
+
+    function formatSize(bytes) {
+      if (!bytes) return '';
+      if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+      return (bytes / 1024).toFixed(0) + ' KB';
+    }
+
+    function getUrl(filename, tag) {
+      if (currentSource === 'mirror') {
+        return MIRROR_BASE + tag + '/' + filename;
+      }
+      return GITHUB_DL_BASE + tag + '/' + filename;
+    }
+
+    function getLabel(filename) {
+      for (var i = 0; i < PLATFORM_MAP.length; i++) {
+        if (PLATFORM_MAP[i].match.test(filename)) return PLATFORM_MAP[i].label;
+      }
+      return filename;
+    }
+
+    function renderReleases() {
+      var container = document.getElementById('releases-list');
+
+      if (releasesData.length === 0) {
+        container.innerHTML = '<div class="text-gray-400 py-8 text-center">无法加载版本列表</div>';
+        return;
+      }
+
+      container.innerHTML = releasesData.map(function(rel, idx) {
+        var isLatest = idx === 0;
+        var headerBadge = isLatest ? '<span class="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">最新</span>' : '';
+
+        var filesHtml = '';
+        if (rel.assets && rel.assets.length > 0) {
+          filesHtml = rel.assets.map(function(a) {
+            var url = getUrl(a.name, rel.tag);
+            return '<a href="' + url + '" class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition border border-transparent hover:border-gray-200">'
+              + '<span class="text-sm font-medium text-gray-700">' + getLabel(a.name) + '</span>'
+              + '<span class="text-xs text-gray-400">' + formatSize(a.size) + '</span>'
+              + '</a>';
+          }).join('');
+        } else {
+          // fallback: guess filenames from version
+          var ver = rel.tag.replace('v', '');
+          var guessFiles = [
+            'GeoDownloader_' + ver + '_windows_x64-setup.exe',
+            'GeoDownloader_' + ver + '_macos_arm64.dmg',
+            'GeoDownloader_' + ver + '_macos_x64.dmg',
+            'GeoDownloader_' + ver + '_linux_amd64.deb',
+            'GeoDownloader_' + ver + '_linux_amd64.AppImage',
+          ];
+          filesHtml = guessFiles.map(function(f) {
+            var url = getUrl(f, rel.tag);
+            return '<a href="' + url + '" class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition border border-transparent hover:border-gray-200">'
+              + '<span class="text-sm font-medium text-gray-700">' + getLabel(f) + '</span>'
+              + '<span class="text-xs text-gray-400"></span>'
+              + '</a>';
+          }).join('');
+        }
+
+        return '<div class="bg-white rounded-xl border border-gray-100 shadow-sm mb-4 overflow-hidden">'
+          + '<div class="p-5 border-b border-gray-50 flex items-center justify-between">'
+          + '<div>'
+          + '<h2 class="font-semibold text-lg">' + rel.tag + headerBadge + '</h2>'
+          + '<p class="text-sm text-gray-400 mt-0.5">' + rel.date + '</p>'
+          + '</div>'
+          + '<a href="https://github.com/' + REPO + '/releases/tag/' + rel.tag + '" target="_blank" class="text-xs text-gray-400 hover:text-blue-600">Release Notes</a>'
+          + '</div>'
+          + '<div class="p-4 grid sm:grid-cols-2 gap-1">' + filesHtml + '</div>'
+          + '</div>';
+      }).join('');
+    }
+
+    // 线路切换
+    document.getElementById('src-mirror').addEventListener('click', function() { switchSource('mirror'); });
+    document.getElementById('src-github').addEventListener('click', function() { switchSource('github'); });
+
+    function switchSource(src) {
+      currentSource = src;
+      var mirrorBtn = document.getElementById('src-mirror');
+      var githubBtn = document.getElementById('src-github');
+      if (src === 'mirror') {
+        mirrorBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition source-btn-active';
+        githubBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition source-btn';
+      } else {
+        githubBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition source-btn-active';
+        mirrorBtn.className = 'px-4 py-1.5 rounded-md text-sm font-medium transition source-btn';
+      }
+      renderReleases();
+    }
+
+    async function loadReleases() {
+      try {
+        var res = await fetch('https://api.github.com/repos/' + REPO + '/releases?per_page=30');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        var data = await res.json();
+
+        releasesData = data
+          .filter(function(r) { return !r.prerelease && !r.draft && r.tag_name !== 'assets'; })
+          .map(function(r) {
+            var assets = r.assets.filter(function(a) {
+              return /\.(msi|exe|dmg|deb|AppImage|rpm)$/i.test(a.name);
+            }).map(function(a) {
+              return { name: a.name, size: a.size };
+            });
+            return {
+              tag: r.tag_name,
+              name: r.name,
+              date: r.published_at.split('T')[0],
+              assets: assets
+            };
+          });
+
+        renderReleases();
+      } catch (e) {
+        // GitHub API 不可用，用静态列表
+        releasesData = FALLBACK_RELEASES.map(function(r) {
+          return { tag: r.tag, name: r.name, date: r.date, assets: null };
+        });
+        renderReleases();
+      }
+    }
+
+    loadReleases();
+  </script>
+</body>
+</html>
