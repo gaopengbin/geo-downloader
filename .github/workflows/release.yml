@@ -200,19 +200,12 @@ jobs:
 
       - name: Create remote directories
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
         with:
           host: ${{ secrets.MIRROR_HOST }}
           username: ${{ secrets.MIRROR_USER }}
           password: ${{ secrets.MIRROR_PASSWORD }}
-          envs: VERSION
           script: |
-            powershell -Command "
-              New-Item -ItemType Directory -Force -Path \"C:\nginx-1.30.2\packages\v$env:VERSION\" | Out-Null
-              New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest' | Out-Null
-              New-Item -ItemType Directory -Force -Path (Join-Path $env:USERPROFILE 'temp_upload') | Out-Null
-            "
+            powershell -Command "New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\v${{ steps.version.outputs.VERSION }}' | Out-Null; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest' | Out-Null; New-Item -ItemType Directory -Force -Path 'C:\Users\${{ secrets.MIRROR_USER }}\temp_upload' | Out-Null"
 
       - name: SCP files to temp directory
         env:
@@ -228,27 +221,18 @@ jobs:
 
       - name: Move files to final location
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          VERSION: ${{ steps.version.outputs.VERSION }}
         with:
           host: ${{ secrets.MIRROR_HOST }}
           username: ${{ secrets.MIRROR_USER }}
           password: ${{ secrets.MIRROR_PASSWORD }}
-          envs: VERSION
           script: |
             powershell -Command "
-              $version = $env:VERSION
-              $src = Join-Path $env:USERPROFILE 'temp_upload'
-              $dest = \"C:\nginx-1.30.2\packages\v$version\"
+              $src = 'C:\Users\${{ secrets.MIRROR_USER }}\temp_upload'
+              $dest = 'C:\nginx-1.30.2\packages\v${{ steps.version.outputs.VERSION }}'
               $latest = 'C:\nginx-1.30.2\packages\latest'
-
-              Get-ChildItem $src | ForEach-Object {
-                Move-Item $_.FullName -Destination $dest -Force
-                Write-Host \"  Moved: $($_.Name)\"
-              }
-
-              Remove-Item \"$latest\*\" -Force -ErrorAction SilentlyContinue
-              Copy-Item \"$dest\*\" -Destination $latest -Force
+              Get-ChildItem $src | ForEach-Object { Move-Item $_.FullName -Destination $dest -Force }
+              Remove-Item (Join-Path $latest '*') -Force -ErrorAction SilentlyContinue
+              Copy-Item (Join-Path $dest '*') -Destination $latest -Force
               Remove-Item $src -Force -Recurse -ErrorAction SilentlyContinue
               Write-Host 'Done.'
             "

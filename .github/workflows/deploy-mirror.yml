@@ -23,30 +23,20 @@ jobs:
             --dir artifacts
           ls -la artifacts/
 
-      - name: Upload and deploy
+      - name: Create remote directories
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          VERSION: ${{ inputs.version }}
         with:
           host: ${{ secrets.MIRROR_HOST }}
           username: ${{ secrets.MIRROR_USER }}
           password: ${{ secrets.MIRROR_PASSWORD }}
-          envs: VERSION
-          command_timeout: 30m
           script: |
-            powershell -Command "
-              New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\v$env:VERSION' | Out-Null
-              New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest' | Out-Null
-              New-Item -ItemType Directory -Force -Path 'C:\temp_upload' | Out-Null
-              Write-Host 'Directories ready.'
-            "
+            powershell -Command "New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\v${{ inputs.version }}' | Out-Null; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest' | Out-Null; New-Item -ItemType Directory -Force -Path 'C:\Users\${{ secrets.MIRROR_USER }}\temp_upload' | Out-Null; Write-Host 'Ready.'"
 
       - name: SCP files to temp directory
         env:
           SSHPASS: ${{ secrets.MIRROR_PASSWORD }}
         run: |
           sudo apt-get install -y sshpass
-          # scp to user home relative path
           for f in artifacts/*; do
             echo "Uploading $(basename $f)..."
             sshpass -e scp -o StrictHostKeyChecking=no \
@@ -57,33 +47,18 @@ jobs:
 
       - name: Move files to final location
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          VERSION: ${{ inputs.version }}
         with:
           host: ${{ secrets.MIRROR_HOST }}
           username: ${{ secrets.MIRROR_USER }}
           password: ${{ secrets.MIRROR_PASSWORD }}
-          envs: VERSION
           script: |
             powershell -Command "
-              $version = $env:VERSION
-              $src = Join-Path $env:USERPROFILE 'temp_upload'
-              $dest = \"C:\nginx-1.30.2\packages\v$version\"
+              $src = 'C:\Users\${{ secrets.MIRROR_USER }}\temp_upload'
+              $dest = 'C:\nginx-1.30.2\packages\v${{ inputs.version }}'
               $latest = 'C:\nginx-1.30.2\packages\latest'
-
-              # Move to versioned directory
-              Get-ChildItem $src | ForEach-Object {
-                Move-Item $_.FullName -Destination $dest -Force
-                Write-Host \"  Moved: $($_.Name)\"
-              }
-
-              # Copy to latest
-              Remove-Item \"$latest\*\" -Force -ErrorAction SilentlyContinue
-              Copy-Item \"$dest\*\" -Destination $latest -Force
-
-              # Cleanup
+              Get-ChildItem $src | ForEach-Object { Move-Item $_.FullName -Destination $dest -Force; Write-Host ('  Moved: ' + $_.Name) }
+              Remove-Item (Join-Path $latest '*') -Force -ErrorAction SilentlyContinue
+              Copy-Item (Join-Path $dest '*') -Destination $latest -Force
               Remove-Item $src -Force -Recurse -ErrorAction SilentlyContinue
-
-              Write-Host 'Done. Files in latest:'
-              Get-ChildItem $latest | ForEach-Object { Write-Host \"  $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)\" }
+              Write-Host 'Done. Latest:'; Get-ChildItem $latest | ForEach-Object { Write-Host ('  ' + $_.Name + ' (' + [math]::Round($_.Length / 1MB, 1) + ' MB)') }
             "
