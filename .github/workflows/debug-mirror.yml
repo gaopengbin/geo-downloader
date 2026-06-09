@@ -1,0 +1,44 @@
+name: Debug Mirror Path
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check where scp writes
+        env:
+          SSHPASS: ${{ secrets.MIRROR_PASSWORD }}
+        run: |
+          sudo apt-get install -y sshpass
+          echo "hello" > testfile.txt
+          sshpass -e scp -o StrictHostKeyChecking=no \
+            testfile.txt \
+            "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}:testfile.txt"
+
+      - name: Find file on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.MIRROR_HOST }}
+          username: ${{ secrets.MIRROR_USER }}
+          password: ${{ secrets.MIRROR_PASSWORD }}
+          script: |
+            powershell -Command "
+              Write-Host 'HOME:' $env:USERPROFILE
+              Write-Host 'PWD:' (Get-Location).Path
+              $locations = @(
+                'C:\Users\${{ secrets.MIRROR_USER }}\testfile.txt',
+                'C:\testfile.txt',
+                'C:\Users\${{ secrets.MIRROR_USER }}\.ssh\testfile.txt',
+                (Join-Path $env:USERPROFILE 'testfile.txt')
+              )
+              foreach ($p in $locations) {
+                if (Test-Path $p) { Write-Host \"FOUND: $p\" }
+              }
+              # broader search
+              Get-ChildItem -Path 'C:\Users' -Recurse -Filter 'testfile.txt' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('FOUND: ' + $_.FullName) }
+              Get-ChildItem -Path 'C:\' -Filter 'testfile.txt' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('FOUND: ' + $_.FullName) }
+              # Also look for GeoDownloader files
+              Get-ChildItem -Path 'C:\Users' -Recurse -Filter 'GeoDownloader*' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('GEO: ' + $_.FullName) }
+            "
