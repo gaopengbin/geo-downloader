@@ -1107,7 +1107,7 @@ function closeUpdateDialog() {
 
 function switchSponsorTab(tab) {
     document.querySelectorAll('.sponsor-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-    const remoteBase = 'https://github.com/gaopengbin/geo-downloader/releases/download/assets';
+    const remoteBase = 'https://laogao.xyz/packages/qr-assets';
     const remote = tab === 'wx' ? `${remoteBase}/wx.jpg` : `${remoteBase}/zfb.jpg`;
     const local = tab === 'wx' ? './images/wx.jpg' : './images/zfb.jpg';
     const imgEl = document.getElementById('sponsor-qr-img');

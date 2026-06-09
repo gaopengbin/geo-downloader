@@ -1,55 +1,40 @@
-# 二维码更新指南（无需 commit 代码）
+# 二维码更新指南
 
-所有二维码（公众号 / 交流群 / 微信收款 / 支付宝收款）统一托管在 GitHub Releases 的 `assets` tag 下，桌面 App、官网、README、legacy 静态站全部引用同一组远程 URL。**更新二维码不需要改代码、不需要 commit、不需要发版**。
+所有二维码（公众号 / 交流群 / 微信收款 / 支付宝收款）托管在镜像服务器 `https://laogao.xyz/packages/qr-assets/`，同时 GitHub Releases 的 `assets` tag 保留备份。桌面 App、官网、README、legacy 静态站全部引用镜像 URL。
 
-## 一次性初始化（仅首次）
+## 更新流程
 
-1. 在仓库 https://github.com/gaopengbin/geo-downloader 创建一个永久 release：
-   - Tag：`assets`
-   - Title：`QR Code Assets`
-   - Body：`二维码资源仓库，供桌面 App / 官网 / README 引用。请勿删除此 release。`
-   - 不要勾选 "Set as the latest release"
-2. 把当前的 4 张图作为 asset 上传（**文件名必须严格保持下面这几个**）：
-   - `gzh.jpg`（公众号）
-   - `wxq_sq.png`（技术交流群）
-   - `wx.jpg`（微信收款码）
-   - `zfb.jpg`（支付宝收款码）
+### 方法 A：直接替换服务器文件
 
-## 日常更新流程（核心）
+在服务器 `C:\nginx-1.30.2\packages\qr-assets\` 下替换对应图片（保持同名），即时生效。
 
-### 方法 A：浏览器（推荐，无需任何工具）
+文件名：
+- `gzh.jpg`（公众号）
+- `wxq_sq.png`（技术交流群）
+- `wx.jpg`（微信收款码）
+- `zfb.jpg`（支付宝收款码）
 
-1. 打开 https://github.com/gaopengbin/geo-downloader/releases/tag/assets
-2. 点右上角 `Edit`（铅笔图标）
-3. 找到要替换的图，点 `×` 删除
-4. 把新图拖进 attachments 区域（**保持同名**）
-5. 点底部 `Update release` 保存
-6. 完成。所有平台立即生效（GitHub raw 链接无 CDN 缓存）
+### 方法 B：GitHub Release + 同步到服务器
 
-### 方法 B：gh CLI（脚本化）
+1. 更新 GitHub Release（tag: `assets`）里的图片
+2. 下载后通过 SFTP 上传到服务器 `C:\nginx-1.30.2\packages\qr-assets\`
 
-```powershell
-gh release upload assets wxq_sq.png --clobber --repo gaopengbin/geo-downloader
-```
-
-`--clobber` 会覆盖同名文件。
-
-## 引用 URL（已硬编码到代码中，仅供参考）
+## 引用 URL（已硬编码到代码中）
 
 ```
-https://github.com/gaopengbin/geo-downloader/releases/download/assets/gzh.jpg
-https://github.com/gaopengbin/geo-downloader/releases/download/assets/wxq_sq.png
-https://github.com/gaopengbin/geo-downloader/releases/download/assets/wx.jpg
-https://github.com/gaopengbin/geo-downloader/releases/download/assets/zfb.jpg
+https://laogao.xyz/packages/qr-assets/gzh.jpg
+https://laogao.xyz/packages/qr-assets/wxq_sq.png
+https://laogao.xyz/packages/qr-assets/wx.jpg
+https://laogao.xyz/packages/qr-assets/zfb.jpg
 ```
 
 ## 兜底机制
 
 - 桌面 App：`<img onError>` 在远程加载失败时自动回退到打包进 App 的本地图（`frontend/public/images/`）
 - 官网 / legacy 静态站：HTML `onerror` 内联回退到本地 `images/`
-- README：GitHub 读者直接看远程 URL，加载失败显示 alt 文本
+- README：加载失败显示 alt 文本
 
-**因此：本地 `frontend/public/images/`、`site/images/`、`static/images/` 下的图作为兜底图保留，等几个月没人反映问题再考虑删除。**
+**因此：本地 `frontend/public/images/`、`site/images/`、`static/images/` 下的图作为兜底图保留。**
 
 ## 涉及文件清单
 
@@ -61,8 +46,3 @@ https://github.com/gaopengbin/geo-downloader/releases/download/assets/zfb.jpg
 | `site/index.html` | 官网公众号 + 交流群 |
 | `static/index.html` + `static/js/app.js` | legacy 静态站 |
 | `README.md` | 微信 + 支付宝赞赏码 |
-
-如需新增二维码品类（如 QQ 群、Discord 等）：
-1. 在 release `assets` 上传新图
-2. 在 `frontend/src/lib/qr-assets.ts` 的 `QR_ASSETS` 对象里加一项
-3. 对应组件里 `<img src={QR_ASSETS.xxx.remote} onError={(e) => fallbackToLocal(e, 'xxx')} />`

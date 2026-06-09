@@ -167,9 +167,9 @@ geo-downloader/
 - 微信公众号 / 交流群
 
 <p align="center">
-  <img src="https://github.com/gaopengbin/geo-downloader/releases/download/assets/gzh.jpg" alt="公众号" width="200">
+  <img src="https://laogao.xyz/packages/qr-assets/gzh.jpg" alt="公众号" width="200">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://github.com/gaopengbin/geo-downloader/releases/download/assets/wxq_sq.png" alt="微信群" width="200">
+  <img src="https://laogao.xyz/packages/qr-assets/wxq_sq.png" alt="微信群" width="200">
 </p>
 
 ---
@@ -196,9 +196,9 @@ geo-downloader/
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡。
 
 <p align="center">
-  <img src="https://github.com/gaopengbin/geo-downloader/releases/download/assets/wx.jpg" alt="微信赞赏" width="220">
+  <img src="https://laogao.xyz/packages/qr-assets/wx.jpg" alt="微信赞赏" width="220">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://github.com/gaopengbin/geo-downloader/releases/download/assets/zfb.jpg" alt="支付宝赞赏" width="220">
+  <img src="https://laogao.xyz/packages/qr-assets/zfb.jpg" alt="支付宝赞赏" width="220">
 </p>
 
 ---

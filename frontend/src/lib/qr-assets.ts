@@ -1,16 +1,15 @@
 /**
- * 二维码远程资源（GitHub Releases 托管）
+ * 二维码远程资源（镜像服务器托管）
  *
- * 更新方式（无需 commit 代码）：
- *   1. 打开 https://github.com/gaopengbin/geo-downloader/releases/tag/assets
- *   2. 点击 "Edit" → 删掉旧图 → 拖拽新图（保持同名）→ Save
- *   3. 全平台（桌面 App / 官网 / README）即时生效
+ * 更新方式：
+ *   1. 替换服务器上 C:\nginx-1.30.2\packages\qr-assets\ 下的图片（保持同名）
+ *   2. 或更新 GitHub Release (tag: assets) 后手动同步到服务器
  *
- * 加载失败时会自动回退到打包进 App 的本地图（保证断网或 release 资源被删时不裂图）。
+ * 加载失败时会自动回退到打包进 App 的本地图（保证断网或服务器不可用时不裂图）。
  */
 
 const REMOTE_BASE =
-  'https://github.com/gaopengbin/geo-downloader/releases/download/assets'
+  'https://laogao.xyz/packages/qr-assets'
 
 export type QrKey = 'gzh' | 'wxq' | 'wx' | 'zfb'
 
