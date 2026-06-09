@@ -178,33 +178,44 @@ jobs:
     needs: [build, release]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Get version
         id: version
         run: |
-          VERSION=$(ls artifacts/ | head -1 | sed 's/GeoDownloader_\([^_]*\)_.*/\1/')
+          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\(.*\)".*/\1/')
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Upload to mirror server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.MIRROR_HOST }}
-          username: ${{ secrets.MIRROR_USER }}
-          password: ${{ secrets.MIRROR_PASSWORD }}
-          source: "artifacts/*"
-          target: "C:/nginx-1.30.2/packages/v${{ steps.version.outputs.VERSION }}"
-          strip_components: 1
-
-      - name: Copy latest
+      - name: Deploy to mirror server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.MIRROR_HOST }}
           username: ${{ secrets.MIRROR_USER }}
           password: ${{ secrets.MIRROR_PASSWORD }}
           script: |
-            powershell -Command "Remove-Item 'C:\nginx-1.30.2\packages\latest\*' -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest'; Copy-Item 'C:\nginx-1.30.2\packages\v${{ steps.version.outputs.VERSION }}\*' -Destination 'C:\nginx-1.30.2\packages\latest\'"
+            powershell -Command "
+              $version = '${{ steps.version.outputs.VERSION }}'
+              $repo = '${{ github.repository }}'
+              $dir = \"C:\nginx-1.30.2\packages\v$version\"
+              $latest = 'C:\nginx-1.30.2\packages\latest'
+
+              New-Item -ItemType Directory -Force -Path $dir | Out-Null
+              New-Item -ItemType Directory -Force -Path $latest | Out-Null
+
+              $headers = @{ 'User-Agent' = 'GeoDownloader-Mirror' }
+              $api = \"https://api.github.com/repos/$repo/releases/tags/v$version\"
+              $release = Invoke-RestMethod -Uri $api -Headers $headers
+              $assets = $release.assets | Where-Object { $_.name -match '\.(exe|msi|dmg|deb|AppImage|rpm)$' }
+
+              foreach ($asset in $assets) {
+                $outFile = Join-Path $dir $asset.name
+                Write-Host \"Downloading $($asset.name)...\"
+                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outFile -Headers $headers
+                Write-Host \"  -> Done ($([math]::Round((Get-Item $outFile).Length / 1MB, 1)) MB)\"
+              }
+
+              Remove-Item \"$latest\*\" -Force -ErrorAction SilentlyContinue
+              Copy-Item \"$dir\*\" -Destination $latest -Force
+              Write-Host 'All done.'
+            "

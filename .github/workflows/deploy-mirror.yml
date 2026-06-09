@@ -1,8 +1,5 @@
 name: Deploy Mirror (Manual)
 
-# 手动触发：从已有 GitHub Release 下载安装包并推送到镜像服务器
-# 用途：测试镜像服务器配置 / 补传历史版本
-
 on:
   workflow_dispatch:
     inputs:
@@ -15,32 +12,36 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Download release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p artifacts
-          cd artifacts
-          gh release download "v${{ inputs.version }}" \
-            --repo ${{ github.repository }} \
-            --pattern "GeoDownloader_*"
-          ls -la
-
-      - name: Upload to mirror server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.MIRROR_HOST }}
-          username: ${{ secrets.MIRROR_USER }}
-          password: ${{ secrets.MIRROR_PASSWORD }}
-          source: "artifacts/*"
-          target: "C:/nginx-1.30.2/packages/v${{ inputs.version }}"
-          strip_components: 1
-
-      - name: Copy to latest
+      - name: Deploy to mirror server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.MIRROR_HOST }}
           username: ${{ secrets.MIRROR_USER }}
           password: ${{ secrets.MIRROR_PASSWORD }}
           script: |
-            powershell -Command "Remove-Item 'C:\nginx-1.30.2\packages\latest\*' -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest'; Copy-Item 'C:\nginx-1.30.2\packages\v${{ inputs.version }}\*' -Destination 'C:\nginx-1.30.2\packages\latest\' -Force"
+            powershell -Command "
+              $version = '${{ inputs.version }}'
+              $repo = '${{ github.repository }}'
+              $dir = \"C:\nginx-1.30.2\packages\v$version\"
+              $latest = 'C:\nginx-1.30.2\packages\latest'
+
+              New-Item -ItemType Directory -Force -Path $dir | Out-Null
+              New-Item -ItemType Directory -Force -Path $latest | Out-Null
+
+              $headers = @{ 'User-Agent' = 'GeoDownloader-Mirror' }
+              $api = \"https://api.github.com/repos/$repo/releases/tags/v$version\"
+              $release = Invoke-RestMethod -Uri $api -Headers $headers
+              $assets = $release.assets | Where-Object { $_.name -match '\.(exe|msi|dmg|deb|AppImage|rpm)$' }
+
+              foreach ($asset in $assets) {
+                $outFile = Join-Path $dir $asset.name
+                Write-Host \"Downloading $($asset.name)...\"
+                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $outFile -Headers $headers
+                Write-Host \"  -> Done ($([math]::Round((Get-Item $outFile).Length / 1MB, 1)) MB)\"
+              }
+
+              Remove-Item \"$latest\*\" -Force -ErrorAction SilentlyContinue
+              Copy-Item \"$dir\*\" -Destination $latest -Force
+              Write-Host 'All done. Latest:'
+              Get-ChildItem $latest | ForEach-Object { Write-Host \"  $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)\" }
+            "
