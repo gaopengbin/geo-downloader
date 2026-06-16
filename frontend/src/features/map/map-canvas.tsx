@@ -82,6 +82,60 @@ function fillTileUrl(template: string, coords: { z: number; x: number; y: number
     .replace('{y}', String(coords.y))
 }
 
+function installClickPinnedLayersControl(
+  container: HTMLElement,
+  toggle: HTMLElement | null | undefined,
+) {
+  L.DomEvent.disableClickPropagation(container)
+  L.DomEvent.disableScrollPropagation(container)
+
+  const expand = () => {
+    L.DomUtil.addClass(container, 'leaflet-control-layers-expanded')
+  }
+  const collapse = () => {
+    L.DomUtil.removeClass(container, 'leaflet-control-layers-expanded')
+  }
+  const isExpanded = () =>
+    L.DomUtil.hasClass(container, 'leaflet-control-layers-expanded')
+
+  const onToggleClick = (e: Event) => {
+    L.DomEvent.preventDefault(e)
+    L.DomEvent.stopPropagation(e)
+    if (isExpanded()) collapse()
+    else expand()
+  }
+  const onToggleKeyDown = (e: Event) => {
+    if (!(e instanceof KeyboardEvent)) return
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    onToggleClick(e)
+  }
+  const onDocumentPointerDown = (e: PointerEvent) => {
+    const target = e.target
+    if (target instanceof Node && container.contains(target)) return
+    collapse()
+  }
+  const onEscape = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') collapse()
+  }
+
+  if (toggle) {
+    L.DomEvent.on(toggle, 'click', onToggleClick)
+    L.DomEvent.on(toggle, 'keydown', onToggleKeyDown)
+  }
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
+  document.addEventListener('keydown', onEscape, true)
+
+  return () => {
+    if (toggle) {
+      L.DomEvent.off(toggle, 'click', onToggleClick)
+      L.DomEvent.off(toggle, 'keydown', onToggleKeyDown)
+    }
+    document.removeEventListener('pointerdown', onDocumentPointerDown, true)
+    document.removeEventListener('keydown', onEscape, true)
+    collapse()
+  }
+}
+
 function probeImageUrl(url: string, timeoutMs = 4500): Promise<boolean> {
   if (typeof Image === 'undefined') return Promise.resolve(false)
   return new Promise((resolve) => {
@@ -159,7 +213,6 @@ export function MapCanvas() {
   const mvtLayerRef = useRef<L.Layer | null>(null)
   const mvtKeyRef = useRef<string | null>(null)
   const currentBaseLayerKeyRef = useRef<string | null>(null)
-  const layerControlRef = useRef<L.Control.Layers | null>(null)
   const customControlRef = useRef<L.Control | null>(null)
   const customControlRadiosRef = useRef<HTMLInputElement[]>([])
   const overlayLayersRef = useRef<L.TileLayer[]>([])
@@ -207,7 +260,10 @@ export function MapCanvas() {
     staleTime: 5 * 60 * 1000,
     select: (data) => data,
   })
-  const waybackVersions = waybackVersionsQuery.data?.versions ?? []
+  const waybackVersions = useMemo(
+    () => waybackVersionsQuery.data?.versions ?? [],
+    [waybackVersionsQuery.data?.versions],
+  )
   const waybackFromCache = waybackVersionsQuery.data?.from_cache ?? false
   const selectionSyncKey = useMemo(
     () => JSON.stringify({ externalRevision, bounds, polygon }),
@@ -519,10 +575,6 @@ export function MapCanvas() {
       if (map.hasLayer(l)) map.removeLayer(l)
     })
     overlayLayersRef.current = []
-    if (layerControlRef.current) {
-      layerControlRef.current.remove()
-      layerControlRef.current = null
-    }
     if (customControlRef.current) {
       customControlRef.current.remove()
       customControlRef.current = null
@@ -567,6 +619,7 @@ export function MapCanvas() {
       const desc = [...ascendingWaybackVersions].reverse() // 最新优先
       // group: year → month → versions
       const grouped = new Map<string, Map<string, typeof desc>>()
+      let waybackPanelCleanup: (() => void) | undefined
       for (const v of desc) {
         const date = v.date || ''
         const year = date.slice(0, 4) || '其他'
@@ -601,11 +654,7 @@ export function MapCanvas() {
             'leaflet-control-layers-list',
             container,
           )
-          // 默认折叠面板，hover 展开（沿用 leaflet 原生行为）
-          const expand = () => L.DomUtil.addClass(container, 'leaflet-control-layers-expanded')
-          const collapse = () => L.DomUtil.removeClass(container, 'leaflet-control-layers-expanded')
-          L.DomEvent.on(container, 'mouseenter', expand)
-          L.DomEvent.on(container, 'mouseleave', collapse)
+          waybackPanelCleanup = installClickPinnedLayersControl(container, toggle)
 
           // base 区域
           const baseDiv = L.DomUtil.create('div', 'leaflet-control-layers-base', list)
@@ -710,10 +759,11 @@ export function MapCanvas() {
       const ctrl = new Custom()
       ctrl.addTo(map)
       customControlRef.current = ctrl
+      return () => {
+        waybackPanelCleanup?.()
+      }
     } else {
-      // ---------- 普通 mode：用原生 L.Control.Layers ----------
-      const baseMaps: Record<string, L.TileLayer> = {}
-      const labelToKey = new Map<string, string>()
+      // ---------- Normal mode: custom click-pinned LayersControl ----------
       const sources = sourcesQuery.data ?? {}
       const cache = baseLayersRef.current
       const keys = Object.keys(sources).sort((a, b) =>
@@ -721,51 +771,92 @@ export function MapCanvas() {
           (sources[b] as { name?: string }).name || '',
         ),
       )
-      for (const key of keys) {
-        const layer = cache.get(key)
-        if (!layer) continue
-        const label = (sources[key] as { name?: string }).name || key
-        baseMaps[label] = layer
-        labelToKey.set(label, `src:${key}`)
-      }
+      let normalPanelCleanup: (() => void) | undefined
+      const selectedSourceKey = desiredBaseKey?.startsWith('src:')
+        ? desiredBaseKey.slice(4)
+        : null
+      const Custom = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd: () => {
+          const container = L.DomUtil.create(
+            'div',
+            'leaflet-control-layers leaflet-control',
+          )
+          const toggle = L.DomUtil.create(
+            'a',
+            'leaflet-control-layers-toggle',
+            container,
+          )
+          toggle.href = '#'
+          toggle.title = '\u56fe\u5c42'
+          toggle.setAttribute('role', 'button')
+          toggle.setAttribute('aria-label', '\u56fe\u5c42')
 
-      layerControlRef.current = L.control
-        .layers(
-          baseMaps,
-          {
-            '天地图 影像标注': ciaLayer,
-            '天地图 矢量标注': cvaLayer,
-          },
-          { position: 'topleft', collapsed: true },
-        )
-        .addTo(map)
+          const list = L.DomUtil.create(
+            'section',
+            'leaflet-control-layers-list',
+            container,
+          )
+          normalPanelCleanup = installClickPinnedLayersControl(container, toggle)
 
-      const overlayLabelToKey: Record<string, string> = {
-        '天地图 影像标注': 'cia',
-        '天地图 矢量标注': 'cva',
-      }
-      const onBaseChange = (e: L.LayersControlEvent) => {
-        const fullKey = labelToKey.get(e.name)
-        if (!fullKey) return
-        if (fullKey.startsWith('src:')) {
-          setSelectedSourceForMode(mode as AppMode, fullKey.slice(4))
-        }
-      }
-      const onOverlayAdd = (e: L.LayersControlEvent) => {
-        const k = overlayLabelToKey[e.name]
-        if (k) setOverlayVisibility(mode as AppMode, k, true)
-      }
-      const onOverlayRemove = (e: L.LayersControlEvent) => {
-        const k = overlayLabelToKey[e.name]
-        if (k) setOverlayVisibility(mode as AppMode, k, false)
-      }
-      map.on('baselayerchange', onBaseChange)
-      map.on('overlayadd', onOverlayAdd)
-      map.on('overlayremove', onOverlayRemove)
+          const baseDiv = L.DomUtil.create('div', 'leaflet-control-layers-base', list)
+          for (const key of keys) {
+            const layer = cache.get(key)
+            if (!layer) continue
+            const source = sources[key] as { name?: string }
+            const lbl = document.createElement('label')
+            lbl.style.display = 'block'
+            lbl.style.cursor = 'pointer'
+            const radio = document.createElement('input')
+            radio.type = 'radio'
+            radio.name = 'base-layer-' + mode
+            radio.value = key
+            radio.style.marginRight = '6px'
+            radio.checked = key === selectedSourceKey || map.hasLayer(layer)
+            radio.addEventListener('change', () => {
+              if (!radio.checked) return
+              setSelectedSourceForMode(mode as AppMode, key)
+            })
+            lbl.appendChild(radio)
+            lbl.appendChild(document.createTextNode(source.name || key))
+            baseDiv.appendChild(lbl)
+          }
+
+          const sep = L.DomUtil.create('div', 'leaflet-control-layers-separator', list)
+          sep.setAttribute('aria-hidden', 'true')
+          const overlayDiv = L.DomUtil.create(
+            'div',
+            'leaflet-control-layers-overlays',
+            list,
+          )
+          const makeOverlay = (label: string, layer: L.TileLayer, key: string) => {
+            const lbl = document.createElement('label')
+            lbl.style.display = 'block'
+            lbl.style.cursor = 'pointer'
+            const cb = document.createElement('input')
+            cb.type = 'checkbox'
+            cb.style.marginRight = '6px'
+            cb.checked = map.hasLayer(layer)
+            cb.addEventListener('change', () => {
+              if (cb.checked) layer.addTo(map)
+              else map.removeLayer(layer)
+              setOverlayVisibility(mode as AppMode, key, cb.checked)
+            })
+            lbl.appendChild(cb)
+            lbl.appendChild(document.createTextNode(label))
+            overlayDiv.appendChild(lbl)
+          }
+          makeOverlay('\u5929\u5730\u56fe \u5f71\u50cf\u6807\u6ce8', ciaLayer, 'cia')
+          makeOverlay('\u5929\u5730\u56fe \u77e2\u91cf\u6807\u6ce8', cvaLayer, 'cva')
+
+          return container
+        },
+      })
+      const ctrl = new Custom()
+      ctrl.addTo(map)
+      customControlRef.current = ctrl
       return () => {
-        map.off('baselayerchange', onBaseChange)
-        map.off('overlayadd', onOverlayAdd)
-        map.off('overlayremove', onOverlayRemove)
+        normalPanelCleanup?.()
       }
     }
   }, [
