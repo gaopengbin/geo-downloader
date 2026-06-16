@@ -28,7 +28,7 @@ $action = New-ScheduledTaskAction -Execute $node -Argument "`"$script`""
 $trigger = New-ScheduledTaskTrigger -AtStartup
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force | Out-Null
 
-Start-Process -FilePath $node -ArgumentList @($script) -WindowStyle Hidden
+Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 3
 
 $response = Invoke-WebRequest -Uri 'http://127.0.0.1:9090/qr-admin/' -UseBasicParsing -TimeoutSec 10
