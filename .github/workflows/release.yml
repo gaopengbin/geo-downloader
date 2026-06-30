@@ -75,8 +75,12 @@ jobs:
           echo "npm install failed after 3 attempts"
           exit 1
 
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+        # 用 binstall 拉预编译二进制（秒级），替代 cargo install 从源码编译（~10 分钟）
+        run: cargo binstall -y --locked tauri-cli@^2
 
       - name: Build
         run: cargo tauri build --target ${{ matrix.target }}
