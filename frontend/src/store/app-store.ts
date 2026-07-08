@@ -17,6 +17,12 @@ export interface AppState {
   /** 各 mode 各自记忆的 overlay 显隐状态（如天地图标注 cia/cva） */
   overlayVisibilityByMode: Partial<Record<AppMode, Record<string, boolean>>>
   setOverlayVisibility: (mode: AppMode, key: string, visible: boolean) => void
+  /** 地图经纬度网格显示 */
+  graticuleVisible: boolean
+  setGraticuleVisible: (visible: boolean) => void
+  /** 经纬度网格间隔（单位：度） */
+  graticuleInterval: number
+  setGraticuleInterval: (interval: number) => void
   /** 当前选中的行政区划代码（街道/区县/城市/省），用于边界下载 */
   currentAdminCode: string | null
   setCurrentAdminCode: (code: string | null) => void
@@ -36,6 +42,8 @@ type PersistedAppState = Partial<
     | 'tab'
     | 'selectedSourceByMode'
     | 'overlayVisibilityByMode'
+    | 'graticuleVisible'
+    | 'graticuleInterval'
     | 'currentAdminCode'
     | 'adminSelection'
   >
@@ -64,6 +72,12 @@ function readPersistedAppState(): PersistedAppState {
       overlayVisibilityByMode: isPlainObject(state.overlayVisibilityByMode)
         ? (state.overlayVisibilityByMode as Partial<Record<AppMode, Record<string, boolean>>>)
         : undefined,
+      graticuleVisible:
+        typeof state.graticuleVisible === 'boolean' ? state.graticuleVisible : undefined,
+      graticuleInterval:
+        typeof state.graticuleInterval === 'number' && Number.isFinite(state.graticuleInterval)
+          ? state.graticuleInterval
+          : undefined,
       currentAdminCode:
         typeof state.currentAdminCode === 'string' ? state.currentAdminCode : null,
       adminSelection:
@@ -108,6 +122,10 @@ export const useAppStore = create<AppState>()(
             },
           }
         }),
+      graticuleVisible: restoredAppState.graticuleVisible ?? false,
+      setGraticuleVisible: (visible) => set({ graticuleVisible: visible }),
+      graticuleInterval: restoredAppState.graticuleInterval ?? 1,
+      setGraticuleInterval: (interval) => set({ graticuleInterval: interval }),
       currentAdminCode: restoredAppState.currentAdminCode ?? null,
       setCurrentAdminCode: (code) => set({ currentAdminCode: code }),
       adminSelection:
@@ -127,6 +145,8 @@ export const useAppStore = create<AppState>()(
         tab: state.tab,
         selectedSourceByMode: state.selectedSourceByMode,
         overlayVisibilityByMode: state.overlayVisibilityByMode,
+        graticuleVisible: state.graticuleVisible,
+        graticuleInterval: state.graticuleInterval,
         currentAdminCode: state.currentAdminCode,
         adminSelection: state.adminSelection,
       }),

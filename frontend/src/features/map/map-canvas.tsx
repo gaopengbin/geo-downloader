@@ -158,6 +158,8 @@ function probeImageUrl(url: string, timeoutMs = 4500): Promise<boolean> {
 }
 
 const MAP_VIEW_STORAGE_KEY = 'geo-downloader:map-view'
+const GRATICULE_INTERVALS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30]
+const MAX_GRATICULE_LINES = 160
 
 interface PersistedMapView {
   center: { lat: number; lng: number }
@@ -200,6 +202,155 @@ function writePersistedMapView(view: PersistedMapView) {
   }
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function normalizeLng(value: number) {
+  let next = value
+  while (next < -180) next += 360
+  while (next > 180) next -= 360
+  return next
+}
+
+function snapDown(value: number, interval: number) {
+  return Math.floor(value / interval) * interval
+}
+
+function snapUp(value: number, interval: number) {
+  return Math.ceil(value / interval) * interval
+}
+
+function trimDegree(value: number) {
+  const rounded = Math.round(value * 10000) / 10000
+  if (Math.abs(rounded - Math.round(rounded)) < 0.00001) return String(Math.round(rounded))
+  return String(rounded).replace(/\.?0+$/, '')
+}
+
+function formatLngLabel(lng: number) {
+  const normalized = normalizeLng(lng)
+  if (Math.abs(normalized) < 0.00001) return '0°'
+  return `${trimDegree(Math.abs(normalized))}°${normalized > 0 ? 'E' : 'W'}`
+}
+
+function formatLatLabel(lat: number) {
+  if (Math.abs(lat) < 0.00001) return '0°'
+  return `${trimDegree(Math.abs(lat))}°${lat > 0 ? 'N' : 'S'}`
+}
+
+function graticuleLabelHtml(text: string) {
+  return `<span style="
+    display:inline-block;
+    color:rgba(15,23,42,.72);
+    font:600 11px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    letter-spacing:0;
+    text-shadow:
+      0 1px 0 rgba(255,255,255,.98),
+      1px 0 0 rgba(255,255,255,.98),
+      0 -1px 0 rgba(255,255,255,.98),
+      -1px 0 0 rgba(255,255,255,.98),
+      1px 1px 0 rgba(255,255,255,.96),
+      -1px 1px 0 rgba(255,255,255,.96),
+      1px -1px 0 rgba(255,255,255,.96),
+      -1px -1px 0 rgba(255,255,255,.96),
+      0 0 4px rgba(255,255,255,.9);
+    white-space:nowrap;
+  ">${escapeHtml(text)}</span>`
+}
+
+function drawGraticuleLayer(
+  map: L.Map,
+  group: L.LayerGroup,
+  requestedInterval: number,
+) {
+  group.clearLayers()
+  const bounds = map.getBounds()
+  const west = clamp(bounds.getWest(), -180, 180)
+  const east = clamp(bounds.getEast(), -180, 180)
+  const south = clamp(bounds.getSouth(), -85, 85)
+  const north = clamp(bounds.getNorth(), -85, 85)
+  if (east <= west || north <= south) return requestedInterval
+
+  let interval = requestedInterval
+  let lineCount = Math.ceil((east - west) / interval) + Math.ceil((north - south) / interval)
+  while (lineCount > MAX_GRATICULE_LINES) {
+    interval *= 2
+    lineCount = Math.ceil((east - west) / interval) + Math.ceil((north - south) / interval)
+  }
+
+  const haloStyle: L.PolylineOptions = {
+    color: '#ffffff',
+    weight: 3,
+    opacity: 0.55,
+    dashArray: '4 6',
+    interactive: false,
+  }
+  const lineStyle: L.PolylineOptions = {
+    color: '#334155',
+    weight: 1,
+    opacity: 0.48,
+    dashArray: '4 6',
+    interactive: false,
+  }
+  const labelIcon = (text: string) =>
+    L.divIcon({
+      className: 'geod-graticule-label',
+      html: graticuleLabelHtml(text),
+      iconSize: [1, 1],
+      iconAnchor: [0, 9],
+    })
+
+  const labelLat = south + (north - south) * 0.06
+  const labelLng = west + (east - west) * 0.02
+  const startLng = snapUp(west, interval)
+  const endLng = snapDown(east, interval)
+  for (let lng = startLng; lng <= endLng + interval * 0.001; lng += interval) {
+    const roundedLng = Math.round(lng * 1000000) / 1000000
+    const line: L.LatLngExpression[] = [
+      [south, roundedLng],
+      [north, roundedLng],
+    ]
+    L.polyline(line, haloStyle).addTo(group)
+    L.polyline(
+      [
+        [south, roundedLng],
+        [north, roundedLng],
+      ],
+      lineStyle,
+    ).addTo(group)
+    L.marker([labelLat, roundedLng], {
+      icon: labelIcon(formatLngLabel(roundedLng)),
+      interactive: false,
+      keyboard: false,
+    }).addTo(group)
+  }
+
+  const startLat = snapUp(south, interval)
+  const endLat = snapDown(north, interval)
+  for (let lat = startLat; lat <= endLat + interval * 0.001; lat += interval) {
+    const roundedLat = Math.round(lat * 1000000) / 1000000
+    const line: L.LatLngExpression[] = [
+      [roundedLat, west],
+      [roundedLat, east],
+    ]
+    L.polyline(line, haloStyle).addTo(group)
+    L.polyline(
+      [
+        [roundedLat, west],
+        [roundedLat, east],
+      ],
+      lineStyle,
+    ).addTo(group)
+    L.marker([roundedLat, labelLng], {
+      icon: labelIcon(formatLatLabel(roundedLat)),
+      interactive: false,
+      keyboard: false,
+    }).addTo(group)
+  }
+
+  return interval
+}
+
 export function MapCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
@@ -216,12 +367,16 @@ export function MapCanvas() {
   const customControlRef = useRef<L.Control | null>(null)
   const customControlRadiosRef = useRef<HTMLInputElement[]>([])
   const overlayLayersRef = useRef<L.TileLayer[]>([])
+  const graticuleLayerRef = useRef<L.LayerGroup | null>(null)
   // 本地加载的矢量图层
   const vectorLayerMapRef = useRef<Map<string, L.GeoJSON>>(new Map())
   const [error] = useState<string | null>(null)
   const [statusCoords, setStatusCoords] = useState<string>('经度: --  纬度: --')
   const [statusZoom, setStatusZoom] = useState<string>('缩放: --')
   const [waybackProxyBaseUrl, setWaybackProxyBaseUrl] = useState<string | null>(null)
+  const [effectiveGraticuleInterval, setEffectiveGraticuleInterval] = useState<number | null>(
+    null,
+  )
 
   const setSelection = useSelectionStore((s) => s.setSelection)
   const externalRevision = useSelectionStore((s) => s.externalRevision)
@@ -232,6 +387,10 @@ export function MapCanvas() {
   const setSelectedSourceForMode = useAppStore((s) => s.setSelectedSourceForMode)
   const overlayVisibilityByMode = useAppStore((s) => s.overlayVisibilityByMode)
   const setOverlayVisibility = useAppStore((s) => s.setOverlayVisibility)
+  const graticuleVisible = useAppStore((s) => s.graticuleVisible)
+  const setGraticuleVisible = useAppStore((s) => s.setGraticuleVisible)
+  const graticuleInterval = useAppStore((s) => s.graticuleInterval)
+  const setGraticuleInterval = useAppStore((s) => s.setGraticuleInterval)
   // 用 ref 跟踪以避免每次写入都重建 control
   const overlayMemRef = useRef(overlayVisibilityByMode)
   useEffect(() => {
@@ -438,6 +597,35 @@ export function MapCanvas() {
       map.fitBounds(rect.getBounds(), { animate: false, maxZoom: 14 })
     }
   }, [selectionSyncKey, bounds, polygon])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (!graticuleLayerRef.current) {
+      graticuleLayerRef.current = L.layerGroup()
+    }
+    const layer = graticuleLayerRef.current
+
+    const redraw = () => {
+      if (!graticuleVisible) return
+      const effective = drawGraticuleLayer(map, layer, graticuleInterval)
+      setEffectiveGraticuleInterval(effective)
+      if (!map.hasLayer(layer)) layer.addTo(map)
+    }
+
+    if (graticuleVisible) {
+      redraw()
+      map.on('moveend zoomend', redraw)
+    } else {
+      setEffectiveGraticuleInterval(null)
+      layer.clearLayers()
+      if (map.hasLayer(layer)) map.removeLayer(layer)
+    }
+
+    return () => {
+      map.off('moveend zoomend', redraw)
+    }
+  }, [graticuleVisible, graticuleInterval])
 
   // 升序版本：oldest → newest（与 timeline 一致）
   const ascendingWaybackVersions = useMemo(() => {
@@ -1032,12 +1220,45 @@ export function MapCanvas() {
         </div>
       )}
       {error && (
-        <div className="pointer-events-none absolute right-3 top-3 z-10 flex flex-col items-end gap-2">
+        <div className="pointer-events-none absolute right-3 top-20 z-10 flex flex-col items-end gap-2">
           <div className="pointer-events-auto rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive shadow-sm">
             {error}
           </div>
         </div>
       )}
+      <div className="pointer-events-auto absolute right-3 top-3 z-10 rounded-md border bg-background/95 p-2 text-xs shadow-sm backdrop-blur">
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 whitespace-nowrap text-foreground">
+            <input
+              type="checkbox"
+              checked={graticuleVisible}
+              onChange={(e) => setGraticuleVisible(e.currentTarget.checked)}
+              className="size-3.5 accent-primary"
+            />
+            经纬网
+          </label>
+          <select
+            value={String(graticuleInterval)}
+            onChange={(e) => setGraticuleInterval(Number(e.currentTarget.value))}
+            disabled={!graticuleVisible}
+            className="h-7 rounded-md border bg-background px-2 text-xs outline-none disabled:opacity-50"
+            title="经纬网间隔"
+          >
+            {GRATICULE_INTERVALS.map((interval) => (
+              <option key={interval} value={interval}>
+                {interval}°
+              </option>
+            ))}
+          </select>
+        </div>
+        {graticuleVisible &&
+          effectiveGraticuleInterval !== null &&
+          effectiveGraticuleInterval !== graticuleInterval && (
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              视野过大，显示 {effectiveGraticuleInterval}°
+            </div>
+          )}
+      </div>
       <div className="pointer-events-none absolute bottom-2 left-2 z-10 flex items-center gap-2 rounded-md border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur tabular-nums">
         <span>{statusCoords}</span>
         <span className="text-muted-foreground/40">|</span>
