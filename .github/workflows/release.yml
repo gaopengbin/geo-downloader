@@ -179,6 +179,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy-mirror:
+    # Pre-release builds stay on GitHub and must not replace the stable auto-update feed.
+    if: ${{ !contains(github.ref_name, '-') }}
     needs: [build, release]
     runs-on: ubuntu-latest
     steps:
