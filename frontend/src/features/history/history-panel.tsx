@@ -191,16 +191,22 @@ function HistoryCard({
   })
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      const ok = await askDialog('确定删除这条记录？此操作不会删除已下载的文件。', {
-        title: '删除记录',
-        kind: 'warning',
-      })
+      const ok = await askDialog(
+        '确定删除这条记录及其关联日志？\n已下载的文件不会被删除。',
+        {
+          title: '删除记录和日志',
+          kind: 'warning',
+        },
+      )
       if (!ok) return false
       await deleteDownloadRecord(id)
       return true
     },
     onSuccess: (changed) => {
-      if (changed) onDeleted()
+      if (changed) {
+        toast.success('已删除记录及关联日志')
+        onDeleted()
+      }
     },
     onError: (e) => toast.error(`删除失败：${String(e)}`),
   })
@@ -420,8 +426,8 @@ export function HistoryPanel() {
   const clearMutation = useMutation({
     mutationFn: async () => {
       const ok = await askDialog(
-        '确定清空所有下载记录？\n此操作不会删除已下载的文件。',
-        { title: '清空记录', kind: 'warning' },
+        '确定清空所有下载记录及其关联日志？\n已下载的文件不会被删除。',
+        { title: '清空记录和日志', kind: 'warning' },
       )
       if (!ok) return false
       await clearDownloadHistory()
@@ -429,7 +435,7 @@ export function HistoryPanel() {
     },
     onSuccess: (changed) => {
       if (changed) {
-        toast.success('已清空历史记录')
+        toast.success('已清空历史记录及关联日志')
         setPage(1)
         qc.invalidateQueries({ queryKey: ['download-history'] })
       }

@@ -1,7 +1,7 @@
 //! Bounded background maintenance for historical task logs.
 
 use crate::history::HistoryStore;
-use crate::task_log::LogMetadata;
+use crate::task_log::{remove_log_file_variants, LogMetadata};
 use chrono::{DateTime, Duration, Utc};
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -55,7 +55,7 @@ pub(crate) fn run_batch_at(
         }
         let age = now.signed_duration_since(record.created_at);
         if age >= Duration::days(EXPIRE_AFTER_DAYS) {
-            remove_log_variants(&path)?;
+            remove_log_file_variants(&path)?;
             store.clear_log_reference(&record.id)?;
             report.expired += 1;
         } else if age >= Duration::days(COMPRESS_AFTER_DAYS) && !record.log_compressed {
@@ -157,25 +157,6 @@ fn compress_log(source: &Path, truncated: bool, now: DateTime<Utc>) -> Result<Lo
         truncated,
         updated_at: Some(now),
     })
-}
-
-fn remove_log_variants(path: &Path) -> Result<(), String> {
-    let mut variants = vec![path.to_path_buf()];
-    if path.extension().and_then(|value| value.to_str()) == Some("gz") {
-        if let Some(raw) = path.to_string_lossy().strip_suffix(".gz") {
-            variants.push(PathBuf::from(raw));
-        }
-    } else {
-        variants.push(path.with_extension("log.gz"));
-    }
-    for variant in variants {
-        match std::fs::remove_file(&variant) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("删除过期日志失败 {}: {error}", variant.display())),
-        }
-    }
-    Ok(())
 }
 
 fn is_log_path(path: &Path) -> bool {

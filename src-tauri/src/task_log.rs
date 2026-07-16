@@ -136,6 +136,61 @@ pub fn read_log_file(path: &Path) -> Result<Vec<TaskLog>, String> {
     parse_log_reader(reader)
 }
 
+pub(crate) fn log_file_variants(path: &Path) -> Vec<PathBuf> {
+    let value = path.to_string_lossy();
+    let mut variants = vec![path.to_path_buf()];
+    if let Some(raw) = value.strip_suffix(".log.gz") {
+        variants.push(PathBuf::from(format!("{raw}.log")));
+    } else if value.ends_with(".log") {
+        variants.push(PathBuf::from(format!("{value}.gz")));
+    }
+    variants.sort();
+    variants.dedup();
+    variants
+}
+
+pub(crate) fn task_log_files(log_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    if !log_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(log_dir)
+        .map_err(|error| format!("扫描任务日志目录失败 {}: {error}", log_dir.display()))?
+    {
+        let entry = entry.map_err(|error| format!("读取任务日志目录项失败: {error}"))?;
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if entry.file_type().map(|kind| kind.is_file()).unwrap_or(false)
+            && name.starts_with("task_")
+            && (name.ends_with(".log") || name.ends_with(".log.gz"))
+        {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+pub(crate) fn remove_log_file_variants(path: &Path) -> Result<usize, String> {
+    let mut removed = 0;
+    for variant in log_file_variants(path) {
+        match std::fs::remove_file(&variant) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "删除任务日志失败 {}: {error}",
+                    variant.display()
+                ))
+            }
+        }
+    }
+    Ok(removed)
+}
+
 fn parse_log_reader(reader: Box<dyn BufRead>) -> Result<Vec<TaskLog>, String> {
     reader
         .lines()
@@ -212,5 +267,46 @@ mod tests {
         encoder.finish().unwrap();
         let logs = read_log_file(&path).unwrap();
         assert_eq!(logs[0].message, "compressed");
+    }
+
+    #[test]
+    fn removes_plain_and_gzip_variants_together() {
+        let tmp = TempDir::new().unwrap();
+        let plain = tmp.path().join("task_123.log");
+        let gzip = tmp.path().join("task_123.log.gz");
+        std::fs::write(&plain, b"plain").unwrap();
+        std::fs::write(&gzip, b"gzip").unwrap();
+
+        assert_eq!(remove_log_file_variants(&plain).unwrap(), 2);
+        assert!(!plain.exists());
+        assert!(!gzip.exists());
+        assert_eq!(remove_log_file_variants(&plain).unwrap(), 0);
+    }
+
+    #[test]
+    fn reports_log_deletion_errors() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("task_locked.log");
+        std::fs::create_dir(&path).unwrap();
+
+        let error = remove_log_file_variants(&path).unwrap_err();
+        assert!(error.contains("删除任务日志失败"));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn lists_only_task_log_files() {
+        let tmp = TempDir::new().unwrap();
+        let plain = tmp.path().join("task_old.log");
+        let gzip = tmp.path().join("task_older.log.gz");
+        std::fs::write(&plain, b"plain").unwrap();
+        std::fs::write(&gzip, b"gzip").unwrap();
+        std::fs::write(tmp.path().join("application.log"), b"keep").unwrap();
+
+        let mut paths = task_log_files(tmp.path()).unwrap();
+        paths.sort();
+        let mut expected = vec![plain, gzip];
+        expected.sort();
+        assert_eq!(paths, expected);
     }
 }

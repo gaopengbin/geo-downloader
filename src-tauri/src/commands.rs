@@ -15,8 +15,8 @@ use crate::settings::{AppSettings, SettingsManager};
 use crate::task::{TaskManager, TaskInfo, TaskLog, TaskStatus, PersistedTask, PauseControl};
 use crate::tiles3d;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -31,6 +31,60 @@ where
     })
     .await
     .map_err(|error| format!("历史数据库线程异常: {error}"))?
+}
+
+async fn remove_history_logs(
+    mut paths: Vec<PathBuf>,
+    active_paths: HashSet<PathBuf>,
+    log_dir: Option<PathBuf>,
+) -> Result<usize, String> {
+    tokio::task::spawn_blocking(move || {
+        for path in &paths {
+            if crate::task_log::log_file_variants(path)
+                .iter()
+                .any(|variant| active_paths.contains(variant))
+            {
+                return Err(format!(
+                    "日志仍被运行中的任务使用，历史记录已保留: {}",
+                    path.display()
+                ));
+            }
+        }
+
+        if let Some(log_dir) = log_dir {
+            paths.extend(
+                crate::task_log::task_log_files(&log_dir)?
+                    .into_iter()
+                    .filter(|path| {
+                        !crate::task_log::log_file_variants(path)
+                            .iter()
+                            .any(|variant| active_paths.contains(variant))
+                    }),
+            );
+        }
+        paths.sort();
+        paths.dedup();
+
+        let mut removed = 0;
+        let mut errors = Vec::new();
+        for path in paths {
+            match crate::task_log::remove_log_file_variants(&path) {
+                Ok(count) => removed += count,
+                Err(error) => errors.push(error),
+            }
+        }
+        if errors.is_empty() {
+            Ok(removed)
+        } else {
+            Err(format!(
+                "有 {} 组关联日志删除失败，历史记录已保留，可重试。{}",
+                errors.len(),
+                errors.into_iter().take(3).collect::<Vec<_>>().join("；")
+            ))
+        }
+    })
+    .await
+    .map_err(|error| format!("历史日志清理线程异常: {error}"))?
 }
 
 async fn persist_history_record(app: &AppHandle, record: DownloadRecord) {
@@ -2369,14 +2423,17 @@ pub async fn add_download_record(
 #[tauri::command]
 pub async fn delete_download_record(task_manager: State<'_, Arc<TaskManager>>, id: String) -> Result<(), String> {
     let active = task_manager.active_log_paths();
-    let path = history_blocking(move |store| store.delete(&id)).await?;
-    if let Some(path) = path.filter(|path| !active.contains(path)) {
-        match tokio::fs::remove_file(path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => log::warn!("删除历史日志失败: {error}"),
-        }
+    let lookup_id = id.clone();
+    let path = history_blocking(move |store| {
+        Ok(store
+            .get(&lookup_id)?
+            .and_then(|record| record.log_file.map(PathBuf::from)))
+    })
+    .await?;
+    if let Some(path) = path {
+        remove_history_logs(vec![path], active, None).await?;
     }
+    history_blocking(move |store| store.delete(&id).map(|_| ())).await?;
     Ok(())
 }
 
@@ -2384,15 +2441,13 @@ pub async fn delete_download_record(task_manager: State<'_, Arc<TaskManager>>, i
 #[tauri::command]
 pub async fn clear_download_history(task_manager: State<'_, Arc<TaskManager>>) -> Result<(), String> {
     let active = task_manager.active_log_paths();
-    let paths = history_blocking(|store| store.clear()).await?;
-    for path in paths {
-        if active.contains(&path) { continue; }
-        match tokio::fs::remove_file(path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => log::warn!("清理历史日志失败: {error}"),
-        }
-    }
+    let log_dir = task_manager.log_dir_path();
+    let paths = history_blocking(|store| {
+        Ok(store.referenced_log_paths()?.into_iter().collect::<Vec<_>>())
+    })
+    .await?;
+    remove_history_logs(paths, active, Some(log_dir)).await?;
+    history_blocking(|store| store.clear().map(|_| ())).await?;
     Ok(())
 }
 
