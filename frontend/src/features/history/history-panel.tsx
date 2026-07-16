@@ -73,26 +73,16 @@ interface PyramidProgressPayload {
   total: number
 }
 
-function HistoryLogPanel({ logFile }: { logFile: string }) {
-  const [logs, setLogs] = useState<TaskLog[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
+const PAGE_SIZE = 50
 
-  useEffect(() => {
-    let cancelled = false
-    setLogs(null)
-    setError(null)
-    readLogFile(logFile)
-      .then((arr) => {
-        if (!cancelled) setLogs(arr)
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [logFile])
+function HistoryLogPanel({ logFile }: { logFile: string }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const logQuery = useQuery({
+    queryKey: ['history-log', logFile],
+    queryFn: () => readLogFile(logFile),
+  })
+  const logs: TaskLog[] | null = logQuery.data ?? null
+  const error = logQuery.isError ? String(logQuery.error) : null
 
   useEffect(() => {
     const el = scrollRef.current
@@ -160,9 +150,11 @@ function HistoryLogPanel({ logFile }: { logFile: string }) {
 function HistoryCard({
   record,
   pyramidProgress,
+  onDeleted,
 }: {
   record: DownloadHistoryRecord
   pyramidProgress?: PyramidProgressPayload
+  onDeleted: () => void
 }) {
   const qc = useQueryClient()
   const [showLogs, setShowLogs] = useState(false)
@@ -208,7 +200,7 @@ function HistoryCard({
       return true
     },
     onSuccess: (changed) => {
-      if (changed) qc.invalidateQueries({ queryKey: ['download-history'] })
+      if (changed) onDeleted()
     },
     onError: (e) => toast.error(`删除失败：${String(e)}`),
   })
@@ -243,6 +235,11 @@ function HistoryCard({
         {hasPyramid && (
           <Badge variant="outline" className="text-xs font-normal">
             pyramid
+          </Badge>
+        )}
+        {record.log_truncated && (
+          <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+            日志已截断
           </Badge>
         )}
         {record.source_name && (
@@ -365,10 +362,11 @@ export function HistoryPanel() {
   const [pyramidProgress, setPyramidProgress] = useState<Map<string, PyramidProgressPayload>>(
     () => new Map(),
   )
+  const [page, setPage] = useState(1)
 
   const historyQuery = useQuery({
-    queryKey: ['download-history'],
-    queryFn: getDownloadHistory,
+    queryKey: ['download-history', page],
+    queryFn: () => getDownloadHistory(page, PAGE_SIZE),
     enabled: inTauri,
   })
 
@@ -400,27 +398,22 @@ export function HistoryPanel() {
     }
   }, [inTauri])
 
-  // 监听任务完成事件，自动刷新历史
+  // 历史写入完成后刷新；任务进度事件不再触发历史查询。
   useEffect(() => {
     if (!inTauri) return
+    let unlisten: UnlistenFn | undefined
     let cancelled = false
-    const unlisteners: UnlistenFn[] = []
-    Promise.all([
-      listen('task-list-updated', () => {
+    listen('download-history-updated', () => {
         qc.invalidateQueries({ queryKey: ['download-history'] })
-      }),
-      listen('download-history-updated', () => {
-        qc.invalidateQueries({ queryKey: ['download-history'] })
-      }),
-    ])
-      .then((fns) => {
-        if (cancelled) fns.forEach((fn) => fn())
-        else unlisteners.push(...fns)
+      })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
       })
       .catch(() => {})
     return () => {
       cancelled = true
-      unlisteners.forEach((fn) => fn())
+      if (unlisten) unlisten()
     }
   }, [inTauri, qc])
 
@@ -437,13 +430,22 @@ export function HistoryPanel() {
     onSuccess: (changed) => {
       if (changed) {
         toast.success('已清空历史记录')
+        setPage(1)
         qc.invalidateQueries({ queryKey: ['download-history'] })
       }
     },
     onError: (e) => toast.error(`清空失败：${String(e)}`),
   })
 
-  const records = useMemo(() => historyQuery.data ?? [], [historyQuery.data])
+  const records = useMemo(() => historyQuery.data?.records ?? [], [historyQuery.data])
+  const total = historyQuery.data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const handleRecordDeleted = useCallback(() => {
+    if (records.length === 1 && page > 1) {
+      setPage((current) => Math.max(1, current - 1))
+    }
+    qc.invalidateQueries({ queryKey: ['download-history'] })
+  }, [page, qc, records.length])
 
   if (!inTauri) {
     return (
@@ -457,7 +459,7 @@ export function HistoryPanel() {
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>
-          共 <span className="font-semibold text-foreground">{records.length}</span> 条记录
+          共 <span className="font-semibold text-foreground">{total}</span> 条记录
         </span>
         <div className="flex items-center gap-1">
           <Button
@@ -476,7 +478,7 @@ export function HistoryPanel() {
             variant="ghost"
             size="icon"
             onClick={() => clearMutation.mutate()}
-            disabled={clearMutation.isPending || records.length === 0}
+            disabled={clearMutation.isPending || total === 0}
             className="size-7"
             title="清空记录"
           >
@@ -497,8 +499,36 @@ export function HistoryPanel() {
           key={String(r.id)}
           record={r}
           pyramidProgress={pyramidProgress.get(String(r.id))}
+          onDeleted={handleRecordDeleted}
         />
       ))}
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between border-t pt-2 text-xs">
+          <span className="text-muted-foreground">
+            第 {page} / {totalPages} 页
+          </span>
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={page <= 1 || historyQuery.isFetching}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              className="h-7 text-xs"
+            >
+              上一页
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={page >= totalPages || historyQuery.isFetching}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              className="h-7 text-xs"
+            >
+              下一页
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

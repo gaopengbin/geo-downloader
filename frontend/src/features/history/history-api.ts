@@ -1,8 +1,8 @@
 import { invokeCommand } from '@/lib/tauri'
-import type { DownloadHistoryRecord, OutputFormat } from '@/types/api'
+import type { DownloadHistoryPage, OutputFormat } from '@/types/api'
 
-export function getDownloadHistory() {
-  return invokeCommand<DownloadHistoryRecord[]>('get_download_history')
+export function getDownloadHistory(page = 1, pageSize = 50) {
+  return invokeCommand<DownloadHistoryPage>('get_download_history', { page, pageSize })
 }
 
 export function addDownloadRecord(

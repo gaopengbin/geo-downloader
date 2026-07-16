@@ -249,7 +249,23 @@ export interface DownloadHistoryRecord {
   failed_count?: number
   success?: boolean
   created_at?: string
+  status?: 'completed' | 'failed' | string
+  log_file?: string | null
+  duration_secs?: number | null
+  has_pyramid?: boolean
+  log_compressed?: boolean
+  log_original_size?: number
+  log_stored_size?: number
+  log_truncated?: boolean
+  log_updated_at?: string | null
   [key: string]: unknown
+}
+
+export interface DownloadHistoryPage {
+  records: DownloadHistoryRecord[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface AdminDivision {

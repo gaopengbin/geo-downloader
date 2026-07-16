@@ -10,7 +10,7 @@ use crate::streaming_tiff;
 use crate::streaming_raster;
 use crate::pyramid;
 use crate::admin::{self, AdminRegion, GeocodeResult};
-use crate::history::{DownloadRecord, DownloadStatus, HistoryManager};
+use crate::history::{DownloadRecord, DownloadStatus, HistoryPage, HistoryStore};
 use crate::settings::{AppSettings, SettingsManager};
 use crate::task::{TaskManager, TaskInfo, TaskLog, TaskStatus, PersistedTask, PauseControl};
 use crate::tiles3d;
@@ -19,6 +19,26 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
+
+async fn history_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&HistoryStore) -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let store = HistoryStore::global()?;
+        operation(store)
+    })
+    .await
+    .map_err(|error| format!("历史数据库线程异常: {error}"))?
+}
+
+async fn persist_history_record(app: &AppHandle, record: DownloadRecord) {
+    match history_blocking(move |store| store.add(&record)).await {
+        Ok(()) => { let _ = app.emit("download-history-updated", ()); }
+        Err(error) => log::error!("下载已结束，但历史记录写入失败: {error}"),
+    }
+}
 
 /// 下载请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -520,7 +540,7 @@ pub async fn create_download_task(
                         crate::task::cleanup_temp_dir(&tid);
                     }
                     // 失败也记录到历史（failed_count=0 因为是整体失败而非逐瓦片失败）
-                    let log_file_path = tm.get_log_file_path(&tid);
+                    let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
                     let record = DownloadRecord::new(
                         task_name.to_string(),
                         req_source.clone(),
@@ -532,11 +552,8 @@ pub async fn create_download_task(
                         tile_count,
                         0,
                         DownloadStatus::Failed,
-                    ).with_log_file(log_file_path);
-                    if let Ok(manager) = HistoryManager::new() {
-                        let _ = manager.add(record);
-                        let _ = app.emit("download-history-updated", ());
-                    }
+                    ).with_log_metadata(&log_metadata);
+                    persist_history_record(&app, record).await;
                     tm.fail_task(&tid, e.clone());
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
@@ -1624,7 +1641,7 @@ async fn execute_download_task(
     });
 
     // 历史记录：CompletedWithGaps 仍记 DownloadStatus::Completed，前端按 failed_count > 0 区分
-    let log_file_path = tm.get_log_file_path(task_id);
+    let log_metadata = tm.get_log_metadata(task_id).unwrap_or_default();
     let record = DownloadRecord::new(
         task_name.to_string(),
         request.source.clone(),
@@ -1636,13 +1653,10 @@ async fn execute_download_task(
         actual_total,
         failed_total,
         DownloadStatus::Completed,
-    ).with_log_file(log_file_path)
+    ).with_log_metadata(&log_metadata)
      .with_duration(total_elapsed.as_secs())
      .with_pyramid(pyramid_built);
-    if let Ok(manager) = HistoryManager::new() {
-        let _ = manager.add(record);
-        let _ = app.emit("download-history-updated", ());
-    }
+    persist_history_record(app, record).await;
 
     Ok(())
 }
@@ -1661,7 +1675,7 @@ pub fn get_task_logs(task_manager: State<'_, Arc<TaskManager>>, task_id: String)
 
 /// 按日志文件路径读取日志（用于历史任务日志回看）
 #[tauri::command]
-pub fn read_log_file(task_manager: State<'_, Arc<TaskManager>>, file_path: String) -> Vec<TaskLog> {
+pub fn read_log_file(task_manager: State<'_, Arc<TaskManager>>, file_path: String) -> Result<Vec<TaskLog>, String> {
     // 安全校验：仅允许读取日志目录下的文件
     let log_dir_str = task_manager.get_log_dir();
     let log_dir = std::path::Path::new(&log_dir_str);
@@ -1670,7 +1684,8 @@ pub fn read_log_file(task_manager: State<'_, Arc<TaskManager>>, file_path: Strin
         (Ok(abs_target), Ok(abs_dir)) if abs_target.starts_with(&abs_dir) => {
             TaskManager::read_log_file_by_path(&file_path)
         }
-        _ => Vec::new(),
+        _ if !target.exists() => Err("日志已清理或不存在".to_string()),
+        _ => Err("日志路径不合法".to_string()),
     }
 }
 
@@ -1927,7 +1942,7 @@ pub async fn resume_task(
                     crate::task::remove_task_file(&tid);
                     crate::task::cleanup_temp_dir(&tid);
                     // 失败也记录到历史
-                    let log_file_path = tm.get_log_file_path(&tid);
+                    let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
                     let record = DownloadRecord::new(
                         task_name_r,
                         req_source_r,
@@ -1939,11 +1954,8 @@ pub async fn resume_task(
                         tile_count,
                         0,
                         DownloadStatus::Failed,
-                    ).with_log_file(log_file_path);
-                    if let Ok(manager) = HistoryManager::new() {
-                        let _ = manager.add(record);
-                        let _ = app.emit("download-history-updated", ());
-                    }
+                    ).with_log_metadata(&log_metadata);
+                    persist_history_record(&app, record).await;
                     tm.fail_task(&tid, e.clone());
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
@@ -2254,7 +2266,7 @@ pub async fn export_partial_task(
         });
 
         // 历史记录
-        let log_file_path = tm_arc.get_log_file_path(&tid);
+        let log_metadata = tm_arc.get_log_metadata(&tid).unwrap_or_default();
         let record = DownloadRecord::new(
             task_name_for_record,
             req_clone.source.clone(),
@@ -2267,12 +2279,9 @@ pub async fn export_partial_task(
             failed_estimate,
             DownloadStatus::Completed,
         )
-        .with_log_file(log_file_path)
+        .with_log_metadata(&log_metadata)
         .with_duration(elapsed.as_secs());
-        if let Ok(manager) = HistoryManager::new() {
-            let _ = manager.add(record);
-            let _ = app_clone.emit("download-history-updated", ());
-        }
+        persist_history_record(&app_clone, record).await;
     });
 
     Ok(())
@@ -2328,14 +2337,13 @@ pub async fn geocode_search(
 
 /// 获取下载历史记录
 #[tauri::command]
-pub fn get_download_history() -> Result<Vec<DownloadRecord>, String> {
-    let manager = HistoryManager::new()?;
-    manager.get_all()
+pub async fn get_download_history(page: Option<u32>, page_size: Option<u32>) -> Result<HistoryPage, String> {
+    history_blocking(move |store| store.page(page.unwrap_or(1), page_size.unwrap_or(50))).await
 }
 
 /// 添加下载记录
 #[tauri::command]
-pub fn add_download_record(
+pub async fn add_download_record(
     name: String,
     source: String,
     source_name: String,
@@ -2352,23 +2360,40 @@ pub fn add_download_record(
         name, source, source_name, zoom, format, file_path, file_size, tile_count, failed_count, status
     );
     
-    let manager = HistoryManager::new()?;
-    manager.add(record.clone())?;
+    let stored = record.clone();
+    history_blocking(move |store| store.add(&stored)).await?;
     Ok(record)
 }
 
 /// 删除下载记录
 #[tauri::command]
-pub fn delete_download_record(id: String) -> Result<(), String> {
-    let manager = HistoryManager::new()?;
-    manager.delete(&id)
+pub async fn delete_download_record(task_manager: State<'_, Arc<TaskManager>>, id: String) -> Result<(), String> {
+    let active = task_manager.active_log_paths();
+    let path = history_blocking(move |store| store.delete(&id)).await?;
+    if let Some(path) = path.filter(|path| !active.contains(path)) {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("删除历史日志失败: {error}"),
+        }
+    }
+    Ok(())
 }
 
 /// 清空所有下载记录
 #[tauri::command]
-pub fn clear_download_history() -> Result<(), String> {
-    let manager = HistoryManager::new()?;
-    manager.clear()
+pub async fn clear_download_history(task_manager: State<'_, Arc<TaskManager>>) -> Result<(), String> {
+    let active = task_manager.active_log_paths();
+    let paths = history_blocking(|store| store.clear()).await?;
+    for path in paths {
+        if active.contains(&path) { continue; }
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("清理历史日志失败: {error}"),
+        }
+    }
+    Ok(())
 }
 
 /// 为已有 TIFF 文件补建金字塔
@@ -2385,13 +2410,14 @@ pub async fn build_pyramid_for_file(
     }
 
     let app_clone = app.clone();
+    let progress_record_id = record_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         pyramid::build_pyramid(
             &p,
             pyramid::PyramidOptions {
                 progress_cb: Some(Box::new(move |current, total| {
                     let _ = app_clone.emit("pyramid-progress", serde_json::json!({
-                        "record_id": &record_id,
+                        "record_id": &progress_record_id,
                         "current": current,
                         "total": total,
                     }));
@@ -2403,16 +2429,12 @@ pub async fn build_pyramid_for_file(
 
     let stats = result?;
 
-    // 更新历史记录
-    let manager = HistoryManager::new()?;
-    let mut records = manager.get_all()?;
-    // record_id 在闭包里被 move 了，重新从 event payload 解析不可行
-    // 用 file_path 匹配
-    if let Some(r) = records.iter_mut().find(|r| r.file_path == file_path) {
-        r.has_pyramid = true;
-        r.file_size += stats.size_added_bytes;
-    }
-    manager.save_all(&records)?;
+    history_blocking(move |store| {
+        let mut record = store.get(&record_id)?.ok_or_else(|| "历史记录不存在".to_string())?;
+        record.has_pyramid = true;
+        record.file_size = record.file_size.saturating_add(stats.size_added_bytes);
+        store.update(&record)
+    }).await?;
 
     Ok(())
 }
@@ -2609,15 +2631,12 @@ pub async fn create_osm_download_task(
         });
 
         // 自动添加历史记录
-        let log_file_path = tm.get_log_file_path(&tid);
+        let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
         let record = DownloadRecord::new(
             task_name, "osm_vector".to_string(), "OSM Overpass".to_string(),
             0, "geojson".to_string(), save_path, file_size, 0, 0, DownloadStatus::Completed,
-        ).with_log_file(log_file_path);
-        if let Ok(manager) = HistoryManager::new() {
-            let _ = manager.add(record);
-            let _ = app.emit("download-history-updated", ());
-        }
+        ).with_log_metadata(&log_metadata);
+        persist_history_record(&app, record).await;
     });
 
     Ok(CreateTaskResult { task_id, tile_count: 0 })
@@ -2999,7 +3018,7 @@ async fn execute_3dtiles_task(
     tm.complete_task(task_id, dir_size);
 
     // 写入下载历史记录
-    let log_file_path = tm.get_log_file_path(task_id);
+    let log_metadata = tm.get_log_metadata(task_id).unwrap_or_default();
     let record = DownloadRecord::new(
         task_name.to_string(),
         "3dtiles".to_string(),
@@ -3011,11 +3030,8 @@ async fn execute_3dtiles_task(
         tile_count,
         0,
         DownloadStatus::Completed,
-    ).with_log_file(log_file_path);
-    if let Ok(manager) = HistoryManager::new() {
-        let _ = manager.add(record);
-        let _ = app.emit("download-history-updated", ());
-    }
+    ).with_log_metadata(&log_metadata);
+    persist_history_record(app, record).await;
 
     let _ = app.emit(
         &format!("task-progress-{}", task_id),

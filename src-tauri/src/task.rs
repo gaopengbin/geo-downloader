@@ -3,8 +3,7 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
@@ -109,7 +108,7 @@ struct TaskEntry {
     cancel_token: CancellationToken,
     pause_control: PauseControl,
     logs: Vec<TaskLog>,
-    log_file: Option<std::fs::File>,
+    log_writer: Option<Arc<Mutex<crate::task_log::TaskLogWriter>>>,
 }
 
 /// 全局任务管理器
@@ -124,6 +123,10 @@ impl TaskManager {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("geo-downloader")
             .join("logs");
+        Self::new_with_log_dir(log_dir)
+    }
+
+    pub(crate) fn new_with_log_dir(log_dir: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&log_dir);
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
@@ -164,15 +167,17 @@ impl TaskManager {
             error: None,
         };
         // 创建日志文件
-        let log_path = self.log_dir.join(format!("task_{}.log", &id[..8]));
-        let log_file = std::fs::OpenOptions::new()
-            .create(true).append(true).open(&log_path).ok();
+        let log_path = self.log_dir.join(format!("task_{}.log", task_id_prefix(&id)));
+        let log_writer = crate::task_log::TaskLogWriter::open(&log_path)
+            .map(|writer| Arc::new(Mutex::new(writer)))
+            .map_err(|error| log::warn!("{error}"))
+            .ok();
         let entry = TaskEntry {
             info,
             cancel_token: cancel_token.clone(),
             pause_control: pause_control.clone(),
             logs: Vec::new(),
-            log_file,
+            log_writer,
         };
         self.tasks.lock().unwrap().insert(id, entry);
         (cancel_token, pause_control)
@@ -382,22 +387,25 @@ impl TaskManager {
 
     /// 追加任务日志
     pub fn append_log(&self, id: &str, level: &str, message: &str) -> Option<TaskLog> {
-        let mut tasks = self.tasks.lock().unwrap();
-        if let Some(entry) = tasks.get_mut(id) {
-            let log = TaskLog {
-                timestamp: Local::now().format("%H:%M:%S").to_string(),
-                level: level.to_string(),
-                message: message.to_string(),
-            };
-            // 写入文件
-            if let Some(ref mut file) = entry.log_file {
-                let _ = writeln!(file, "[{}] [{}] {}", log.timestamp, log.level, log.message);
-            }
+        let log = TaskLog {
+            timestamp: Local::now().format("%H:%M:%S").to_string(),
+            level: level.to_string(),
+            message: message.to_string(),
+        };
+        let writer = {
+            let mut tasks = self.tasks.lock().unwrap();
+            let entry = tasks.get_mut(id)?;
             entry.logs.push(log.clone());
-            Some(log)
-        } else {
-            None
+            entry.log_writer.clone()
+        };
+        if let Some(writer) = writer {
+            if let Ok(mut writer) = writer.lock() {
+                if let Err(error) = writer.append(level, message) {
+                    log::warn!("{error}");
+                }
+            }
         }
+        Some(log)
     }
 
     /// 获取任务日志（内存优先，若任务已移除则从文件回读）
@@ -415,50 +423,41 @@ impl TaskManager {
 
     /// 从磁盘日志文件读取日志
     fn read_log_file(&self, id: &str) -> Vec<TaskLog> {
-        let prefix = if id.len() >= 8 { &id[..8] } else { id };
-        let log_path = self.log_dir.join(format!("task_{}.log", prefix));
-        Self::parse_log_file(&log_path)
+        let log_path = self.log_dir.join(format!("task_{}.log", task_id_prefix(id)));
+        crate::task_log::read_log_file(&log_path).unwrap_or_default()
     }
 
     /// 按完整文件路径读取日志
-    pub fn read_log_file_by_path(path: &str) -> Vec<TaskLog> {
-        let p = std::path::Path::new(path);
-        if p.exists() {
-            Self::parse_log_file(p)
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// 解析日志文件内容
-    fn parse_log_file(path: &std::path::Path) -> Vec<TaskLog> {
-        match std::fs::read_to_string(path) {
-            Ok(content) => content.lines().filter_map(|line| {
-                // 格式: [HH:MM:SS] [LEVEL] message
-                let line = line.trim();
-                if line.len() < 16 { return None; }
-                let ts_end = line.find(']')?;
-                let timestamp = line[1..ts_end].to_string();
-                let rest = &line[ts_end + 2..]; // skip "] "
-                let lvl_start = rest.find('[')?;
-                let lvl_end = rest.find(']')?;
-                let level = rest[lvl_start + 1..lvl_end].to_string();
-                let message = rest[lvl_end + 2..].to_string(); // skip "] "
-                Some(TaskLog { timestamp, level, message })
-            }).collect(),
-            Err(_) => Vec::new(),
-        }
+    pub fn read_log_file_by_path(path: &str) -> Result<Vec<TaskLog>, String> {
+        crate::task_log::read_log_file(Path::new(path))
     }
 
     /// 获取任务日志文件路径
     pub fn get_log_file_path(&self, id: &str) -> Option<String> {
-        let prefix = if id.len() >= 8 { &id[..8] } else { id };
-        let log_path = self.log_dir.join(format!("task_{}.log", prefix));
-        if log_path.exists() {
-            Some(log_path.to_string_lossy().to_string())
-        } else {
-            None
-        }
+        self.get_log_metadata(id)
+            .and_then(|metadata| metadata.path)
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    pub fn get_log_metadata(&self, id: &str) -> Option<crate::task_log::LogMetadata> {
+        let writer = self.tasks.lock().unwrap().get(id)?.log_writer.clone()?;
+        writer.lock().ok().map(|writer| writer.metadata())
+    }
+
+    pub fn active_log_paths(&self) -> std::collections::HashSet<PathBuf> {
+        let writers = self.tasks.lock().unwrap().values()
+            .filter(|entry| !matches!(entry.info.status,
+                TaskStatus::Completed | TaskStatus::CompletedWithGaps |
+                TaskStatus::Failed | TaskStatus::Cancelled))
+            .filter_map(|entry| entry.log_writer.clone())
+            .collect::<Vec<_>>();
+        writers.into_iter()
+            .filter_map(|writer| writer.lock().ok().map(|writer| writer.path().to_path_buf()))
+            .collect()
+    }
+
+    pub fn log_dir_path(&self) -> PathBuf {
+        self.log_dir.clone()
     }
 
     /// 获取日志目录路径
@@ -473,6 +472,60 @@ impl TaskManager {
         } else {
             false
         }
+    }
+}
+
+fn task_id_prefix(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn active_log_paths_only_contains_live_task_logs() {
+        let tmp = TempDir::new().unwrap();
+        let manager = TaskManager::new_with_log_dir(tmp.path().to_path_buf());
+        manager.create_task(
+            "12345678-task".to_string(), "task".to_string(), "source".to_string(),
+            "Source".to_string(), 1, "tiles".to_string(), "D:/output".to_string(), 1,
+        );
+        let paths = manager.active_log_paths();
+        assert_eq!(paths.len(), 1);
+        assert!(paths.iter().next().unwrap().starts_with(tmp.path()));
+        manager.complete_task("12345678-task", 0);
+        assert!(manager.active_log_paths().is_empty());
+    }
+
+    #[test]
+    fn concurrent_tasks_keep_independent_log_writers() {
+        let tmp = TempDir::new().unwrap();
+        let manager = Arc::new(TaskManager::new_with_log_dir(tmp.path().to_path_buf()));
+        let ids = (0..4).map(|index| format!("{index:08}-task"))
+            .collect::<Vec<_>>();
+        for id in &ids {
+            manager.create_task(
+                id.clone(), id.clone(), "source".to_string(), "Source".to_string(),
+                1, "tiles".to_string(), "D:/output".to_string(), 100,
+            );
+        }
+        let joins = ids.iter().cloned().map(|id| {
+            let manager = manager.clone();
+            std::thread::spawn(move || {
+                for index in 0..100 {
+                    manager.append_log(&id, "INFO", &format!("line-{index}"));
+                }
+            })
+        }).collect::<Vec<_>>();
+        for join in joins { join.join().unwrap(); }
+
+        for id in &ids {
+            assert_eq!(manager.get_logs(id).len(), 100);
+            assert!(manager.get_log_metadata(id).unwrap().stored_size > 0);
+        }
+        assert_eq!(manager.active_log_paths().len(), 4);
     }
 }
 

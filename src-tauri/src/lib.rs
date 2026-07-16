@@ -6,8 +6,10 @@ pub mod merger;
 pub mod exporter;
 pub mod admin;
 pub mod history;
+pub mod history_maintenance;
 pub mod settings;
 pub mod task;
+pub mod task_log;
 pub mod streaming_tiff;
 pub mod streaming_raster;
 pub mod pyramid;
@@ -209,6 +211,41 @@ pub fn run() {
                 }
                 if cleaned > 0 {
                     log::info!("[startup] 清理了 {} 个 >24h 的孤儿临时目录 (tif-dl-*)", cleaned);
+                }
+            });
+
+            let task_manager = app.state::<Arc<TaskManager>>().inner().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                loop {
+                    match history::HistoryStore::global() {
+                        Ok(store) => {
+                            let active = task_manager.active_log_paths();
+                            let log_dir = task_manager.log_dir_path();
+                            match history_maintenance::run_batch(
+                                store,
+                                &log_dir,
+                                &active,
+                                history_maintenance::DEFAULT_BATCH_SIZE,
+                            ) {
+                                Ok(report) if report.compressed > 0
+                                    || report.expired > 0
+                                    || report.orphans_removed > 0 =>
+                                {
+                                    log::info!(
+                                        "日志维护完成: 压缩 {}, 过期 {}, 孤儿 {}",
+                                        report.compressed,
+                                        report.expired,
+                                        report.orphans_removed
+                                    );
+                                }
+                                Ok(_) => {}
+                                Err(error) => log::warn!("日志维护失败: {error}"),
+                            }
+                        }
+                        Err(error) => log::warn!("历史数据库不可用，跳过日志维护: {error}"),
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(30 * 60));
                 }
             });
 
