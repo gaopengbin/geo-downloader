@@ -264,6 +264,79 @@ body {
 }
 
 /* 控件之间的间距统一为 6px */
+.geod-measure-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: hsl(var(--card-foreground));
+  background-color: hsl(var(--card));
+  border: 0;
+  border-bottom: 1px solid hsl(var(--border));
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+.geod-measure-toolbar button:last-child {
+  border-bottom: 0;
+}
+.geod-measure-toolbar button:hover {
+  color: hsl(var(--accent-foreground));
+  background-color: hsl(var(--accent));
+}
+.geod-measure-toolbar button.is-active,
+.geod-measure-toolbar button.is-active:hover {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+.geod-measure-toolbar svg {
+  pointer-events: none;
+}
+.geod-measure-path {
+  filter: drop-shadow(0 0 1px rgb(255 255 255 / 0.95))
+    drop-shadow(0 1px 2px rgb(15 23 42 / 0.65));
+}
+.geod-measure-label-host {
+  width: 0 !important;
+  height: 0 !important;
+  border: 0 !important;
+  pointer-events: none !important;
+}
+.geod-measure-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: max-content;
+  max-width: 180px;
+  padding: 4px 7px;
+  color: #111827;
+  background: rgb(255 255 255 / 0.96);
+  border: 1px solid rgb(15 23 42 / 0.48);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgb(255 255 255 / 0.9), 0 2px 6px rgb(15 23 42 / 0.4);
+  font-size: 11px;
+  line-height: 1.25;
+  letter-spacing: 0;
+  white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+.geod-measure-label strong {
+  font-weight: 650;
+}
+.geod-measure-label span {
+  color: #374151;
+  font-size: 10px;
+}
+.geod-measure-label.is-compact {
+  padding: 2px 5px;
+  border-color: rgb(15 23 42 / 0.32);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 0.32);
+  font-size: 10px;
+  transform: translate(-50%, calc(-100% - 5px));
+}
+
 .leaflet-top.leaflet-left .leaflet-control {
   margin-bottom: 6px !important;
 }

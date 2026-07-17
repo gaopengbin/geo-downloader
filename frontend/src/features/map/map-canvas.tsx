@@ -4,6 +4,7 @@ import 'leaflet-draw'
 import '@maplibre/maplibre-gl-leaflet'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useQuery } from '@tanstack/react-query'
+import { Pentagon, Ruler, Trash2 } from 'lucide-react'
 
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
@@ -202,6 +203,92 @@ function writePersistedMapView(view: PersistedMapView) {
   }
 }
 
+type MeasureMode = 'distance' | 'area'
+type MeasureActions = {
+  toggle: (mode: MeasureMode) => void
+  clear: () => void
+}
+
+function formatMeasureDistance(meters: number) {
+  if (meters >= 1000) return `${(meters / 1000).toFixed(2)} km`
+  return `${meters.toFixed(meters < 100 ? 1 : 0)} m`
+}
+
+function formatMeasureArea(squareMeters: number) {
+  if (squareMeters >= 1_000_000) return `${(squareMeters / 1_000_000).toFixed(2)} km²`
+  if (squareMeters >= 10_000) return `${(squareMeters / 10_000).toFixed(2)} ha`
+  return `${squareMeters.toFixed(0)} m²`
+}
+
+function measurePathDistance(points: L.LatLng[], closePath = false) {
+  let distance = 0
+  for (let index = 1; index < points.length; index += 1) {
+    distance += points[index - 1].distanceTo(points[index])
+  }
+  if (closePath && points.length > 2) {
+    distance += points[points.length - 1].distanceTo(points[0])
+  }
+  return distance
+}
+
+function measurementLabelIcon(primary: string, secondary?: string, compact = false) {
+  return L.divIcon({
+    className: 'geod-measure-label-host',
+    html: `<div class="geod-measure-label${compact ? ' is-compact' : ''}"><strong>${primary}</strong>${secondary ? `<span>${secondary}</span>` : ''}</div>`,
+    iconSize: undefined,
+  })
+}
+
+function addDistanceMeasurement(
+  group: L.FeatureGroup,
+  layer: L.Polyline,
+  points: L.LatLng[],
+) {
+  group.addLayer(layer)
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1]
+    const end = points[index]
+    const midpoint = L.latLng((start.lat + end.lat) / 2, (start.lng + end.lng) / 2)
+    group.addLayer(
+      L.marker(midpoint, {
+        icon: measurementLabelIcon(formatMeasureDistance(start.distanceTo(end)), undefined, true),
+        interactive: false,
+        keyboard: false,
+      }),
+    )
+  }
+  const total = measurePathDistance(points)
+  group.addLayer(
+    L.marker(points[points.length - 1], {
+      icon: measurementLabelIcon(`总长 ${formatMeasureDistance(total)}`),
+      interactive: false,
+      keyboard: false,
+    }),
+  )
+}
+
+function addAreaMeasurement(
+  group: L.FeatureGroup,
+  layer: L.Polygon,
+  points: L.LatLng[],
+) {
+  group.addLayer(layer)
+  // leaflet-draw ships GeometryUtil, which calculates geodesic polygon area in square meters.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const area = (L as any).GeometryUtil.geodesicArea(points) as number
+  const perimeter = measurePathDistance(points, true)
+  group.addLayer(
+    L.marker(layer.getBounds().getCenter(), {
+      icon: measurementLabelIcon(
+        `面积 ${formatMeasureArea(area)}`,
+        `周长 ${formatMeasureDistance(perimeter)}`,
+      ),
+      interactive: false,
+      keyboard: false,
+    }),
+  )
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
@@ -355,6 +442,7 @@ export function MapCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const drawnRef = useRef<L.FeatureGroup | null>(null)
+  const measureActionsRef = useRef<MeasureActions | null>(null)
   const lastSelectionSyncKeyRef = useRef<string | null>(null)
   const mapViewSaveTimerRef = useRef<number | null>(null)
   // 图层管理
@@ -373,6 +461,7 @@ export function MapCanvas() {
   const [error] = useState<string | null>(null)
   const [statusCoords, setStatusCoords] = useState<string>('经度: --  纬度: --')
   const [statusZoom, setStatusZoom] = useState<string>('缩放: --')
+  const [measureMode, setMeasureMode] = useState<MeasureMode | null>(null)
   const [waybackProxyBaseUrl, setWaybackProxyBaseUrl] = useState<string | null>(null)
   const [effectiveGraticuleInterval, setEffectiveGraticuleInterval] = useState<number | null>(
     null,
@@ -446,6 +535,11 @@ export function MapCanvas() {
     currentBaseLayerKeyRef.current = '__fallback'
     const drawn = new L.FeatureGroup()
     map.addLayer(drawn)
+    const measurements = new L.FeatureGroup()
+    map.addLayer(measurements)
+    let activeMeasureMode: MeasureMode | null = null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let activeMeasureHandler: any = null
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const drawControl = new (L as any).Control.Draw({
@@ -462,8 +556,73 @@ export function MapCanvas() {
     })
     map.addControl(drawControl)
 
+    const stopMeasurement = (syncState = true) => {
+      if (activeMeasureHandler?.enabled?.()) activeMeasureHandler.disable()
+      activeMeasureHandler = null
+      activeMeasureMode = null
+      if (syncState) setMeasureMode(null)
+    }
+    const startMeasurement = (mode: MeasureMode) => {
+      if (activeMeasureMode === mode) {
+        stopMeasurement()
+        return
+      }
+      stopMeasurement()
+      activeMeasureMode = mode
+      const shapeOptions = {
+        color: '#2563eb',
+        weight: 3,
+        opacity: 0.95,
+        fillColor: '#3b82f6',
+        fillOpacity: mode === 'area' ? 0.14 : 0,
+        dashArray: '8 6',
+        className: 'geod-measure-path',
+      }
+      if (mode === 'distance') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        activeMeasureHandler = new (L as any).Draw.Polyline(map, {
+          shapeOptions,
+          metric: true,
+          showLength: true,
+        })
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        activeMeasureHandler = new (L as any).Draw.Polygon(map, {
+          allowIntersection: false,
+          showArea: true,
+          metric: true,
+          shapeOptions,
+        })
+      }
+      activeMeasureHandler.enable()
+      setMeasureMode(mode)
+    }
+    measureActionsRef.current = {
+      toggle: startMeasurement,
+      clear: () => {
+        stopMeasurement()
+        measurements.clearLayers()
+      },
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     map.on((L as any).Draw.Event.CREATED, (e: any) => {
+      const isMeasurement = String(e.layer?.options?.className ?? '').includes(
+        'geod-measure-path',
+      )
+      if (isMeasurement) {
+        if (e.layerType === 'polyline') {
+          const points = e.layer.getLatLngs() as L.LatLng[]
+          addDistanceMeasurement(measurements, e.layer as L.Polyline, points)
+        } else if (e.layerType === 'polygon') {
+          const points = e.layer.getLatLngs()[0] as L.LatLng[]
+          addAreaMeasurement(measurements, e.layer as L.Polygon, points)
+        }
+        activeMeasureHandler = null
+        activeMeasureMode = null
+        setMeasureMode(null)
+        return
+      }
       drawn.clearLayers()
       drawn.addLayer(e.layer)
       if (e.layerType === 'rectangle') {
@@ -564,6 +723,8 @@ export function MapCanvas() {
         mapViewSaveTimerRef.current = null
       }
       persistCurrentView()
+      stopMeasurement(false)
+      measureActionsRef.current = null
       map.remove()
       mapRef.current = null
       drawnRef.current = null
@@ -1212,6 +1373,36 @@ export function MapCanvas() {
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0" />
+      <div className="leaflet-bar geod-measure-toolbar pointer-events-auto absolute left-[10px] top-[241px] z-10">
+        <button
+          type="button"
+          className={measureMode === 'distance' ? 'is-active' : undefined}
+          title="测量距离"
+          aria-label="测量距离"
+          aria-pressed={measureMode === 'distance'}
+          onClick={() => measureActionsRef.current?.toggle('distance')}
+        >
+          <Ruler size={16} strokeWidth={2} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={measureMode === 'area' ? 'is-active' : undefined}
+          title="测量面积"
+          aria-label="测量面积"
+          aria-pressed={measureMode === 'area'}
+          onClick={() => measureActionsRef.current?.toggle('area')}
+        >
+          <Pentagon size={16} strokeWidth={2} aria-hidden />
+        </button>
+        <button
+          type="button"
+          title="清除量测"
+          aria-label="清除量测"
+          onClick={() => measureActionsRef.current?.clear()}
+        >
+          <Trash2 size={16} strokeWidth={2} aria-hidden />
+        </button>
+      </div>
       {waybackFromCache && mode === 'wayback' && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2">
           <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-1 text-xs text-yellow-700 shadow-sm backdrop-blur dark:text-yellow-400">
