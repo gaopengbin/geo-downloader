@@ -1,6 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { openAssistantWithContext } from '@/features/assistant/assistant-store'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -45,6 +47,22 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               {error.stack ?? error.message}
             </pre>
             <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() =>
+                  openAssistantWithContext(
+                    [
+                      'GeoD interface render error',
+                      `message: ${error.message}`,
+                      `stack: ${error.stack ?? 'unavailable'}`,
+                    ].join('\n'),
+                    '界面出现渲染异常，请帮我分析可能原因和恢复步骤。',
+                  )
+                }
+              >
+                <Sparkles className="size-4" />
+                询问助手
+              </Button>
               <Button variant="outline" onClick={() => window.location.reload()}>
                 重新加载
               </Button>

@@ -293,6 +293,15 @@ pub fn get_builtin_sources(tianditu_token: Option<String>) -> HashMap<String, Ti
     config::get_tile_sources(tianditu_token.as_deref())
 }
 
+/// 从一条实际瓦片请求 URL 推导模板并验证样例响应
+#[tauri::command]
+pub async fn analyze_tile_source_url(
+    raw_url: String,
+    proxy: Option<String>,
+) -> Result<crate::source_analyzer::SourceUrlAnalysis, String> {
+    crate::source_analyzer::analyze(&raw_url, proxy.as_deref()).await
+}
+
 /// 获取系统内存信息
 #[tauri::command]
 pub fn get_system_memory() -> Option<budget::SystemMemoryInfo> {

@@ -49,6 +49,7 @@ const settingsSchema = z.object({
   tile_cache_dir: z.string().trim(),
   min_export_success_ratio: z.number().min(0).max(1),
   export_buffer_mb: z.number().int().min(16).max(512),
+  empty_tile_probe_action: z.enum(['continue', 'ask', 'cancel']),
 })
 
 type SettingsFormValues = z.infer<typeof settingsSchema>
@@ -69,6 +70,7 @@ const DEFAULT_VALUES: SettingsFormValues = {
   tile_cache_dir: '',
   min_export_success_ratio: 0,
   export_buffer_mb: 64,
+  empty_tile_probe_action: 'continue',
 }
 
 function fromAppSettings(s: AppSettings | undefined): SettingsFormValues {
@@ -93,6 +95,7 @@ function fromAppSettings(s: AppSettings | undefined): SettingsFormValues {
     tile_cache_dir: s.tile_cache_dir ?? '',
     min_export_success_ratio: s.min_export_success_ratio ?? 0,
     export_buffer_mb: s.export_buffer_mb ?? 64,
+    empty_tile_probe_action: s.empty_tile_probe_action ?? 'continue',
   }
 }
 
@@ -114,6 +117,7 @@ function toAppSettings(values: SettingsFormValues, base: AppSettings | undefined
     tile_cache_dir: values.tile_cache_dir.trim() || null,
     min_export_success_ratio: values.min_export_success_ratio,
     export_buffer_mb: values.export_buffer_mb,
+    empty_tile_probe_action: values.empty_tile_probe_action,
   }
 }
 
@@ -150,6 +154,7 @@ export function SettingsPanel() {
   const tileCacheDir = useWatch({ control, name: 'tile_cache_dir' })
   const minExportSuccessRatio = useWatch({ control, name: 'min_export_success_ratio' })
   const exportBufferMb = useWatch({ control, name: 'export_buffer_mb' })
+  const emptyTileProbeAction = useWatch({ control, name: 'empty_tile_probe_action' })
 
   const mutation = useMutation({
     mutationFn: (values: SettingsFormValues) =>
@@ -195,8 +200,17 @@ export function SettingsPanel() {
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-3">
-      <PanelSection icon={KeyRound} title="访问令牌" description="天地图 / Cesium Ion">
+    <form
+      onSubmit={onSubmit}
+      className="space-y-3"
+      data-agent-target="settings-panel"
+    >
+      <PanelSection
+        icon={KeyRound}
+        title="访问令牌"
+        description="天地图 / Cesium Ion"
+        dataAgentTarget="settings-tokens"
+      >
         <div className="space-y-1.5">
           <Label htmlFor="tianditu_token">天地图 Token</Label>
           <Input
@@ -221,6 +235,7 @@ export function SettingsPanel() {
         icon={Wifi}
         title="网络代理"
         description="仅代理下载请求"
+        dataAgentTarget="settings-proxy"
         action={
           <Switch
             checked={proxyEnabled}
@@ -244,6 +259,7 @@ export function SettingsPanel() {
         icon={SlidersHorizontal}
         title="默认下载参数"
         description="并发 / 缩放 / 格式 / 内存预算"
+        dataAgentTarget="settings-download"
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
@@ -290,6 +306,31 @@ export function SettingsPanel() {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label>空白瓦片探测</Label>
+            <Select
+              value={emptyTileProbeAction}
+              onValueChange={(v) =>
+                setValue(
+                  'empty_tile_probe_action',
+                  v as SettingsFormValues['empty_tile_probe_action'],
+                  { shouldDirty: true },
+                )
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="continue">自动继续（默认）</SelectItem>
+                <SelectItem value="ask">每次询问</SelectItem>
+                <SelectItem value="cancel">停止创建任务</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              探测仅采样选区中心的一张最高级别瓦片，可能误判。自动继续不会弹窗阻塞下载。
+            </p>
           </div>
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="memory_budget_mb">内存预算 MB (512-16384)</Label>
@@ -365,7 +406,12 @@ export function SettingsPanel() {
         </div>
       </PanelSection>
 
-      <PanelSection icon={Wrench} title="高级" description="调试 / 证书校验">
+      <PanelSection
+        icon={Wrench}
+        title="高级"
+        description="调试 / 证书校验"
+        dataAgentTarget="settings-advanced"
+      >
         <div className="flex items-center justify-between rounded-md border p-2.5">
           <div className="min-w-0 pr-2">
             <Label className="text-sm">调试模式</Label>
@@ -394,7 +440,12 @@ export function SettingsPanel() {
         )}
       </PanelSection>
 
-      <PanelSection icon={Database} title="瓦片缓存" description="浏览即缓存 / 离线复用">
+      <PanelSection
+        icon={Database}
+        title="瓦片缓存"
+        description="浏览即缓存 / 离线复用"
+        dataAgentTarget="settings-cache"
+      >
         <TileCacheSection
           enabled={tileCacheEnabled}
           maxSizeMb={tileCacheMaxSizeMb}
@@ -412,7 +463,12 @@ export function SettingsPanel() {
         </Button>
       </div>
 
-      <PanelSection icon={LayoutGrid} title="其他" description="图源管理 / 关于">
+      <PanelSection
+        icon={LayoutGrid}
+        title="其他"
+        description="图源管理 / 关于"
+        dataAgentTarget="settings-other"
+      >
         <div className="flex flex-wrap gap-2">
           <SourcesDialog />
           <AboutDialog />

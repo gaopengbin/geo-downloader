@@ -4,6 +4,7 @@ import type { ComponentType, SVGProps } from 'react'
 
 import { AppShell } from '@/components/layout/app-shell'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { AssistantButton } from '@/features/assistant/assistant-button'
 import { BatchDialog } from '@/features/batch/batch-dialog'
 import { HelpButton } from '@/features/onboarding/help-button'
 import { useOnboardingTour } from '@/features/onboarding/use-onboarding-tour'
@@ -213,12 +214,15 @@ function App() {
         </div>
       }
       headerExtras={
-        <HelpButton
-          onStartMain={mainTour.start}
-          onStartImagery={() => startTourForMode('imagery', imageryTour.start)}
-          onStartTiles3d={() => startTourForMode('tiles3d', tiles3dTour.start)}
-          onStartWayback={() => startTourForMode('wayback', waybackTour.start)}
-        />
+        <>
+          <AssistantButton />
+          <HelpButton
+            onStartMain={mainTour.start}
+            onStartImagery={() => startTourForMode('imagery', imageryTour.start)}
+            onStartTiles3d={() => startTourForMode('tiles3d', tiles3dTour.start)}
+            onStartWayback={() => startTourForMode('wayback', waybackTour.start)}
+          />
+        </>
       }
     >
       <div className="flex h-[calc(100vh-3rem)] w-screen overflow-hidden">
@@ -277,7 +281,10 @@ function App() {
                 <ModePlaceholder mode={currentMode} />
               )}
             </div>
-            <div className={tab === 'history' ? 'space-y-3 p-3' : 'hidden'}>
+            <div
+              className={tab === 'history' ? 'space-y-3 p-3' : 'hidden'}
+              data-agent-target="download-center"
+            >
               <PanelSection icon={ClipboardList} title="任务" description="进行中 / 暂停 / 可恢复">
                 <TasksPanel />
               </PanelSection>

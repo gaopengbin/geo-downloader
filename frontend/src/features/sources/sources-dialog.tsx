@@ -1,6 +1,18 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Database, Loader2, Pencil, Plus, RotateCcw, Save, Trash2, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  Loader2,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Save,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +30,9 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { getSettings, saveSettings } from '@/features/settings/settings-api'
+import { ASSISTANT_ACTION_EVENT } from '@/features/assistant/assistant-actions'
 import {
+  analyzeTileSourceUrl,
   blankCustomSource,
   builtinToOverrideDraft,
   getBuiltinSourcesRaw,
@@ -28,7 +42,7 @@ import {
   upsertCustomSource,
   upsertSourceOverride,
 } from './sources-api'
-import type { AppSettings, CustomTileSource, TileSource } from '@/types/api'
+import type { AppSettings, CustomTileSource, SourceUrlAnalysis, TileSource } from '@/types/api'
 
 type SourceFormProps = {
   value: CustomTileSource
@@ -113,6 +127,10 @@ function CustomPanel({
 }) {
   const list = useMemo(() => settings.custom_sources ?? [], [settings.custom_sources])
   const [editing, setEditing] = useState<CustomTileSource | null>(null)
+  const [smartOpen, setSmartOpen] = useState(false)
+  const [smartUrl, setSmartUrl] = useState('')
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analysis, setAnalysis] = useState<SourceUrlAnalysis | null>(null)
   const isNew = useMemo(
     () => !!editing && !list.some((s) => s.id === editing.id),
     [editing, list],
@@ -134,22 +152,126 @@ function CustomPanel({
     if (editing?.id === id) setEditing(null)
   }
 
+  async function handleSmartAnalyze() {
+    if (!smartUrl.trim()) {
+      toast.error('请先粘贴一条瓦片 URL')
+      return
+    }
+    setAnalyzing(true)
+    setAnalysis(null)
+    try {
+      const result = await analyzeTileSourceUrl(
+        smartUrl.trim(),
+        settings.proxy_enabled && settings.proxy_url ? settings.proxy_url : null,
+      )
+      setAnalysis(result)
+      setEditing({
+        ...blankCustomSource(),
+        name: result.suggested_name,
+        url: result.url_template,
+        subdomains: result.subdomains,
+        max_zoom: result.suggested_max_zoom,
+      })
+      if (result.test_ok) {
+        toast.success('图源解析和样例测试均已通过')
+      } else {
+        toast.warning('模板已生成，但样例测试未通过，请检查后再保存')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(`智能解析失败：${message}`)
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">
           自定义图源会与内置图源一起出现在下载页的图源选择中。
         </p>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setEditing(blankCustomSource())}
-          disabled={pending}
-        >
-          <Plus className="mr-1 size-4" />
-          新增
-        </Button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setSmartOpen((open) => !open)
+              setAnalysis(null)
+            }}
+            disabled={pending}
+          >
+            <Sparkles className="mr-1 size-4" />
+            智能解析
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setEditing(blankCustomSource())
+              setAnalysis(null)
+            }}
+            disabled={pending}
+          >
+            <Plus className="mr-1 size-4" />
+            手动新增
+          </Button>
+        </div>
       </div>
+
+      {smartOpen && (
+        <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="smart-source-url">瓦片 URL</Label>
+            <div className="flex gap-2">
+              <Input
+                id="smart-source-url"
+                value={smartUrl}
+                onChange={(event) => setSmartUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !analyzing) void handleSmartAnalyze()
+                }}
+                placeholder="粘贴浏览器网络请求中的任意一条瓦片 URL"
+                className="min-w-0 font-mono text-xs"
+                disabled={analyzing}
+              />
+              <Button onClick={() => void handleSmartAnalyze()} disabled={analyzing}>
+                {analyzing ? (
+                  <Loader2 className="mr-1 size-4 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-1 size-4" />
+                )}
+                解析并测试
+              </Button>
+            </div>
+          </div>
+          {analysis && (
+            <div
+              className={`flex gap-2 rounded-md border p-2.5 text-xs ${
+                analysis.test_ok
+                  ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                  : 'border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+              }`}
+            >
+              {analysis.test_ok ? (
+                <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+              ) : (
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              )}
+              <div className="min-w-0 space-y-1">
+                <p className="font-medium">{analysis.message}</p>
+                <p className="break-all opacity-80">
+                  {analysis.status_code ? `HTTP ${analysis.status_code} · ` : ''}
+                  {analysis.tile_format.toUpperCase()} · {analysis.content_length.toLocaleString()} B
+                  {analysis.detected_zoom != null
+                    ? ` · z${analysis.detected_zoom}/${analysis.detected_x}/${analysis.detected_y}`
+                    : ''}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {list.length === 0 ? (
         <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -203,7 +325,10 @@ function CustomPanel({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setEditing(null)}
+              onClick={() => {
+                setEditing(null)
+                setAnalysis(null)
+              }}
               disabled={pending}
             >
               <X className="size-4" />
@@ -211,7 +336,14 @@ function CustomPanel({
           </div>
           <SourceForm value={editing} onChange={setEditing} disableId={isNew} />
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setEditing(null)} disabled={pending}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setEditing(null)
+                setAnalysis(null)
+              }}
+              disabled={pending}
+            >
               取消
             </Button>
             <Button onClick={handleSave} disabled={pending}>
@@ -419,6 +551,15 @@ function DefaultSourcePanel({
 export function SourcesDialog() {
   const [open, setOpen] = useState(false)
   const queryClient = useQueryClient()
+
+  useEffect(() => {
+    const handleAssistantAction = (event: Event) => {
+      const detail = (event as CustomEvent<{ action?: string }>).detail
+      if (detail?.action === 'open-sources') setOpen(true)
+    }
+    window.addEventListener(ASSISTANT_ACTION_EVENT, handleAssistantAction)
+    return () => window.removeEventListener(ASSISTANT_ACTION_EVENT, handleAssistantAction)
+  }, [])
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],

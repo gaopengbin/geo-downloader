@@ -1,5 +1,11 @@
 import { invokeCommand } from '@/lib/tauri'
-import type { AppSettings, CustomTileSource, Nullable, TileSource } from '@/types/api'
+import type {
+  AppSettings,
+  CustomTileSource,
+  Nullable,
+  SourceUrlAnalysis,
+  TileSource,
+} from '@/types/api'
 
 export function getTileSourcesMerged(tiandituToken: Nullable<string> = null) {
   return invokeCommand<Record<string, TileSource>>('get_tile_sources', { tiandituToken })
@@ -7,6 +13,10 @@ export function getTileSourcesMerged(tiandituToken: Nullable<string> = null) {
 
 export function getBuiltinSourcesRaw(tiandituToken: Nullable<string> = null) {
   return invokeCommand<Record<string, TileSource>>('get_builtin_sources', { tiandituToken })
+}
+
+export function analyzeTileSourceUrl(rawUrl: string, proxy: Nullable<string> = null) {
+  return invokeCommand<SourceUrlAnalysis>('analyze_tile_source_url', { rawUrl, proxy })
 }
 
 /** 生成自定义图源 ID（前缀 custom_） */

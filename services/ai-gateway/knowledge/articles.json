@@ -1,0 +1,467 @@
+{
+  "schemaVersion": 1,
+  "contentVersion": "2026.07.27.2",
+  "product": "GeoD",
+  "articles": [
+    {
+      "id": "cache-migration",
+      "title": "迁移瓦片缓存目录",
+      "summary": "将瓦片缓存迁移到其他磁盘，迁移成功后再切换目录，旧缓存默认保留。",
+      "keywords": ["缓存目录", "缓存迁移", "C盘", "磁盘空间", "瓦片缓存", "迁移"],
+      "body": "打开“设置 > 瓦片缓存”，在“当前缓存目录”右侧点击“迁移”。选择目标目录后，GeoD 会先检查目标空间，再复制并校验缓存；只有校验成功才会切换到新目录。旧缓存不会自动删除，确认新目录工作正常后再由用户自行处理旧目录。迁移过程中不要强制结束程序；取消迁移不会把未校验完成的目标目录设为当前缓存目录。",
+      "actions": [
+        {
+          "label": "打开瓦片缓存设置",
+          "href": "geod://navigate/settings-cache"
+        }
+      ]
+    },
+    {
+      "id": "cache-capacity",
+      "title": "管理瓦片缓存容量",
+      "summary": "查看总占用、设置容量上限，并按图源或全部清理缓存。",
+      "keywords": ["缓存占满", "容量上限", "清理缓存", "磁盘占用", "缓存大小", "限制瓦片缓存大小"],
+      "body": "在“设置 > 瓦片缓存”可以查看已用容量和各图源占用。容量上限单位为 GB，0 表示不限制。可以只清理某个图源，也可以清空全部缓存；清理操作不可恢复。若系统盘空间紧张，优先迁移缓存目录，再根据需要清理旧缓存。",
+      "actions": [
+        {
+          "label": "查看缓存占用",
+          "href": "geod://navigate/settings-cache"
+        }
+      ]
+    },
+    {
+      "id": "task-lifecycle",
+      "title": "下载任务的暂停、中断与恢复",
+      "summary": "解释活动任务、暂停任务和中断任务的区别，以及从下载中心恢复任务的方式。",
+      "keywords": ["暂停", "停止", "中断", "恢复下载", "继续下载", "下载中心", "任务"],
+      "body": "活动任务正在下载；暂停会保留当前会话中的任务状态，之后可以继续；程序退出、网络异常或任务被停止后，任务可能进入中断状态。中断任务不再运行，但在保存状态完整时可以从下载中心继续。删除任务会移除任务记录；是否同时删除日志或输出文件，以界面确认提示为准。批量操作前应核对选中范围。",
+      "actions": [
+        {
+          "label": "打开下载中心",
+          "href": "geod://navigate/download-center"
+        }
+      ]
+    },
+    {
+      "id": "source-configuration",
+      "title": "配置自定义图源",
+      "summary": "配置 URL 模板、请求头和认证信息，并使用智能解析降低手工配置门槛。",
+      "keywords": ["图源", "URL模板", "智能解析", "请求头", "token", "自定义图源", "xyz"],
+      "body": "自定义图源通常需要包含缩放级别与瓦片坐标占位符，例如 {z}、{x}、{y}。如果用户只有一个实际瓦片 URL，可以在图源管理中使用“智能解析”识别可变路径和参数，再执行测试请求。认证信息只应填写到对应的请求头或参数字段，不要发送给 AI 助手。配置成功不代表图源允许批量下载，仍需遵守服务商授权和使用条款。",
+      "actions": [
+        {
+          "label": "打开图源管理",
+          "href": "geod://navigate/settings-sources"
+        },
+        {
+          "label": "定位影像图源",
+          "href": "geod://navigate/imagery-sources"
+        }
+      ]
+    },
+    {
+      "id": "empty-tile-probe",
+      "title": "空白瓦片探测策略",
+      "summary": "说明自动继续、每次询问和停止创建任务三种探测处理方式。",
+      "keywords": ["空白瓦片", "探测警告", "无数据", "弹窗", "自动继续", "瓦片为空"],
+      "body": "空白瓦片探测只采样选区中心的一张最高级别瓦片，因此可能误判。设置中的三种策略为：自动继续，不弹窗阻塞任务；每次询问，由用户决定是否继续；停止创建任务，探测异常时不创建下载任务。若图源最高级别标称较高但局部区域覆盖不足，建议降低缩放级别后重试。",
+      "actions": [
+        {
+          "label": "打开默认下载参数",
+          "href": "geod://navigate/settings-download"
+        }
+      ]
+    },
+    {
+      "id": "download-workflow",
+      "title": "影像与 DEM 下载基本流程",
+      "summary": "选区、选择图源和缩放级别、配置输出并创建下载任务。",
+      "keywords": ["怎么下载", "影像下载", "DEM下载", "选区", "缩放级别", "输出格式"],
+      "body": "影像或 DEM 下载的基本流程是：在地图上选择范围；选择图源和缩放级别；配置输出格式、路径等参数；核对瓦片数量和预计大小；创建任务并在下载中心观察进度。范围越大、级别越高，瓦片数量会快速增长，应先用较小范围验证图源和参数。",
+      "actions": [
+        {
+          "label": "开始影像下载",
+          "href": "geod://navigate/imagery-download"
+        },
+        {
+          "label": "开始 DEM 下载",
+          "href": "geod://navigate/dem-download"
+        }
+      ]
+    },
+    {
+      "id": "wayback-workflow",
+      "title": "Wayback 历史影像下载",
+      "summary": "说明单个、批量和增量三种 Wayback 下载模式。",
+      "keywords": ["Wayback", "历史影像", "增量下载", "覆盖率", "历史版本"],
+      "body": "Wayback 提供单个、批量和增量三种下载方式。单个模式下载指定日期；批量模式一次选择多个版本；增量模式扫描版本并按覆盖率等条件筛选。开始前先在地图上选择范围。扫描和下载是不同阶段，大范围或版本很多时应先用小范围验证。",
+      "actions": [
+        {
+          "label": "打开 Wayback",
+          "href": "geod://navigate/wayback-download"
+        }
+      ]
+    },
+    {
+      "id": "map-tools",
+      "title": "地图图层、经纬网与量测工具",
+      "summary": "图层面板采用点击常驻方式，并支持经纬网、距离和面积量测。",
+      "keywords": ["图层控件", "经纬网", "量测", "测距", "测面积", "地图工具"],
+      "body": "地图图层面板通过点击打开并保持显示，点击面板外部后关闭。地图工具支持经纬网、距离量测和面积量测。经纬网和文字会根据底图保持可读性；量测结果仅用于辅助判断，精度受地图投影、数据和绘制方式影响。",
+      "actions": [
+        {
+          "label": "定位地图",
+          "href": "geod://navigate/map"
+        }
+      ]
+    },
+    {
+      "id": "product-overview",
+      "title": "GeoD 功能与模式选择",
+      "summary": "根据数据类型选择 GeoTIFF、DEM、Wayback、3D Tiles、MVT 或 OSM 模式。",
+      "keywords": ["GeoD功能", "能下载什么", "支持哪些数据", "软件能下载哪些类型的数据", "模式区别", "GeoTIFF", "DEM", "Wayback", "3D Tiles", "MVT", "OSM"],
+      "body": "GeoD 是桌面 GIS 数据工具。普通栅格影像使用 GeoTIFF 模式；高程使用 DEM；Esri 历史影像使用 Wayback；三维模型使用 3D Tiles；矢量瓦片使用 MVT；OpenStreetMap 要素数据使用 OSM。先根据目标数据类型切换顶部模式，再按该模式的面板配置。",
+      "actions": [
+        {
+          "label": "打开资源下载",
+          "href": "geod://navigate/download"
+        }
+      ]
+    },
+    {
+      "id": "region-selection",
+      "title": "选择下载区域",
+      "summary": "支持手动四至、地图绘制、行政区、地名搜索和文件导入。",
+      "keywords": ["选区", "下载范围", "手动四至", "行政区", "地名搜索", "Shapefile", "GeoJSON", "KML", "KMZ"],
+      "body": "下载前需要确定空间范围。可以填写 WGS-84 的北、南、西、东四至，在地图上绘制矩形或多边形，选择中国省市区县，或导入 GeoJSON、KML、KMZ、Shapefile。Shapefile 建议使用包含 .shp、.shx、.dbf 的 ZIP；文件含多个要素时可选择合并范围或拆分任务。导入后先在地图核对位置，坐标明显偏移通常与文件坐标系有关。",
+      "actions": [
+        {
+          "label": "定位区域选择",
+          "href": "geod://navigate/download"
+        },
+        {
+          "label": "定位地图",
+          "href": "geod://navigate/map"
+        }
+      ]
+    },
+    {
+      "id": "zoom-and-size",
+      "title": "缩放级别、瓦片数量与文件大小",
+      "summary": "级别和范围共同决定瓦片数量，级别每升高一级数量可能约增至四倍。",
+      "keywords": ["缩放级别", "zoom", "瓦片太多", "文件太大", "预计大小", "下载很慢", "z17", "z18"],
+      "body": "下载量由选区面积和缩放级别共同决定。范围不变时，级别每升高一级，瓦片数量理论上可能约增至四倍。不要把多个高等级和大范围一次性组合；先选小范围、单个级别验证图源和输出，再逐步扩大。实际清晰度受图源原始覆盖限制，标称支持某级别不代表所有区域都有该级别数据。",
+      "actions": [
+        {
+          "label": "定位图源和缩放级别",
+          "href": "geod://navigate/imagery-sources"
+        }
+      ]
+    },
+    {
+      "id": "output-formats",
+      "title": "选择影像输出格式",
+      "summary": "GeoTIFF、PNG、JPEG、原始瓦片、MBTiles 和 GeoPackage 适用于不同交付方式。",
+      "keywords": ["输出格式", "GeoTIFF", "PNG", "JPEG", "MBTiles", "GeoPackage", "GPKG", "原始瓦片"],
+      "body": "GeoTIFF 带地理参考，适合 GIS 软件；PNG 无损并支持透明背景；JPEG 体积较小但有损且不支持透明；原始瓦片目录保留 {z}/{x}/{y} 结构；MBTiles 和 GeoPackage 将瓦片集中存储，便于移动和离线使用。格式能力会随当前数据模式变化，例如 MVT 使用 PBF 瓦片而不是栅格图片。",
+      "actions": [
+        {
+          "label": "定位输出参数",
+          "href": "geod://navigate/imagery-output"
+        }
+      ]
+    },
+    {
+      "id": "geotiff-export",
+      "title": "GeoTIFF 压缩、金字塔与透明裁剪",
+      "summary": "说明 LZW、Deflate、影像金字塔、BigTIFF 和多边形裁剪的作用。",
+      "keywords": ["TIFF压缩", "LZW", "Deflate", "金字塔", "BigTIFF", "黑边", "透明裁剪", "GeoTIFF"],
+      "body": "LZW 和 Deflate 都是无损 TIFF 压缩；LZW 兼容性通常更稳，Deflate 在部分数据上体积更小。影像金字塔用于加快 GIS 软件浏览大图，但会增加导出时间和文件体积。超大影像会自动使用 BigTIFF。按多边形裁剪时，GeoTIFF 或 PNG 可保留透明区域；JPEG 不支持透明通道。若只需要矩形范围，不必启用形状裁剪。",
+      "actions": [
+        {
+          "label": "打开影像输出参数",
+          "href": "geod://navigate/imagery-output"
+        }
+      ]
+    },
+    {
+      "id": "export-performance",
+      "title": "大范围导出与内存设置",
+      "summary": "通过内存预算、并发和导出缓冲控制大型 GeoTIFF 的速度与稳定性。",
+      "keywords": ["内存不足", "OOM", "导出卡住", "导出很慢", "内存预算", "导出缓冲", "大图"],
+      "body": "大范围、高级别导出会占用大量内存和磁盘。设置中的内存预算应低于系统可用内存并留出余量；导出流水线缓冲默认 64 MB，内存充足且瓦片很多时可尝试 128 至 256 MB。并发越高不一定越快，网络不稳定或机械硬盘环境应降低并发。若仍失败，优先缩小范围、减少级别或改用 MBTiles、GeoPackage、原始瓦片等无需整图拼接的格式。",
+      "actions": [
+        {
+          "label": "打开默认下载参数",
+          "href": "geod://navigate/settings-download"
+        }
+      ]
+    },
+    {
+      "id": "proxy-configuration",
+      "title": "配置网络代理",
+      "summary": "在设置中启用 GeoD 数据请求代理，并填写 HTTP 代理监听地址。",
+      "keywords": ["配置代理", "网络代理", "代理地址", "10808", "7890", "HTTP代理", "Clash", "无法访问Google"],
+      "body": "打开“设置 > 网络代理”，开启开关，在代理地址中填写本机代理软件提供的 HTTP 或混合代理监听地址，例如 http://127.0.0.1:10808 或 http://127.0.0.1:7890，然后点击页面底部“保存”。当前构建未启用 SOCKS 支持，不要填写 socks5:// 地址；如果代理软件区分 HTTP 端口和 SOCKS 端口，应选择 HTTP 或 mixed 端口。该设置用于 GeoD 的数据访问，不会修改 Windows 系统代理，也不会配置 AI 网关。影像瓦片下载对天地图会保持直连。",
+      "actions": [
+        {
+          "label": "打开网络代理设置",
+          "href": "geod://navigate/settings-proxy"
+        }
+      ]
+    },
+    {
+      "id": "proxy-troubleshooting",
+      "title": "代理连接失败排查",
+      "summary": "检查代理协议、监听端口、本机可用性、保存状态和目标服务响应。",
+      "keywords": ["代理失败", "代理无效", "连接拒绝", "connection refused", "超时", "代理端口", "代理不生效"],
+      "body": "代理不生效时依次检查：代理软件是否正在运行；填写的是 HTTP 或 mixed 端口而不是 SOCKS 端口；地址是否包含 http://；设置开关是否开启并已保存；本机防火墙是否拦截；目标服务是否在代理规则中可访问。127.0.0.1 只表示当前电脑。修改后用小范围、低级别请求验证。若错误是 401、403 或配额不足，通常属于图源认证或授权问题，不是代理故障。",
+      "actions": [
+        {
+          "label": "检查网络代理设置",
+          "href": "geod://navigate/settings-proxy"
+        }
+      ]
+    },
+    {
+      "id": "access-tokens",
+      "title": "配置天地图与 Cesium Ion Token",
+      "summary": "说明不同访问令牌的用途、填写位置和安全注意事项。",
+      "keywords": ["天地图Token", "Cesium Ion Token", "Asset ID", "访问令牌", "API Key", "401", "403"],
+      "body": "天地图 Token 用于访问天地图服务；Cesium Ion Token 与 Asset ID 配合访问 Ion 资产。请在“设置 > 访问令牌”填写并保存。401 通常表示凭据无效，403 可能是权限、来源限制或配额问题。不要把 Token 发送给 AI 助手、群聊或截图公开；泄露后应到对应平台撤销并重新生成。",
+      "actions": [
+        {
+          "label": "打开访问令牌设置",
+          "href": "geod://navigate/settings-tokens"
+        }
+      ]
+    },
+    {
+      "id": "tls-certificates",
+      "title": "HTTPS 证书错误与无效证书开关",
+      "summary": "仅在可信内网证书场景临时允许无效证书，公网服务不应关闭校验。",
+      "keywords": ["证书错误", "HTTPS证书", "invalid certificate", "self-signed", "自签名", "TLS"],
+      "body": "遇到证书校验失败，先检查系统时间、代理中间人证书和服务端证书链。只有在明确可信的内网或自签名服务中，才可在“设置 > 高级”临时开启“允许无效 HTTPS 证书”。该选项降低连接安全性，不应用于不可信公网服务，排查完成后应关闭。",
+      "actions": [
+        {
+          "label": "打开高级设置",
+          "href": "geod://navigate/settings-advanced"
+        }
+      ]
+    },
+    {
+      "id": "source-url-template",
+      "title": "XYZ 图源 URL 模板",
+      "summary": "解释 {z}、{x}、{y}、{s} 占位符、子域名和坐标方案。",
+      "keywords": ["URL模板", "{z}", "{x}", "{y}", "{s}", "XYZ", "TMS", "子域名", "图源模板"],
+      "body": "常见 XYZ 模板包含 {z}、{x}、{y}，例如 https://example.com/tiles/{z}/{x}/{y}.png；使用多个子域名时模板含 {s}，并在 Subdomains 中配置候选值。部分服务使用 TMS 反向 Y 坐标或自定义参数，不能只替换数字后直接当作 XYZ。先用一个已知坐标测试状态码、Content-Type 和实际图片，再扩大下载。",
+      "actions": [
+        {
+          "label": "打开图源管理",
+          "href": "geod://navigate/settings-sources"
+        }
+      ]
+    },
+    {
+      "id": "source-authentication",
+      "title": "图源请求头、Referer 与认证参数",
+      "summary": "根据服务要求配置请求头或 URL 参数，不应把凭据交给 AI。",
+      "keywords": ["Referer", "Authorization", "请求头", "Cookie", "API Key", "token参数", "防盗链", "403"],
+      "body": "图源可能要求 Referer、Authorization、API Key 或 URL 查询参数。应按服务方文档配置，并确认凭据允许当前用途。403 常见于 Referer 不匹配、Token 过期、来源限制或无下载权限。Cookie 和临时签名可能很快失效。AI 助手不需要也不应接收真实凭据；可以提供已脱敏 URL、状态码和响应头进行排查。",
+      "actions": [
+        {
+          "label": "打开图源管理",
+          "href": "geod://navigate/settings-sources"
+        }
+      ]
+    },
+    {
+      "id": "source-smart-analysis",
+      "title": "使用智能解析配置图源",
+      "summary": "从一个实际瓦片 URL 推断模板并测试候选配置，最终仍需用户确认。",
+      "keywords": ["智能解析", "只有一个URL", "自动配置图源", "解析URL", "图源测试"],
+      "body": "只有一个实际瓦片 URL 时，在图源管理的自定义图源区域使用“智能解析”。GeoD 会识别路径中的缩放级别和坐标候选，生成模板并执行测试。检查识别出的 {z}/{x}/{y}、格式、子域名和认证字段是否正确，再保存。自动解析不能判断服务授权，也可能把业务编号误判为坐标；测试成功后仍应在小范围预览验证。",
+      "actions": [
+        {
+          "label": "打开图源管理",
+          "href": "geod://navigate/settings-sources"
+        }
+      ]
+    },
+    {
+      "id": "batch-region-download",
+      "title": "多要素批量下载",
+      "summary": "导入包含多个要素的空间文件后，可合并下载或按要素拆分任务。",
+      "keywords": ["批量下载", "多个要素", "按要素拆分", "合并下载", "Shapefile批量", "一个shp"],
+      "body": "导入包含多个要素的 GeoJSON、Shapefile、KML 或 KMZ 后，可以合并为一个下载范围，也可以按要素拆分为多个任务。拆分适合每个行政区或地块独立交付，但会产生更多任务和日志；合并适合输出一份整体成果。大批量操作前先用少量要素验证命名、图源、缩放级别和输出目录。",
+      "actions": [
+        {
+          "label": "打开资源下载",
+          "href": "geod://navigate/download"
+        }
+      ]
+    },
+    {
+      "id": "task-batch-operations",
+      "title": "批量选择和处理下载任务",
+      "summary": "下载中心支持对活动、暂停或中断任务进行批量选择和对应操作。",
+      "keywords": ["批量勾选", "批量删除", "批量丢弃", "批量重试", "全选任务", "多选任务"],
+      "body": "在下载中心进入批量选择后，应先确认当前分组和选中数量，再执行可用操作。不同状态支持的动作不同：活动任务适合暂停或停止；暂停任务可以继续；中断任务可在保存状态有效时继续或丢弃；历史记录可以批量删除。停止运行与删除记录不是同一件事，删除前以界面确认提示说明的影响范围为准。",
+      "actions": [
+        {
+          "label": "打开下载中心",
+          "href": "geod://navigate/download-center"
+        }
+      ]
+    },
+    {
+      "id": "task-recovery",
+      "title": "程序重启后的任务恢复",
+      "summary": "异常退出或重启后，从下载中心恢复有有效状态的中断任务。",
+      "keywords": ["重启恢复", "断点续传", "崩溃恢复", "继续下载", "任务丢失", "中断任务"],
+      "body": "程序异常退出或重启后，未完成任务会以中断或可恢复状态出现在下载中心。继续前确认原输出目录仍存在、磁盘可写、图源配置和认证未失效。恢复会尽量复用已完成状态或已有文件，但能否完整续传取决于任务类型和保存状态。若持续失败，保留错误信息和任务日志后再新建小范围任务排查。",
+      "actions": [
+        {
+          "label": "查看可恢复任务",
+          "href": "geod://navigate/download-center"
+        }
+      ]
+    },
+    {
+      "id": "history-and-logs",
+      "title": "历史记录与任务日志",
+      "summary": "历史记录保存在 SQLite；日志会截断、压缩和过期清理，但不会删除成果文件。",
+      "keywords": ["历史记录卡顿", "history.db", "任务日志", "历史日志", "日志太大", "删除历史", "清空历史", "日志会不会删除成果文件", "log.gz"],
+      "body": "下载历史使用 SQLite 分页加载。单个任务日志最多保留 5 MiB，超过后会标记截断；完成超过 7 天的日志会分批压缩为 gzip，超过 90 天的日志会自动清理，历史记录仍保留。删除单条历史或清空历史会同步处理关联日志；日志删除失败时保留历史并提示错误。日志清理不会删除已下载的影像、瓦片或其他成果文件。",
+      "actions": [
+        {
+          "label": "打开下载历史",
+          "href": "geod://navigate/download-center"
+        }
+      ]
+    },
+    {
+      "id": "temporary-files",
+      "title": "缓存、临时瓦片与成果文件的区别",
+      "summary": "瓦片缓存、下载临时目录、任务日志和最终成果是不同的数据范围。",
+      "keywords": ["临时文件", "tif-dl", "缓存和下载区别", "C盘占用", "可以删除什么", "成果文件"],
+      "body": "瓦片缓存用于地图浏览和离线复用；下载临时目录用于任务拼接或导出；任务日志用于排查；最终成果位于用户选择的输出目录。清理瓦片缓存不等于删除成果文件，删除历史也不应删除成果文件。若磁盘占用异常，应先确认具体目录和文件类型，不要直接删除正在运行任务使用的临时目录。",
+      "actions": [
+        {
+          "label": "查看瓦片缓存",
+          "href": "geod://navigate/settings-cache"
+        },
+        {
+          "label": "查看下载中心",
+          "href": "geod://navigate/download-center"
+        }
+      ]
+    },
+    {
+      "id": "dem-download",
+      "title": "DEM 高程数据下载",
+      "summary": "在 DEM 模式选择高程图源、区域和级别后下载并导出。",
+      "keywords": ["DEM下载", "高程数据", "SRTM", "COP30", "海拔", "地形"],
+      "body": "切换到 DEM 模式，选择高程图源、下载范围和可用级别，再设置输出路径。不同 DEM 图源的覆盖范围、分辨率、无数据值和许可不同。下载后应在 GIS 软件中检查高程范围与空洞。不要用普通彩色地形底图代替真实 DEM 数据。",
+      "actions": [
+        {
+          "label": "打开 DEM 下载",
+          "href": "geod://navigate/dem-download"
+        }
+      ]
+    },
+    {
+      "id": "tiles3d-workflow",
+      "title": "3D Tiles 解析与下载",
+      "summary": "支持 Cesium Ion 或直接 tileset URL，先解析再按可选空间范围下载。",
+      "keywords": ["3D Tiles", "tileset.json", "Cesium Ion", "Asset ID", "倾斜摄影", "模型下载", "b3dm", "glb"],
+      "body": "3D Tiles 支持 Cesium Ion 和直接 URL 两种来源。Ion 模式需要 Asset ID 与有效 Token；URL 模式填写 tileset.json 地址，必要时配置请求头。先执行解析确认 tileset 可访问，再选择输出目录并下载。选区可用于空间过滤，不选则可能下载完整模型。GeoD 会递归解析子 tileset、下载内容并将 URI 本地化，数据量可能非常大。",
+      "actions": [
+        {
+          "label": "打开 3D Tiles",
+          "href": "geod://navigate/tiles3d-download"
+        }
+      ]
+    },
+    {
+      "id": "mvt-workflow",
+      "title": "MVT 矢量瓦片下载",
+      "summary": "MVT 模式下载 PBF 瓦片，可输出目录或支持的瓦片数据库格式。",
+      "keywords": ["MVT", "PBF", "矢量瓦片", "Mapbox Vector Tile", "样式JSON", "style.json"],
+      "body": "MVT 是矢量瓦片，不应按 PNG 或 JPEG 处理。切换到 MVT 模式，选择或配置矢量瓦片源、区域和缩放级别，输出可使用 PBF 瓦片目录或界面提供的数据库格式。style.json 描述显示样式，不一定等同于实际瓦片接口；若从样式配置图源，应确认 sources 中的 tiles 或 TileJSON 地址。",
+      "actions": [
+        {
+          "label": "打开 MVT 下载",
+          "href": "geod://navigate/mvt-download"
+        }
+      ]
+    },
+    {
+      "id": "osm-workflow",
+      "title": "OSM 矢量要素下载",
+      "summary": "OSM 模式用于道路、建筑等矢量要素，不是栅格底图或 MVT 模式。",
+      "keywords": ["OSM下载", "OpenStreetMap", "道路数据", "建筑数据", "矢量要素", "Overpass"],
+      "body": "OSM 模式面向 OpenStreetMap 矢量要素，例如道路、建筑和兴趣点；它与 OSM 栅格底图、MVT 矢量瓦片不是同一种数据。先选择范围和要素类型，再执行查询与下载。范围过大或条件过宽容易触发服务超时，应缩小区域或拆分请求，并遵守 OSM 服务的使用策略。",
+      "actions": [
+        {
+          "label": "打开 OSM 下载",
+          "href": "geod://navigate/osm-download"
+        }
+      ]
+    },
+    {
+      "id": "wayback-query-problems",
+      "title": "Wayback 扫描慢、版本多或无结果",
+      "summary": "区分版本扫描与瓦片下载，并通过小范围和扫描参数排查。",
+      "keywords": ["Wayback很慢", "扫描卡住", "没有历史影像", "版本太多", "增量扫描", "覆盖率"],
+      "body": "Wayback 的版本扫描和瓦片下载是两个阶段。大范围、版本多或精细扫描都会增加等待时间。先用小范围验证时间轴和版本列表，再调整扫描模式、覆盖率阈值或筛选条件。某个日期存在全球版本不代表选区内一定有新影像；无结果时可扩大日期范围或检查代理和 Esri 服务可用性。",
+      "actions": [
+        {
+          "label": "打开 Wayback",
+          "href": "geod://navigate/wayback-download"
+        }
+      ]
+    },
+    {
+      "id": "download-failures",
+      "title": "下载失败、超时和大量空白瓦片排查",
+      "summary": "按状态码、网络、认证、图源覆盖和磁盘条件逐项排查。",
+      "keywords": ["下载失败", "超时", "大量失败", "空白图片", "403", "404", "429", "磁盘满", "网络错误"],
+      "body": "先记录错误文本和状态码：401、403 多与认证或授权有关；404 可能是模板、坐标方案或级别错误；429 表示请求过快，应降低并发并稍后重试；连接超时优先检查网络与代理；大量空白瓦片可能是区域无覆盖或级别过高。还要确认输出目录可写且磁盘空间足够。用同一图源的小范围、单级别任务可以最快区分配置问题和规模问题。",
+      "actions": [
+        {
+          "label": "打开下载设置",
+          "href": "geod://navigate/settings-download"
+        },
+        {
+          "label": "打开下载中心",
+          "href": "geod://navigate/download-center"
+        }
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "title": "向 AI 助手附加诊断信息",
+      "summary": "附加当前模块和运行环境可提高排查准确性，但仍需提供具体错误。",
+      "keywords": ["诊断信息", "附加运行环境", "AI排查", "错误日志", "怎么反馈bug"],
+      "body": "排查问题时点击助手输入框旁的诊断按钮，可附加当前模式、页面和安全筛选后的运行环境。仍应补充完整错误文字、发生步骤、图源类型和是否可稳定复现。诊断信息不应包含 Token、Cookie、完整私人路径或未脱敏 URL。AI 只能依据显式附加的信息判断，不能自行读取本地文件和任务。",
+      "actions": []
+    },
+    {
+      "id": "update-troubleshooting",
+      "title": "自动检查更新失败",
+      "summary": "区分当前版本显示、官网版本信息和更新源访问失败。",
+      "keywords": ["检查更新失败", "自动更新失效", "获取更新信息失败", "版本不是最新", "update.json", "release"],
+      "body": "检查更新失败通常表示更新源或网络访问失败，不代表当前安装包损坏。先确认网络、代理和系统时间，再手动重试；必要时到官网或 GitHub Release 对照版本。官网展示、GitHub Release 和应用更新源可能存在短暂同步延迟。不要仅凭版本号猜测更新内容，应查看对应版本说明。",
+      "actions": []
+    },
+    {
+      "id": "data-compliance",
+      "title": "图源授权与数据合规",
+      "summary": "GeoD 是数据处理工具，图源可访问不代表允许下载或再分发。",
+      "keywords": ["版权", "免责声明", "授权", "合规", "图源条款", "商用"],
+      "body": "GeoD 不提供第三方图源授权。在线服务可以访问，不等于允许批量下载、商用或再分发。用户应确认数据提供方的许可、服务条款、访问频率限制和适用法律。AI 助手不得指导绕过认证、访问控制、付费限制或技术保护措施。",
+      "actions": []
+    }
+  ]
+}

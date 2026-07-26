@@ -24,6 +24,20 @@ pub struct CustomTileSource {
 fn default_max_zoom() -> u8 { 18 }
 
 /// 应用设置
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmptyTileProbeAction {
+    Continue,
+    Ask,
+    Cancel,
+}
+
+impl Default for EmptyTileProbeAction {
+    fn default() -> Self {
+        Self::Continue
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     /// 天地图 Token
@@ -95,6 +109,11 @@ pub struct AppSettings {
     /// 范围 16 - 512，默认 64。issue #27。
     #[serde(default = "default_export_buffer_mb")]
     pub export_buffer_mb: u32,
+    /// 探测到最高级别瓦片可能为空时的处理方式
+    ///
+    /// 探测仅采样选区中心的一张瓦片，属于启发式提示，不应默认阻塞无人值守下载。
+    #[serde(default)]
+    pub empty_tile_probe_action: EmptyTileProbeAction,
 }
 
 fn default_proxy_enabled() -> bool { false }
@@ -130,6 +149,7 @@ impl Default for AppSettings {
             tile_cache_dir: None,
             min_export_success_ratio: default_min_export_success_ratio(),
             export_buffer_mb: default_export_buffer_mb(),
+            empty_tile_probe_action: EmptyTileProbeAction::default(),
         }
     }
 }
@@ -192,4 +212,32 @@ fn get_data_dir() -> Result<PathBuf, String> {
     dirs::data_local_dir()
         .map(|p| p.join("geo-downloader"))
         .ok_or_else(|| "无法获取数据目录".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppSettings, EmptyTileProbeAction};
+
+    #[test]
+    fn legacy_settings_default_to_continuing_empty_tile_probe() {
+        let settings: AppSettings = serde_json::from_str("{}").expect("legacy settings should load");
+
+        assert_eq!(
+            settings.empty_tile_probe_action,
+            EmptyTileProbeAction::Continue
+        );
+    }
+
+    #[test]
+    fn empty_tile_probe_action_uses_stable_serialized_values() {
+        let action: EmptyTileProbeAction =
+            serde_json::from_str("\"ask\"").expect("ask action should deserialize");
+
+        assert_eq!(action, EmptyTileProbeAction::Ask);
+        assert_eq!(
+            serde_json::to_string(&EmptyTileProbeAction::Cancel)
+                .expect("cancel action should serialize"),
+            "\"cancel\""
+        );
+    }
 }

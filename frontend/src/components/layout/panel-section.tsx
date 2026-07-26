@@ -18,6 +18,8 @@ interface PanelSectionProps {
   storageKey?: string
   /** 可选 data-tour 错点，供新手引导选择器使用 */
   dataTour?: string
+  /** AI 助手受控导航使用的稳定定位标识 */
+  dataAgentTarget?: string
 }
 
 /** 统一的右侧面板分组容器：白色卡片 + 顶部小标题 + 内容。可折叠。 */
@@ -33,6 +35,7 @@ export function PanelSection({
   defaultOpen = true,
   storageKey,
   dataTour,
+  dataAgentTarget,
 }: PanelSectionProps) {
   const computedKey = storageKey ?? (typeof title === 'string' ? `gd:panel:${title}` : undefined)
   const [open, setOpen] = useState<boolean>(() => {
@@ -59,6 +62,7 @@ export function PanelSection({
   return (
     <section
       data-tour={dataTour}
+      data-agent-target={dataAgentTarget}
       className={cn(
         'overflow-hidden rounded-lg border border-border/60 bg-card text-card-foreground shadow-[var(--shadow-soft)]',
         className,

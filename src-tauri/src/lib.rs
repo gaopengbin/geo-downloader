@@ -22,6 +22,7 @@ pub mod dem;
 pub mod tile_cache;
 pub mod tile_pack;
 pub mod cache_migration;
+pub mod source_analyzer;
 
 // Tauri commands
 mod commands;
@@ -92,6 +93,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_tile_sources,
             commands::get_builtin_sources,
+            commands::analyze_tile_source_url,
             commands::estimate_download,
             commands::get_system_memory,
             // 任务管理

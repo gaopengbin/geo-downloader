@@ -1,4 +1,5 @@
 export type Nullable<T> = T | null
+export type EmptyTileProbeAction = 'continue' | 'ask' | 'cancel'
 
 export type OutputFormat = 'geotiff' | 'tiles' | 'mbtiles' | 'gpkg' | string
 
@@ -75,6 +76,11 @@ export interface AppSettings {
    * 越大越能重叠 IO 与 CPU，代价是内存峰值上升。
    */
   export_buffer_mb?: number
+  /**
+   * 最高级别中心瓦片探测为空时的处理方式。
+   * continue = 自动继续；ask = 每次询问；cancel = 停止创建任务。
+   */
+  empty_tile_probe_action?: EmptyTileProbeAction
 }
 
 /** 自定义瓦片图源（与 Rust CustomTileSource 对齐） */
@@ -89,6 +95,23 @@ export interface CustomTileSource {
   subdomains?: string
   /** 最大缩放级别（默认 18） */
   max_zoom?: number
+}
+
+export interface SourceUrlAnalysis {
+  url_template: string
+  sample_url: string
+  suggested_name: string
+  suggested_max_zoom: number
+  subdomains: string
+  detected_zoom?: number | null
+  detected_x?: number | null
+  detected_y?: number | null
+  test_ok: boolean
+  status_code?: number | null
+  content_type: string
+  content_length: number
+  tile_format: string
+  message: string
 }
 
 export interface SystemMemoryInfo {

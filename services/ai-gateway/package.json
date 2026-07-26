@@ -1,0 +1,14 @@
+{
+  "name": "@geod/ai-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "dev": "node --env-file-if-exists=.env --watch server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}

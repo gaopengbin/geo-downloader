@@ -9,6 +9,7 @@ import App from './App.tsx'
 import { ErrorBoundary } from '@/components/error-boundary'
 import { ThemeProvider } from '@/components/theme/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
+import { AssistantPanel } from '@/features/assistant/assistant-panel'
 import { createQueryClient } from '@/lib/query-client'
 
 import './index.css'
@@ -21,6 +22,7 @@ createRoot(document.getElementById('root')!).render(
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <App />
+          <AssistantPanel />
           <Toaster />
         </ThemeProvider>
       </QueryClientProvider>

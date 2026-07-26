@@ -45,6 +45,8 @@
     "react-day-picker": "^10.0.1",
     "react-dom": "^19.2.5",
     "react-hook-form": "^7.74.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "shpjs": "^6.2.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",

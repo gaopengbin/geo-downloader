@@ -490,11 +490,20 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         )
         if (!probe.has_data) {
           const maxZoom = sourceMeta?.max_zoom ?? '?'
-          const proceed = await askDialog(
-            `探测发现该区域在 z${probeZoom} 可能无数据\n${probe.message ?? ''}\n\n该图源最高支持 z${maxZoom}，但部分区域实际覆盖可能低于此级别。\n建议降低缩放级别后重试。\n\n是否仍然继续下载？`,
-            { title: '瓦片探测警告', kind: 'warning' },
-          )
-          if (!proceed) throw new Error('__user_cancelled__')
+          const action = settingsQuery.data?.empty_tile_probe_action ?? 'continue'
+          const warning = `探测发现该区域在 z${probeZoom} 可能无数据：${probe.message ?? '瓦片可能为空'}`
+          if (action === 'ask') {
+            const proceed = await askDialog(
+              `${warning}\n\n该图源最高支持 z${maxZoom}，但部分区域实际覆盖可能低于此级别。\n建议降低缩放级别后重试。\n\n是否仍然继续下载？`,
+              { title: '瓦片探测警告', kind: 'warning' },
+            )
+            if (!proceed) throw new Error('__user_cancelled__')
+          } else if (action === 'cancel') {
+            toast.warning(`${warning}，已按设置停止创建任务`)
+            throw new Error('__user_cancelled__')
+          } else {
+            toast.warning(`${warning}，已按设置继续下载`)
+          }
         }
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e)
