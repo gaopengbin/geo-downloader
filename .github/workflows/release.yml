@@ -89,7 +89,12 @@ jobs:
         if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
-          APP=$(find src-tauri/target/${{ matrix.target }}/release/bundle/macos -type d -name "*.app" -prune | head -1)
+          DMG=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -type f -name "*.dmg" | head -1)
+          test -n "$DMG"
+          MOUNT_DIR=$(mktemp -d)
+          trap 'hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true; rm -rf "$MOUNT_DIR"' EXIT
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT_DIR"
+          APP=$(find "$MOUNT_DIR" -maxdepth 1 -type d -name "*.app" -print -quit)
           test -n "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP" 2>&1
