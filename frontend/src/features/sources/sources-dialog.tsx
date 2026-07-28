@@ -29,6 +29,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useAssistantStore } from '@/features/assistant/assistant-store'
 import { getSettings, saveSettings } from '@/features/settings/settings-api'
 import { ASSISTANT_ACTION_EVENT } from '@/features/assistant/assistant-actions'
 import {
@@ -550,6 +551,7 @@ function DefaultSourcePanel({
 
 export function SourcesDialog() {
   const [open, setOpen] = useState(false)
+  const assistantOpen = useAssistantStore((state) => state.open)
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -631,7 +633,17 @@ export function SourcesDialog() {
           图源管理
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent
+        className="max-h-[85vh] overflow-y-auto sm:max-w-3xl"
+        style={
+          assistantOpen
+            ? {
+                left: 'calc((100vw - min(420px, 100vw)) / 2)',
+                width: 'min(calc(100vw - min(420px, 100vw) - 2rem), 48rem)',
+              }
+            : undefined
+        }
+      >
         <DialogHeader>
           <DialogTitle>图源管理</DialogTitle>
           <DialogDescription>

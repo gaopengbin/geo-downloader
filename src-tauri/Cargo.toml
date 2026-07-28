@@ -1,6 +1,6 @@
 [package]
 name = "geo-downloader"
-version = "3.6.5"
+version = "3.6.6-beta.1"
 description = "GeoDownloader - 地理空间数据下载与导出工具"
 authors = ["you"]
 license = "MIT"
@@ -36,6 +36,8 @@ futures = "0.3"
 
 # HTTP client
 reqwest = { version = "0.12", features = ["json", "stream", "http2", "gzip", "deflate"] }
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
+unicode-normalization = "0.1"
 
 # Image processing
 image = "0.25"

@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   BookOpen,
   CircleStop,
   Loader2,
   SendHorizontal,
-  Settings2,
   Sparkles,
   Stethoscope,
   Trash2,
@@ -16,14 +15,13 @@ import {
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
   checkAssistantHealth,
   streamAssistant,
   type AssistantHealth,
 } from '@/features/assistant/assistant-api'
 import { executeAssistantActionHref } from '@/features/assistant/assistant-actions'
+import { useAssistantConfig } from '@/features/assistant/assistant-config'
 import { collectAssistantDiagnostics } from '@/features/assistant/assistant-diagnostics'
 import { AssistantMarkdown } from '@/features/assistant/assistant-markdown'
 import {
@@ -45,12 +43,9 @@ const SUGGESTIONS = [
 ]
 
 export function AssistantPanel() {
+  const { enabled } = useAssistantConfig()
   const open = useAssistantStore((state) => state.open)
   const setOpen = useAssistantStore((state) => state.setOpen)
-  const gatewayUrl = useAssistantStore((state) => state.gatewayUrl)
-  const gatewayToken = useAssistantStore((state) => state.gatewayToken)
-  const setGatewayUrl = useAssistantStore((state) => state.setGatewayUrl)
-  const setGatewayToken = useAssistantStore((state) => state.setGatewayToken)
   const messages = useAssistantStore((state) => state.messages)
   const draft = useAssistantStore((state) => state.draft)
   const setDraft = useAssistantStore((state) => state.setDraft)
@@ -64,29 +59,15 @@ export function AssistantPanel() {
   const mode = useAppStore((state) => state.mode)
   const tab = useAppStore((state) => state.tab)
 
-  const [showSettings, setShowSettings] = useState(false)
   const [connection, setConnection] = useState<ConnectionState>({ status: 'checking' })
   const [streaming, setStreaming] = useState(false)
   const requestRef = useRef<AbortController | null>(null)
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
 
-  const checkConnection = useCallback(async () => {
-    setConnection({ status: 'checking' })
-    try {
-      const health = await checkAssistantHealth(gatewayUrl)
-      setConnection({ status: 'ready', health })
-    } catch (error) {
-      setConnection({
-        status: 'error',
-        message: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }, [gatewayUrl])
-
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
-    void checkAssistantHealth(gatewayUrl, controller.signal)
+    void checkAssistantHealth()
       .then((health) => setConnection({ status: 'ready', health }))
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === 'AbortError') return
@@ -96,7 +77,7 @@ export function AssistantPanel() {
         })
       })
     return () => controller.abort()
-  }, [gatewayUrl, open])
+  }, [open])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end' })
@@ -123,9 +104,8 @@ export function AssistantPanel() {
     event?.preventDefault()
     const content = draft.trim()
     if (!content || streaming) return
-    if (!gatewayToken.trim()) {
-      setShowSettings(true)
-      toast.error('请先填写网关访问令牌')
+    if (connection.status !== 'ready' || !connection.health.configured) {
+      toast.error('请先在设置的开发者选项中填写 DeepSeek API Key')
       return
     }
 
@@ -143,8 +123,6 @@ export function AssistantPanel() {
 
     try {
       await streamAssistant({
-        gatewayUrl,
-        gatewayToken,
         messages: conversation,
         diagnosticContext,
         signal: controller.signal,
@@ -176,7 +154,7 @@ export function AssistantPanel() {
     }
   }
 
-  if (!open) return null
+  if (!enabled || !open) return null
 
   return (
     <aside
@@ -208,18 +186,6 @@ export function AssistantPanel() {
             type="button"
             size="icon"
             variant="ghost"
-            className={cn('size-8', showSettings && 'bg-muted text-foreground')}
-            title="网关设置"
-            aria-label="网关设置"
-            aria-pressed={showSettings}
-            onClick={() => setShowSettings((value) => !value)}
-          >
-            <Settings2 className="size-3.5" />
-          </Button>
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
             className="size-8"
             title="关闭"
             aria-label="关闭助手"
@@ -229,43 +195,6 @@ export function AssistantPanel() {
           </Button>
         </div>
       </div>
-
-      {showSettings && (
-        <div className="shrink-0 space-y-3 border-b bg-muted/20 p-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="assistant-gateway-url" className="text-xs">
-              网关地址
-            </Label>
-            <Input
-              id="assistant-gateway-url"
-              value={gatewayUrl}
-              placeholder="http://127.0.0.1:8787"
-              className="h-8 text-xs"
-              onChange={(event) => setGatewayUrl(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="assistant-gateway-token" className="text-xs">
-              访问令牌
-            </Label>
-            <Input
-              id="assistant-gateway-token"
-              type="password"
-              value={gatewayToken}
-              placeholder="网关访问令牌"
-              autoComplete="off"
-              className="h-8 text-xs"
-              onChange={(event) => setGatewayToken(event.target.value)}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] text-muted-foreground">模型密钥仅保存在网关端</span>
-            <Button type="button" size="sm" variant="outline" onClick={() => void checkConnection()}>
-              测试连接
-            </Button>
-          </div>
-        </div>
-      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
@@ -435,7 +364,7 @@ function ConnectionLabel({ connection }: { connection: ConnectionState }) {
     return (
       <div className="flex max-w-52 items-center gap-1 text-[11px] text-destructive" title={connection.message}>
         <WifiOff className="size-3 shrink-0" />
-        <span className="truncate">网关不可用</span>
+        <span className="truncate">助手不可用</span>
       </div>
     )
   }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import L from 'leaflet'
 import 'leaflet-draw'
 import '@maplibre/maplibre-gl-leaflet'
@@ -86,12 +87,14 @@ function fillTileUrl(template: string, coords: { z: number; x: number; y: number
 function installClickPinnedLayersControl(
   container: HTMLElement,
   toggle: HTMLElement | null | undefined,
+  onExpand?: () => void,
 ) {
   L.DomEvent.disableClickPropagation(container)
   L.DomEvent.disableScrollPropagation(container)
 
   const expand = () => {
     L.DomUtil.addClass(container, 'leaflet-control-layers-expanded')
+    onExpand?.()
   }
   const collapse = () => {
     L.DomUtil.removeClass(container, 'leaflet-control-layers-expanded')
@@ -462,6 +465,7 @@ export function MapCanvas() {
   const [statusCoords, setStatusCoords] = useState<string>('经度: --  纬度: --')
   const [statusZoom, setStatusZoom] = useState<string>('缩放: --')
   const [measureMode, setMeasureMode] = useState<MeasureMode | null>(null)
+  const [measureControlContainer, setMeasureControlContainer] = useState<HTMLElement | null>(null)
   const [waybackProxyBaseUrl, setWaybackProxyBaseUrl] = useState<string | null>(null)
   const [effectiveGraticuleInterval, setEffectiveGraticuleInterval] = useState<number | null>(
     null,
@@ -555,6 +559,19 @@ export function MapCanvas() {
       edit: { featureGroup: drawn, remove: true },
     })
     map.addControl(drawControl)
+
+    const MeasureControl = L.Control.extend({
+      options: { position: 'topleft' as L.ControlPosition },
+      onAdd: () => {
+        const container = L.DomUtil.create('div', 'leaflet-bar geod-measure-toolbar')
+        L.DomEvent.disableClickPropagation(container)
+        L.DomEvent.disableScrollPropagation(container)
+        setMeasureControlContainer(container)
+        return container
+      },
+    })
+    const measureControl = new MeasureControl()
+    measureControl.addTo(map)
 
     const stopMeasurement = (syncState = true) => {
       if (activeMeasureHandler?.enabled?.()) activeMeasureHandler.disable()
@@ -725,6 +742,7 @@ export function MapCanvas() {
       persistCurrentView()
       stopMeasurement(false)
       measureActionsRef.current = null
+      setMeasureControlContainer(null)
       map.remove()
       mapRef.current = null
       drawnRef.current = null
@@ -1003,13 +1021,30 @@ export function MapCanvas() {
             'leaflet-control-layers-list',
             container,
           )
-          waybackPanelCleanup = installClickPinnedLayersControl(container, toggle)
 
           // base 区域
           const baseDiv = L.DomUtil.create('div', 'leaflet-control-layers-base', list)
-          baseDiv.style.maxHeight = '60vh'
-          baseDiv.style.overflowY = 'auto'
           baseDiv.style.minWidth = '180px'
+          const updatePanelHeight = () => {
+            const mapBottom = map.getContainer().getBoundingClientRect().bottom
+            const timelineTop =
+              document
+                .querySelector<HTMLElement>('[data-wayback-timeline]')
+                ?.getBoundingClientRect().top ?? mapBottom
+            const controlTop = container.getBoundingClientRect().top
+            list.style.maxHeight = `${Math.max(120, timelineTop - controlTop - 28)}px`
+            list.style.overflowY = 'auto'
+          }
+          const clickCleanup = installClickPinnedLayersControl(
+            container,
+            toggle,
+            updatePanelHeight,
+          )
+          window.addEventListener('resize', updatePanelHeight)
+          waybackPanelCleanup = () => {
+            clickCleanup()
+            window.removeEventListener('resize', updatePanelHeight)
+          }
 
           const radios: HTMLInputElement[] = []
           let firstYear = true
@@ -1373,36 +1408,40 @@ export function MapCanvas() {
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0" />
-      <div className="leaflet-bar geod-measure-toolbar pointer-events-auto absolute left-[10px] top-[241px] z-10">
-        <button
-          type="button"
-          className={measureMode === 'distance' ? 'is-active' : undefined}
-          title="测量距离"
-          aria-label="测量距离"
-          aria-pressed={measureMode === 'distance'}
-          onClick={() => measureActionsRef.current?.toggle('distance')}
-        >
-          <Ruler size={16} strokeWidth={2} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={measureMode === 'area' ? 'is-active' : undefined}
-          title="测量面积"
-          aria-label="测量面积"
-          aria-pressed={measureMode === 'area'}
-          onClick={() => measureActionsRef.current?.toggle('area')}
-        >
-          <Pentagon size={16} strokeWidth={2} aria-hidden />
-        </button>
-        <button
-          type="button"
-          title="清除量测"
-          aria-label="清除量测"
-          onClick={() => measureActionsRef.current?.clear()}
-        >
-          <Trash2 size={16} strokeWidth={2} aria-hidden />
-        </button>
-      </div>
+      {measureControlContainer &&
+        createPortal(
+          <>
+            <button
+              type="button"
+              className={measureMode === 'distance' ? 'is-active' : undefined}
+              title="测量距离"
+              aria-label="测量距离"
+              aria-pressed={measureMode === 'distance'}
+              onClick={() => measureActionsRef.current?.toggle('distance')}
+            >
+              <Ruler size={16} strokeWidth={2} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className={measureMode === 'area' ? 'is-active' : undefined}
+              title="测量面积"
+              aria-label="测量面积"
+              aria-pressed={measureMode === 'area'}
+              onClick={() => measureActionsRef.current?.toggle('area')}
+            >
+              <Pentagon size={16} strokeWidth={2} aria-hidden />
+            </button>
+            <button
+              type="button"
+              title="清除量测"
+              aria-label="清除量测"
+              onClick={() => measureActionsRef.current?.clear()}
+            >
+              <Trash2 size={16} strokeWidth={2} aria-hidden />
+            </button>
+          </>,
+          measureControlContainer,
+        )}
       {waybackFromCache && mode === 'wayback' && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2">
           <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-1 text-xs text-yellow-700 shadow-sm backdrop-blur dark:text-yellow-400">

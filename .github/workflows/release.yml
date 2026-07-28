@@ -85,6 +85,15 @@ jobs:
       - name: Build
         run: cargo tauri build --target ${{ matrix.target }}
 
+      - name: Verify macOS app signature
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          APP=$(find src-tauri/target/${{ matrix.target }}/release/bundle/macos -type d -name "*.app" -prune | head -1)
+          test -n "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=4 "$APP" 2>&1
+
       - name: Get version
         id: version
         shell: bash

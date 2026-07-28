@@ -52,6 +52,41 @@ test('chat endpoint requires the gateway token', async () => {
   assert.equal(body.error.code, 'invalid_gateway_token')
 })
 
+test('a client provider key enables BYOK and overrides the server key', async () => {
+  let forwardedAuthorization
+  const fakeFetch = async (_url, options) => {
+    forwardedAuthorization = options.headers.authorization
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'ok' } }],
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    )
+  }
+  const baseUrl = await start(
+    {
+      mockMode: false,
+      upstreamBaseUrl: 'https://api.deepseek.com/v1',
+      upstreamApiKey: 'server-secret',
+      upstreamModel: 'deepseek-chat',
+    },
+    fakeFetch,
+  )
+  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-geod-provider-key': 'client-secret',
+    },
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(forwardedAuthorization, 'Bearer client-secret')
+})
+
 test('mock mode returns an OpenAI-compatible completion', async () => {
   const baseUrl = await start()
   const response = await fetch(`${baseUrl}/v1/chat/completions`, {

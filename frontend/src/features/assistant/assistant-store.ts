@@ -27,15 +27,11 @@ export interface AssistantMessage {
 
 interface AssistantState {
   open: boolean
-  gatewayUrl: string
-  gatewayToken: string
   messages: AssistantMessage[]
   draft: string
   diagnosticContext: string | null
   setOpen: (open: boolean) => void
   toggle: () => void
-  setGatewayUrl: (gatewayUrl: string) => void
-  setGatewayToken: (gatewayToken: string) => void
   setDraft: (draft: string) => void
   setDiagnosticContext: (diagnosticContext: string | null) => void
   addMessage: (message: AssistantMessage) => void
@@ -45,8 +41,6 @@ interface AssistantState {
   clearMessages: () => void
   openWithContext: (diagnosticContext: string, draft?: string) => void
 }
-
-type PersistedAssistantState = Pick<AssistantState, 'gatewayUrl' | 'gatewayToken'>
 
 export function createAssistantMessage(
   role: AssistantRole,
@@ -63,15 +57,11 @@ export const useAssistantStore = create<AssistantState>()(
   persist(
     (set) => ({
       open: false,
-      gatewayUrl: 'http://127.0.0.1:8787',
-      gatewayToken: 'geod-local-test',
       messages: [],
       draft: '',
       diagnosticContext: null,
       setOpen: (open) => set({ open }),
       toggle: () => set((state) => ({ open: !state.open })),
-      setGatewayUrl: (gatewayUrl) => set({ gatewayUrl }),
-      setGatewayToken: (gatewayToken) => set({ gatewayToken }),
       setDraft: (draft) => set({ draft }),
       setDiagnosticContext: (diagnosticContext) => set({ diagnosticContext }),
       addMessage: (message) =>
@@ -102,12 +92,9 @@ export const useAssistantStore = create<AssistantState>()(
     }),
     {
       name: 'geo-downloader:assistant',
-      version: 1,
+      version: 2,
       storage: createSafeJSONStorage(),
-      partialize: (state): PersistedAssistantState => ({
-        gatewayUrl: state.gatewayUrl,
-        gatewayToken: state.gatewayToken,
-      }),
+      partialize: () => ({}),
     },
   ),
 )

@@ -191,6 +191,11 @@ impl TileDownloader {
         retrying_count: Option<&AtomicU32>,
     ) -> Result<(), String> {
         let mut last_error = String::new();
+        if let Some(parent) = file_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("创建瓦片目录失败: {}", e))?;
+        }
 
         for attempt in 0..=retry_times {
             let req_fut = async {
@@ -280,7 +285,15 @@ impl TileDownloader {
         // 检查已存在的瓦片文件（断点续传）
         let mut need_download: Vec<TileCoord> = Vec::new();
         for tile in &tiles {
-            let file_path = temp_dir.join(format!("{}_{}.png", tile.x, tile.y));
+            let sharded_path = temp_dir
+                .join(tile.x.to_string())
+                .join(format!("{}.png", tile.y));
+            let legacy_path = temp_dir.join(format!("{}_{}.png", tile.x, tile.y));
+            let file_path = if sharded_path.exists() {
+                sharded_path
+            } else {
+                legacy_path
+            };
             if file_path.exists() && std::fs::metadata(&file_path).map_or(false, |m| m.len() > 0) {
                 tile_files.insert((tile.x, tile.y), MergerTileSource::from_path(file_path));
                 completed += 1;
@@ -391,7 +404,9 @@ impl TileDownloader {
             let pfc = put_fail_count.clone();
 
             async move {
-                let file_path = td.join(format!("{}_{}.png", tile.x, tile.y));
+                let file_path = td
+                    .join(tile.x.to_string())
+                    .join(format!("{}.png", tile.y));
                 let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
 
                 // 1) 检查是否已被浏览补齐（Issue #28）
@@ -510,6 +525,7 @@ impl TileDownloader {
                         if token.is_cancelled() { return Err("任务已取消".to_string()); }
                     }
                     if (completed + failed) % 50 == 0 || (completed + failed) == total {
+                        crate::fs_util::ensure_minimum_free_space(&temp_dir)?;
                         let retrying = retrying_counter.load(Ordering::Relaxed);
                         let status = if retrying > 0 {
                             format!("下载中，{} 个瓦片正在重试", retrying)

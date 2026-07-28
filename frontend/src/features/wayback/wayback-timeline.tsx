@@ -92,7 +92,10 @@ export function WaybackTimeline() {
   }
 
   return (
-    <div className="pointer-events-auto absolute inset-x-3 bottom-12 z-[450] rounded-lg border bg-background/95 px-4 py-3 shadow-lg backdrop-blur">
+    <div
+      data-wayback-timeline
+      className="pointer-events-auto absolute inset-x-3 bottom-12 z-[450] rounded-lg border bg-background/95 px-4 py-3 shadow-lg backdrop-blur"
+    >
       {/* 顶部：当前日期 + 序号 */}
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="flex items-baseline gap-2">

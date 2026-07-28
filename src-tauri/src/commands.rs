@@ -486,6 +486,46 @@ pub fn estimate_download(
     }
 }
 
+fn ensure_download_disk_space(
+    request: &DownloadRequest,
+    save_path: &str,
+    work_dir: Option<&Path>,
+) -> Result<(), String> {
+    let estimate = estimate_download(
+        request.bounds,
+        request.zoom,
+        request.zoom_max,
+        Some(request.format.clone()),
+        Some(request.crop_to_shape),
+        request.zoom_levels.clone(),
+        Some(request.source.clone()),
+        Some(request.build_pyramid),
+        Some(request.compression.clone()),
+    );
+    let is_raw = matches!(
+        ExportFormat::from_str(&request.format),
+        ExportFormat::Tiles | ExportFormat::Pbf
+    );
+    let peak_mb = if is_raw {
+        estimate.estimated_output_mb
+    } else {
+        estimate.tile_download_mb + estimate.estimated_output_mb
+    };
+    let required = (peak_mb * 1.15 * 1024.0 * 1024.0).ceil() as u64
+        + crate::fs_util::MIN_FREE_SPACE_BYTES;
+    let check_path = work_dir.unwrap_or_else(|| Path::new(save_path));
+    let available = crate::fs_util::available_space_for_path(check_path)?;
+    if available < required {
+        return Err(format!(
+            "磁盘空间不足：预计任务峰值占用约 {:.1} GB，{} 当前可用 {:.1} GB。请更换保存目录或释放空间后重试。",
+            peak_mb / 1024.0,
+            check_path.display(),
+            available as f64 / 1024.0 / 1024.0 / 1024.0
+        ));
+    }
+    Ok(())
+}
+
 /// 创建下载任务的返回值
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateTaskResult {
@@ -530,6 +570,8 @@ pub async fn create_download_task(
     
     // 生成任务 ID
     let task_id = uuid::Uuid::new_v4().to_string();
+    let work_dir = crate::task::task_work_dir(&task_id, &request);
+    ensure_download_disk_space(&request, &save_path, work_dir.as_deref())?;
     
     // 持久化任务（用于断点续传）
     let persisted = PersistedTask {
@@ -539,6 +581,9 @@ pub async fn create_download_task(
         request: request.clone(),
         tile_count,
         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        work_dir: work_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
     };
     crate::task::save_task_file(&persisted)?;
     
@@ -565,11 +610,11 @@ pub async fn create_download_task(
     tokio::spawn(async move {
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
-            request, source, save_path.clone(),
+            request, source, save_path.clone(), work_dir,
             tile_count, &task_name, &source_name,
         ).await;
 
-        // Issue #32：raw tiles 直接下载到目标目录，取消/失败时不清理
+        // 原始瓦片完成的级别已写入目标目录，取消时保留这些最终文件。
         let is_raw_fmt = matches!(
             ExportFormat::from_str(&req_format),
             ExportFormat::Tiles | ExportFormat::Pbf
@@ -583,10 +628,8 @@ pub async fn create_download_task(
                     if is_raw_fmt {
                         task_log(&app, &tm, &tid, "INFO", "已下载的瓦片保留在目标目录，可重新提交任务续传");
                     }
+                    crate::task::cleanup_temp_dir(&tid);
                     crate::task::remove_task_file(&tid);
-                    if !is_raw_fmt {
-                        crate::task::cleanup_temp_dir(&tid);
-                    }
                     tm.mark_cancelled(&tid);
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
@@ -597,11 +640,8 @@ pub async fn create_download_task(
                         message: Some("已取消".to_string()),
                     });
                 } else {
-                    task_log(&app, &tm, &tid, "ERROR", &format!("任务失败: {}", e));
-                    crate::task::remove_task_file(&tid);
-                    if !is_raw_fmt {
-                        crate::task::cleanup_temp_dir(&tid);
-                    }
+                    let recoverable_message = format!("任务失败: {}。任务数据已保留，可稍后恢复", e);
+                    task_log(&app, &tm, &tid, "ERROR", &recoverable_message);
                     // 失败也记录到历史（failed_count=0 因为是整体失败而非逐瓦片失败）
                     let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
                     let record = DownloadRecord::new(
@@ -624,7 +664,7 @@ pub async fn create_download_task(
                         progress: 0.0,
                         completed: 0,
                         total: tile_count,
-                        message: Some(format!("失败: {}", e)),
+                        message: Some(recoverable_message),
                     });
                 }
             }
@@ -1450,6 +1490,7 @@ async fn execute_download_task(
     request: DownloadRequest,
     source: TileSource,
     save_path: String,
+    work_dir: Option<PathBuf>,
     tile_count: u32,
     task_name: &str,
     source_name: &str,
@@ -1507,15 +1548,11 @@ async fn execute_download_task(
         ));
     }
 
-    // Issue #32：raw tiles 直接下载到目标目录，不需要 temp_dir
-    let req_format_enum = ExportFormat::from_str(&request.format);
-    let is_raw_tiles_task = matches!(req_format_enum, ExportFormat::Tiles | ExportFormat::Pbf);
-
-    let base_temp_dir = std::env::temp_dir().join(format!("tif-dl-{}", task_id));
-    if !is_raw_tiles_task {
-        std::fs::create_dir_all(&base_temp_dir)
-            .map_err(|e| format!("创建临时目录失败: {}", e))?;
-    }
+    // 工作目录位于输出目录旁，避免大任务占满系统临时盘。
+    let base_temp_dir = work_dir
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("tif-dl-{}", task_id)));
+    std::fs::create_dir_all(&base_temp_dir)
+        .map_err(|e| format!("创建任务工作目录失败: {}", e))?;
 
     // Issue #31：读取自动导出阈值，clamp 到 [0.0, 1.0]
     // 0.0（默认）= 有 1 张成功就导出，1.0 = 必须全成功才导出
@@ -1565,17 +1602,12 @@ async fn execute_download_task(
         } else {
             zoom_level_save_path(&save_path, *zoom, multi_zoom)?
         };
-        // Issue #32：raw tiles 直接下载到目标目录，跳过 temp
-        let level_temp_dir = if is_raw_tiles_task {
-            let p = std::path::PathBuf::from(&level_save_path);
-            std::fs::create_dir_all(&p)
-                .map_err(|e| format!("创建目标目录失败: {}", e))?;
-            p
-        } else if multi_zoom {
+        let level_temp_dir = if multi_zoom {
             base_temp_dir.join(format!("z{}", zoom))
         } else {
             base_temp_dir.clone()
         };
+        crate::fs_util::ensure_minimum_free_space(&level_temp_dir)?;
 
         if multi_zoom {
             let msg = format!("正在处理 z{}（{}/{}）", zoom, idx + 1, zooms.len());
@@ -1685,11 +1717,8 @@ async fn execute_download_task(
         ("completed_with_gaps", format!("完成但有 {} 张缺块", failed_total))
     } else {
         // 全成功：清理临时文件（原行为）
-        // Issue #32：raw tiles 没有 temp_dir 可清理
+        crate::task::cleanup_temp_dir(task_id);
         crate::task::remove_task_file(task_id);
-        if !is_raw_tiles_task {
-            crate::task::cleanup_temp_dir(task_id);
-        }
         tm.complete_task(task_id, total_file_size);
         ("completed", "完成!".to_string())
     };
@@ -1802,11 +1831,23 @@ pub async fn probe_tile(
     let status_code = resp.status().as_u16();
 
     if !resp.status().is_success() {
+        let message = match status_code {
+            401 => "HTTP 401（Token 未通过认证）".to_string(),
+            403 if proxy.as_deref().is_some_and(|value| !value.trim().is_empty()) => {
+                "HTTP 403（Token 或请求来源未获授权；当前请求经过代理，请检查代理出口 IP 是否在企业 Token 白名单中）"
+                    .to_string()
+            }
+            403 => {
+                "HTTP 403（Token 或请求来源未获授权；请检查企业 Token 的来源 IP/域名白名单）"
+                    .to_string()
+            }
+            _ => format!("HTTP {}", status_code),
+        };
         return Ok(ProbeResult {
             has_data: false,
             status_code,
             content_length: 0,
-            message: format!("HTTP {}", status_code),
+            message,
         });
     }
 
@@ -1885,8 +1926,8 @@ pub fn toggle_pause_task(
 /// execute_download_task 末段清理过，这里调用为 no-op。
 #[tauri::command]
 pub fn remove_task(task_manager: State<'_, Arc<TaskManager>>, task_id: String) {
-    crate::task::remove_task_file(&task_id);
     crate::task::cleanup_temp_dir(&task_id);
+    crate::task::remove_task_file(&task_id);
     task_manager.remove_finished(&task_id);
 }
 
@@ -1898,6 +1939,16 @@ pub fn get_resumable_tasks(task_manager: State<'_, Arc<TaskManager>>) -> Vec<Per
     let active_ids: std::collections::HashSet<String> = task_manager
         .get_all_tasks()
         .into_iter()
+        .filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::Pending
+                    | TaskStatus::Downloading
+                    | TaskStatus::Merging
+                    | TaskStatus::Processing
+                    | TaskStatus::Exporting
+            )
+        })
         .map(|t| t.id)
         .collect();
     crate::task::load_resumable_tasks()
@@ -1942,6 +1993,7 @@ pub async fn resume_task(
     let task_name = persisted.task_name.clone();
     let source_name = persisted.source_name.clone();
     let tile_count = persisted.tile_count;
+    let work_dir = crate::task::resolved_task_work_dir(&persisted);
     let save_path = request.save_path.clone()
         .ok_or_else(|| "未指定保存路径".to_string())?;
     
@@ -1982,7 +2034,7 @@ pub async fn resume_task(
     tokio::spawn(async move {
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
-            request, source, save_path.clone(),
+            request, source, save_path.clone(), work_dir,
             tile_count, &task_name, &source_name,
         ).await;
         
@@ -1991,8 +2043,8 @@ pub async fn resume_task(
             Err(e) => {
                 if tm.is_cancelled(&tid) {
                     task_log(&app, &tm, &tid, "WARN", "任务已取消");
-                    crate::task::remove_task_file(&tid);
                     crate::task::cleanup_temp_dir(&tid);
+                    crate::task::remove_task_file(&tid);
                     tm.mark_cancelled(&tid);
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
@@ -2001,9 +2053,8 @@ pub async fn resume_task(
                         message: Some("已取消".to_string()),
                     });
                 } else {
-                    task_log(&app, &tm, &tid, "ERROR", &format!("任务失败: {}", e));
-                    crate::task::remove_task_file(&tid);
-                    crate::task::cleanup_temp_dir(&tid);
+                    let recoverable_message = format!("任务失败: {}。任务数据已保留，可稍后恢复", e);
+                    task_log(&app, &tm, &tid, "ERROR", &recoverable_message);
                     // 失败也记录到历史
                     let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
                     let record = DownloadRecord::new(
@@ -2024,7 +2075,7 @@ pub async fn resume_task(
                         task_id: tid,
                         status: "failed".to_string(),
                         progress: 0.0, completed: 0, total: tile_count,
-                        message: Some(format!("失败: {}", e)),
+                        message: Some(recoverable_message),
                     });
                 }
             }
@@ -2050,6 +2101,38 @@ fn scan_temp_dir_for_zoom(
     if let Ok(entries) = std::fs::read_dir(&zoom_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            if path.is_dir() {
+                let x = match path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|value| value.parse::<u32>().ok())
+                {
+                    Some(x) => x,
+                    None => continue,
+                };
+                if let Ok(y_entries) = std::fs::read_dir(&path) {
+                    for y_entry in y_entries.flatten() {
+                        let y_path = y_entry.path();
+                        let y = match y_path
+                            .file_stem()
+                            .and_then(|name| name.to_str())
+                            .and_then(|value| value.parse::<u32>().ok())
+                        {
+                            Some(y) => y,
+                            None => continue,
+                        };
+                        if y_path.is_file()
+                            && std::fs::metadata(&y_path).map_or(false, |m| m.len() > 0)
+                        {
+                            tile_files.insert(
+                                (x, y),
+                                crate::merger::TileSource::from_path(y_path),
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             if !path.is_file() {
                 continue;
             }
@@ -2068,6 +2151,25 @@ fn scan_temp_dir_for_zoom(
         }
     }
     tile_files
+}
+
+#[cfg(test)]
+mod resumable_tile_scan_tests {
+    use super::*;
+
+    #[test]
+    fn scans_sharded_and_legacy_tile_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let sharded_dir = dir.path().join("123");
+        std::fs::create_dir_all(&sharded_dir).unwrap();
+        std::fs::write(sharded_dir.join("456.png"), b"sharded").unwrap();
+        std::fs::write(dir.path().join("7_8.png"), b"legacy").unwrap();
+
+        let tiles = scan_temp_dir_for_zoom(dir.path(), 10, false);
+
+        assert!(tiles.contains_key(&(123, 456)));
+        assert!(tiles.contains_key(&(7, 8)));
+    }
 }
 
 /// 强制按现状导出部分失败任务（Issue #31）
@@ -2356,10 +2458,10 @@ pub async fn export_partial_task(
 /// `delete_cache=false`：仅移除任务条目，保留缓存供下次复用
 #[tauri::command]
 pub fn discard_resumable_task(task_id: String, delete_cache: Option<bool>) {
-    crate::task::remove_task_file(&task_id);
     if delete_cache.unwrap_or(true) {
         crate::task::cleanup_temp_dir(&task_id);
     }
+    crate::task::remove_task_file(&task_id);
 }
 
 /// 获取省份列表
@@ -2549,16 +2651,37 @@ pub fn open_file(file_path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_settings() -> Result<AppSettings, String> {
     let manager = SettingsManager::new()?;
-    manager.get()
+    let mut settings = manager.get()?;
+    if let Some(api_key) = settings
+        .deepseek_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        crate::assistant::set_api_key(api_key)?;
+        settings.deepseek_api_key = None;
+        manager.save(&settings)?;
+        log::info!("已将 DeepSeek API Key 从 settings.json 迁移到系统凭据库");
+    }
+    Ok(settings)
 }
 
 /// 保存应用设置
 #[tauri::command]
-pub fn save_settings(settings: AppSettings) -> Result<(), String> {
+pub fn save_settings(mut settings: AppSettings) -> Result<(), String> {
     if crate::cache_migration::is_migrating() {
         return Err("缓存正在迁移，暂时不能保存设置".to_string());
     }
     let manager = SettingsManager::new()?;
+    if let Some(api_key) = settings
+        .deepseek_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        crate::assistant::set_api_key(api_key)?;
+    }
+    settings.deepseek_api_key = None;
     manager.save(&settings)?;
     // 同步全局 TLS 严格性开关，避免用户变更后仍需重启才生效
     crate::config::set_allow_invalid_certs(settings.allow_invalid_certs);
@@ -3527,6 +3650,8 @@ pub async fn create_wayback_task(
         request.zoom_max.unwrap_or(request.zoom).max(request.zoom),
     );
     let task_id = uuid::Uuid::new_v4().to_string();
+    let work_dir = crate::task::task_work_dir(&task_id, &request);
+    ensure_download_disk_space(&request, &save_path, work_dir.as_deref())?;
 
     // 持久化任务
     let persisted = PersistedTask {
@@ -3536,6 +3661,9 @@ pub async fn create_wayback_task(
         request: request.clone(),
         tile_count,
         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        work_dir: work_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
     };
     crate::task::save_task_file(&persisted)?;
 
@@ -3556,7 +3684,7 @@ pub async fn create_wayback_task(
     tokio::spawn(async move {
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
-            request, source, save_path,
+            request, source, save_path, work_dir,
             tile_count, &task_name, &source_name,
         ).await;
 
@@ -3565,8 +3693,8 @@ pub async fn create_wayback_task(
             Err(e) => {
                 if tm.is_cancelled(&tid) {
                     task_log(&app, &tm, &tid, "WARN", "任务已取消");
-                    crate::task::remove_task_file(&tid);
                     crate::task::cleanup_temp_dir(&tid);
+                    crate::task::remove_task_file(&tid);
                     tm.mark_cancelled(&tid);
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
@@ -3577,9 +3705,8 @@ pub async fn create_wayback_task(
                         message: Some("已取消".to_string()),
                     });
                 } else {
-                    task_log(&app, &tm, &tid, "ERROR", &format!("任务失败: {}", e));
-                    crate::task::remove_task_file(&tid);
-                    crate::task::cleanup_temp_dir(&tid);
+                    let recoverable_message = format!("任务失败: {}。任务数据已保留，可稍后恢复", e);
+                    task_log(&app, &tm, &tid, "ERROR", &recoverable_message);
                     tm.fail_task(&tid, e.clone());
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
@@ -3587,7 +3714,7 @@ pub async fn create_wayback_task(
                         progress: 0.0,
                         completed: 0,
                         total: tile_count,
-                        message: Some(format!("失败: {}", e)),
+                        message: Some(recoverable_message),
                     });
                 }
             }

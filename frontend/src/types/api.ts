@@ -53,6 +53,12 @@ export interface AppSettings {
   source_overrides?: CustomTileSource[]
   /** Cesium Ion Access Token */
   cesium_ion_token?: Nullable<string>
+  /** 是否启用开发者功能中的 GeoD AI 助手（默认 false） */
+  ai_assistant_enabled?: boolean
+  /** AI 服务 OpenAI 兼容 API 地址 */
+  ai_base_url?: string
+  /** AI 模型 */
+  ai_model?: string
   /** 调试模式：保留临时瓦片目录 */
   debug_mode?: boolean
   /** 内存预算 (MB)，512 - 16384 */

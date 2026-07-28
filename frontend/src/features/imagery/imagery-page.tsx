@@ -491,10 +491,18 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         if (!probe.has_data) {
           const maxZoom = sourceMeta?.max_zoom ?? '?'
           const action = settingsQuery.data?.empty_tile_probe_action ?? 'continue'
-          const warning = `探测发现该区域在 z${probeZoom} 可能无数据：${probe.message ?? '瓦片可能为空'}`
+          const requestFailed =
+            typeof probe.status_code === 'number' &&
+            (probe.status_code < 200 || probe.status_code >= 300)
+          const warning = requestFailed
+            ? `瓦片探测请求失败：${probe.message ?? `HTTP ${probe.status_code}`}`
+            : `探测发现该区域在 z${probeZoom} 可能无数据：${probe.message ?? '瓦片可能为空'}`
+          const guidance = requestFailed
+            ? '请先检查 Token 权限、来源白名单和代理出口，再重试。'
+            : `该图源最高支持 z${maxZoom}，但部分区域实际覆盖可能低于此级别。\n建议降低缩放级别后重试。`
           if (action === 'ask') {
             const proceed = await askDialog(
-              `${warning}\n\n该图源最高支持 z${maxZoom}，但部分区域实际覆盖可能低于此级别。\n建议降低缩放级别后重试。\n\n是否仍然继续下载？`,
+              `${warning}\n\n${guidance}\n\n是否仍然继续下载？`,
               { title: '瓦片探测警告', kind: 'warning' },
             )
             if (!proceed) throw new Error('__user_cancelled__')

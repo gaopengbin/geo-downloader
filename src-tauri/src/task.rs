@@ -305,8 +305,6 @@ impl TaskManager {
                 && entry.info.status != TaskStatus::Cancelled
             {
                 entry.cancel_token.cancel();
-                // 同步删除持久化文件，防止应用退出时异步清理未完成导致下次启动变「已中断」
-                remove_task_file(id);
                 return true;
             }
         }
@@ -542,6 +540,8 @@ pub struct PersistedTask {
     pub request: DownloadRequest,
     pub tile_count: u32,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_dir: Option<String>,
 }
 
 fn tasks_dir() -> PathBuf {
@@ -571,21 +571,19 @@ pub fn remove_task_file(task_id: &str) {
 /// 加载所有可恢复的任务
 pub fn load_resumable_tasks() -> Vec<PersistedTask> {
     let dir = tasks_dir();
+    load_resumable_tasks_from(&dir)
+}
+
+fn load_resumable_tasks_from(dir: &Path) -> Vec<PersistedTask> {
     let mut tasks = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map_or(false, |e| e == "json") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Ok(task) = serde_json::from_str::<PersistedTask>(&content) {
-                        // 确认临时目录存在
-                        let temp_dir = std::env::temp_dir().join(format!("tif-dl-{}", task.task_id));
-                        if temp_dir.exists() {
-                            tasks.push(task);
-                        } else {
-                            // 临时目录不存在，清理持久化文件
-                            let _ = std::fs::remove_file(&path);
-                        }
+                        // 工作目录即使被系统或用户清理，任务描述仍可用于从头恢复。
+                        tasks.push(task);
                     }
                 }
             }
@@ -594,21 +592,186 @@ pub fn load_resumable_tasks() -> Vec<PersistedTask> {
     tasks
 }
 
-/// 清理临时目录
+pub fn task_work_dir(task_id: &str, request: &DownloadRequest) -> Option<PathBuf> {
+    let save_path = request.save_path.as_deref()?;
+    let output = PathBuf::from(save_path);
+    let parent = output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    Some(parent.join(".geod-work").join(task_id))
+}
+
+pub fn resolved_task_work_dir(task: &PersistedTask) -> Option<PathBuf> {
+    if let Some(path) = task.work_dir.as_deref().filter(|path| !path.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+
+    let legacy = std::env::temp_dir().join(format!("tif-dl-{}", task.task_id));
+    if legacy.exists() {
+        Some(legacy)
+    } else {
+        task_work_dir(&task.task_id, &task.request)
+    }
+}
+
+fn load_task_file(task_id: &str) -> Option<PersistedTask> {
+    let path = tasks_dir().join(format!("{}.json", task_id));
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn is_safe_work_dir(path: &Path, task_id: &str) -> bool {
+    let expected_name = std::ffi::OsStr::new(task_id);
+    let is_geod_work = path.file_name() == Some(expected_name)
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == ".geod-work");
+    let legacy = std::env::temp_dir().join(format!("tif-dl-{}", task_id));
+    is_geod_work || path == legacy
+}
+
+/// 清理任务工作目录。路径必须符合应用生成的目录结构，避免误删用户文件。
 pub fn cleanup_temp_dir(task_id: &str) {
+    let work_dir = load_task_file(task_id)
+        .as_ref()
+        .and_then(resolved_task_work_dir)
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("tif-dl-{}", task_id)));
+
+    if !is_safe_work_dir(&work_dir, task_id) {
+        log::error!(
+            "[{}] 拒绝清理不安全的任务工作目录: {}",
+            task_id,
+            work_dir.display()
+        );
+        return;
+    }
+
     // 调试模式下保留临时目录
     if let Ok(mgr) = crate::settings::SettingsManager::new() {
         if let Ok(settings) = mgr.get() {
             if settings.debug_mode {
-                let temp_dir = std::env::temp_dir().join(format!("tif-dl-{}", task_id));
-                log::info!("[{}] 调试模式已启用，保留临时目录: {}（瓦片为图片文件，可改后缀 .png/.jpg 查看）", task_id, temp_dir.display());
+                log::info!("[{}] 调试模式已启用，保留任务工作目录: {}（瓦片为图片文件，可改后缀 .png/.jpg 查看）", task_id, work_dir.display());
                 return;
             }
         }
     }
-    let temp_dir = std::env::temp_dir().join(format!("tif-dl-{}", task_id));
-    if temp_dir.exists() {
-        log::info!("[{}] 清理临时目录: {}", task_id, temp_dir.display());
+    if work_dir.exists() {
+        log::info!("[{}] 清理任务工作目录: {}", task_id, work_dir.display());
     }
-    let _ = std::fs::remove_dir_all(temp_dir);
+    let work_parent = work_dir.parent().map(Path::to_path_buf);
+    let _ = std::fs::remove_dir_all(&work_dir);
+    if let Some(parent) = work_parent.filter(|path| {
+        path.file_name()
+            .is_some_and(|name| name == ".geod-work")
+    }) {
+        let is_empty = std::fs::read_dir(&parent)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if is_empty {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use crate::tile::Bounds;
+
+    fn request(format: &str, save_path: &Path) -> DownloadRequest {
+        DownloadRequest {
+            bounds: Bounds {
+                north: 40.0,
+                south: 39.0,
+                east: 117.0,
+                west: 116.0,
+            },
+            zoom: 10,
+            zoom_max: None,
+            zoom_levels: None,
+            source: "arcgis".to_string(),
+            format: format.to_string(),
+            proxy: None,
+            crop_to_shape: false,
+            polygon: None,
+            tianditu_token: None,
+            save_path: Some(save_path.to_string_lossy().into_owned()),
+            concurrency: 30,
+            compression: "lzw".to_string(),
+            build_pyramid: false,
+            overlay_sources: None,
+        }
+    }
+
+    #[test]
+    fn old_task_json_without_work_dir_remains_compatible() {
+        let json = r#"{
+            "task_id": "legacy-task",
+            "task_name": "legacy",
+            "source_name": "ArcGIS",
+            "request": {
+                "bounds": {"north": 40.0, "south": 39.0, "east": 117.0, "west": 116.0},
+                "zoom": 10,
+                "source": "arcgis",
+                "format": "geotiff",
+                "save_path": "D:\\downloads\\legacy.tif",
+                "concurrency": 30,
+                "compression": "lzw"
+            },
+            "tile_count": 100,
+            "created_at": "2026-07-28 10:00:00"
+        }"#;
+
+        let task: PersistedTask = serde_json::from_str(json).unwrap();
+        assert!(task.work_dir.is_none());
+    }
+
+    #[test]
+    fn loader_keeps_task_when_work_dir_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("output").join("map.tif");
+        let task = PersistedTask {
+            task_id: "recoverable-task".to_string(),
+            task_name: "recoverable".to_string(),
+            source_name: "ArcGIS".to_string(),
+            request: request("geotiff", &output),
+            tile_count: 100,
+            created_at: "2026-07-28 10:00:00".to_string(),
+            work_dir: Some(
+                dir.path()
+                    .join("missing")
+                    .join(".geod-work")
+                    .join("recoverable-task")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        };
+        let task_file = dir.path().join("recoverable-task.json");
+        std::fs::write(&task_file, serde_json::to_vec(&task).unwrap()).unwrap();
+
+        let loaded = load_resumable_tasks_from(dir.path());
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].task_id, "recoverable-task");
+        assert!(task_file.exists());
+    }
+
+    #[test]
+    fn work_dir_is_next_to_output_for_all_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("exports").join("map.tif");
+        let image_request = request("geotiff", &output);
+        let raw_request = request("tiles", &dir.path().join("tiles"));
+
+        assert_eq!(
+            task_work_dir("task-1", &image_request),
+            Some(dir.path().join("exports").join(".geod-work").join("task-1"))
+        );
+        assert_eq!(
+            task_work_dir("task-2", &raw_request),
+            Some(dir.path().join(".geod-work").join("task-2"))
+        );
+    }
 }

@@ -70,6 +70,18 @@ pub struct AppSettings {
     /// Cesium Ion Access Token
     #[serde(default)]
     pub cesium_ion_token: Option<String>,
+    /// 是否启用开发者功能中的 GeoD AI 助手
+    #[serde(default)]
+    pub ai_assistant_enabled: bool,
+    /// AI 服务 OpenAI 兼容 API 地址
+    #[serde(default = "default_ai_base_url")]
+    pub ai_base_url: String,
+    /// AI 模型
+    #[serde(default = "default_ai_model")]
+    pub ai_model: String,
+    /// 旧版本明文保存的 DeepSeek API Key，仅用于一次性迁移
+    #[serde(default, skip_serializing)]
+    pub deepseek_api_key: Option<String>,
     /// 调试模式：保留临时瓦片目录
     #[serde(default)]
     pub debug_mode: bool,
@@ -122,6 +134,8 @@ fn default_concurrency() -> u32 { 30 }
 fn default_zoom() -> u8 { 15 }
 fn default_format() -> String { "geotiff".to_string() }
 fn default_source() -> String { "osm".to_string() }
+fn default_ai_base_url() -> String { "https://api.deepseek.com/v1".to_string() }
+fn default_ai_model() -> String { "deepseek-v4-flash".to_string() }
 fn default_memory_budget_mb() -> u64 { 2048 }
 fn default_tile_cache_enabled() -> bool { true }
 fn default_tile_cache_max_size_mb() -> u64 { 5120 }
@@ -141,6 +155,10 @@ impl Default for AppSettings {
             custom_sources: vec![],
             source_overrides: vec![],
             cesium_ion_token: None,
+            ai_assistant_enabled: false,
+            ai_base_url: default_ai_base_url(),
+            ai_model: default_ai_model(),
+            deepseek_api_key: None,
             memory_budget_mb: default_memory_budget_mb(),
             debug_mode: false,
             allow_invalid_certs: false,
@@ -226,6 +244,21 @@ mod tests {
             settings.empty_tile_probe_action,
             EmptyTileProbeAction::Continue
         );
+        assert!(!settings.ai_assistant_enabled);
+        assert_eq!(settings.ai_base_url, "https://api.deepseek.com/v1");
+        assert_eq!(settings.ai_model, "deepseek-v4-flash");
+        assert!(settings.deepseek_api_key.is_none());
+    }
+
+    #[test]
+    fn legacy_deepseek_key_is_never_serialized() {
+        let mut settings = AppSettings::default();
+        settings.deepseek_api_key = Some("sk-test-secret".to_string());
+
+        let serialized = serde_json::to_string(&settings).expect("settings should serialize");
+
+        assert!(!serialized.contains("sk-test-secret"));
+        assert!(!serialized.contains("deepseek_api_key"));
     }
 
     #[test]

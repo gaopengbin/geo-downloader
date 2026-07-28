@@ -1,12 +1,16 @@
 import { Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { useAssistantConfig } from '@/features/assistant/assistant-config'
 import { useAssistantStore } from '@/features/assistant/assistant-store'
 import { cn } from '@/lib/utils'
 
 export function AssistantButton() {
+  const { enabled } = useAssistantConfig()
   const open = useAssistantStore((state) => state.open)
   const toggle = useAssistantStore((state) => state.toggle)
+
+  if (!enabled) return null
 
   return (
     <Button

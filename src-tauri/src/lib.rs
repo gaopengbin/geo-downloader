@@ -23,6 +23,7 @@ pub mod tile_cache;
 pub mod tile_pack;
 pub mod cache_migration;
 pub mod source_analyzer;
+pub mod assistant;
 
 // Tauri commands
 mod commands;
@@ -76,6 +77,7 @@ pub fn run() {
         .manage(Arc::new(TaskManager::new()))
         .manage(Arc::new(cache_migration::CacheMigrationManager::new()))
         .manage(wayback_metadata::new_progress_map())
+        .manage(assistant::AssistantRuntime::default())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -127,6 +129,12 @@ pub fn run() {
             // 设置
             commands::get_settings,
             commands::save_settings,
+            assistant::assistant_status,
+            assistant::assistant_secret_status,
+            assistant::assistant_set_api_key,
+            assistant::assistant_delete_api_key,
+            assistant::assistant_chat,
+            assistant::assistant_cancel,
             // 矢量数据
             commands::create_osm_download_task,
             commands::download_osm_data,

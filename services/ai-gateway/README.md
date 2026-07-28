@@ -1,7 +1,9 @@
 # GeoD AI Gateway
 
-A small OpenAI-compatible gateway for testing the GeoD assistant without
-putting the upstream model key in the desktop client.
+A small OpenAI-compatible development gateway for testing the GeoD assistant in
+a browser or experimenting with a future hosted service. The production desktop
+client performs retrieval and model requests in its Rust backend and does not
+require this process.
 
 ## Local test
 
@@ -15,13 +17,14 @@ and uses `geod-local-test` as the gateway token.
 
 ## Connect a real model
 
-Copy the relevant values into `.env`:
+The gateway always owns the upstream base URL and model. A server key is
+optional when the desktop sends its own key through `x-geod-provider-key`.
 
 ```dotenv
 MOCK_MODE=false
-UPSTREAM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-UPSTREAM_API_KEY=your-api-key
-UPSTREAM_MODEL=qwen-plus
+UPSTREAM_BASE_URL=https://api.deepseek.com/v1
+UPSTREAM_API_KEY=
+UPSTREAM_MODEL=deepseek-v4-flash
 GATEWAY_TOKEN=replace-with-a-long-random-value
 ```
 
@@ -36,6 +39,11 @@ The upstream must expose an OpenAI-compatible
 `/health` reports the loaded knowledge-base version and article count.
 Chat responses expose the matched article metadata through the
 `x-geod-knowledge-sources` response header.
+
+When `x-geod-provider-key` is present, the gateway uses it only for that
+upstream request and does not persist or log it. BYOK requests do not consume
+the server-owned key. Requests without a provider key continue to require
+`GATEWAY_TOKEN` when one is configured.
 
 ## Knowledge retrieval
 
@@ -59,7 +67,7 @@ Example:
 
 ```powershell
 $headers = @{
-  Authorization = "Bearer geod-local-test"
+  "X-GeoD-Provider-Key" = "your-deepseek-api-key"
   "Content-Type" = "application/json"
 }
 $body = @{
@@ -78,6 +86,7 @@ Invoke-RestMethod `
 
 - Keep the gateway bound to localhost and put HTTPS reverse proxy in front.
 - Replace `GATEWAY_TOKEN` and never commit `.env`.
+- Never log or persist the `x-geod-provider-key` request header.
 - Restrict the firewall to ports 80/443.
 - Add persistent per-device quotas before distributing it to users.
 - Keep provider-side spending alerts and a hard budget limit enabled.

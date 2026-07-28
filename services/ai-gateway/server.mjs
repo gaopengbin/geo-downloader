@@ -84,7 +84,10 @@ function setCorsHeaders(request, response, config) {
   if (!origin || !config.allowedOrigins.has(origin)) return false
 
   response.setHeader('access-control-allow-origin', origin)
-  response.setHeader('access-control-allow-headers', 'authorization, content-type')
+  response.setHeader(
+    'access-control-allow-headers',
+    'authorization, content-type, x-geod-provider-key',
+  )
   response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
   response.setHeader('access-control-expose-headers', 'x-geod-knowledge-sources')
   response.setHeader('access-control-max-age', '600')
@@ -96,6 +99,19 @@ function clientIp(request) {
   const forwarded = request.headers['x-forwarded-for']
   if (typeof forwarded === 'string' && forwarded) return forwarded.split(',')[0].trim()
   return request.socket.remoteAddress || 'unknown'
+}
+
+function clientProviderApiKey(request) {
+  const value = request.headers['x-geod-provider-key']
+  if (typeof value !== 'string') return ''
+  const apiKey = value.trim()
+  if (apiKey.length > 512) {
+    const error = new Error('模型 API Key 长度不合法')
+    error.status = 400
+    error.code = 'invalid_provider_key'
+    throw error
+  }
+  return apiKey
 }
 
 function createRateLimiter(limit) {
@@ -314,12 +330,13 @@ async function sendMockResponse(response, payload) {
   response.end('data: [DONE]\n\n')
 }
 
-async function proxyUpstream(response, payload, config, fetchImpl) {
-  if (!config.upstreamBaseUrl || !config.upstreamApiKey || !payload.model) {
+async function proxyUpstream(response, payload, config, fetchImpl, providerApiKey = '') {
+  const upstreamApiKey = providerApiKey || config.upstreamApiKey
+  if (!config.upstreamBaseUrl || !upstreamApiKey || !payload.model) {
     sendError(
       response,
       503,
-      '真实模型尚未配置，请设置 UPSTREAM_BASE_URL、UPSTREAM_API_KEY 和 UPSTREAM_MODEL',
+      '真实模型尚未配置，请提供模型 API Key，并设置 UPSTREAM_BASE_URL 和 UPSTREAM_MODEL',
       'upstream_not_configured',
     )
     return
@@ -332,7 +349,7 @@ async function proxyUpstream(response, payload, config, fetchImpl) {
     upstream = await fetchImpl(`${config.upstreamBaseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${config.upstreamApiKey}`,
+        authorization: `Bearer ${upstreamApiKey}`,
         'content-type': 'application/json',
       },
       body: JSON.stringify(payload),
@@ -414,7 +431,7 @@ export function createGatewayServer(options = {}) {
         mode: config.mockMode ? 'mock' : 'upstream',
         configured:
           config.mockMode ||
-          Boolean(config.upstreamBaseUrl && config.upstreamApiKey && config.upstreamModel),
+          Boolean(config.upstreamBaseUrl && config.upstreamModel),
         model: config.mockMode ? 'geod-mock' : config.upstreamModel || null,
         knowledge: {
           version: knowledgeBase.contentVersion,
@@ -429,8 +446,17 @@ export function createGatewayServer(options = {}) {
       return
     }
 
+    let providerApiKey
+    try {
+      providerApiKey = clientProviderApiKey(request)
+    } catch (error) {
+      sendError(response, error.status, error.message, error.code)
+      return
+    }
+
     if (
       config.gatewayToken &&
+      !providerApiKey &&
       request.headers.authorization !== `Bearer ${config.gatewayToken}`
     ) {
       sendError(
@@ -461,7 +487,7 @@ export function createGatewayServer(options = {}) {
       if (config.mockMode) {
         await sendMockResponse(response, payload)
       } else {
-        await proxyUpstream(response, payload, config, fetchImpl)
+        await proxyUpstream(response, payload, config, fetchImpl, providerApiKey)
       }
     } catch (error) {
       if (response.headersSent) {

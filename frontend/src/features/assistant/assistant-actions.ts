@@ -164,6 +164,8 @@ function revealTarget(selector: string, attempt = 0) {
     return
   }
 
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+
   const collapsibleHeader = target.querySelector<HTMLElement>(
     ':scope > header[role="button"]',
   )
@@ -171,7 +173,29 @@ function revealTarget(selector: string, attempt = 0) {
     collapsibleHeader.click()
   }
 
-  target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+  let scrollContainer: HTMLElement | null = target.parentElement
+  while (scrollContainer) {
+    const overflowY = window.getComputedStyle(scrollContainer).overflowY
+    if (
+      /(auto|scroll)/.test(overflowY) &&
+      scrollContainer.scrollHeight > scrollContainer.clientHeight
+    ) {
+      const targetRect = target.getBoundingClientRect()
+      const containerRect = scrollContainer.getBoundingClientRect()
+      const centeredTop =
+        scrollContainer.scrollTop +
+        targetRect.top -
+        containerRect.top -
+        Math.max(0, (scrollContainer.clientHeight - targetRect.height) / 2)
+      scrollContainer.scrollTo({
+        top: Math.max(0, centeredTop),
+        behavior: 'smooth',
+      })
+      break
+    }
+    scrollContainer = scrollContainer.parentElement
+  }
+
   const highlightClasses = [
     'ring-2',
     'ring-primary',
@@ -188,6 +212,8 @@ export function executeAssistantActionHref(href: string) {
     toast.error('这个助手操作不受支持')
     return false
   }
+
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
 
   const app = useAppStore.getState()
   if (action.mode) app.setMode(action.mode)
