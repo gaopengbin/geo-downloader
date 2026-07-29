@@ -130,11 +130,19 @@ if ($LASTEXITCODE -ne 0) {
 Get-CimInstance Win32_Process |
   Where-Object { $_.ExecutablePath -eq $nginxExe } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-Start-Process `
-  -FilePath $nginxExe `
-  -ArgumentList @('-p', $nginxRoot, '-c', 'conf/nginx.conf') `
-  -WorkingDirectory $nginxRoot `
-  -WindowStyle Hidden
+
+$nginxTaskName = 'GeoDNginx'
+$nginxAction = New-ScheduledTaskAction `
+  -Execute $nginxExe `
+  -Argument "-p `"$nginxRoot`" -c conf/nginx.conf" `
+  -WorkingDirectory $nginxRoot
+$nginxTrigger = New-ScheduledTaskTrigger -AtStartup
+Register-ScheduledTask `
+  -TaskName $nginxTaskName `
+  -Action $nginxAction `
+  -Trigger $nginxTrigger `
+  -Force | Out-Null
+Start-ScheduledTask -TaskName $nginxTaskName
 Start-Sleep -Seconds 2
 
 $publicHealth = Invoke-RestMethod `
