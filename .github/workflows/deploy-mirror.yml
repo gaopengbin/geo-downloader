@@ -42,21 +42,54 @@ jobs:
         run: |
           sudo apt-get install -y sshpass
 
+          SSH_OPTIONS=(
+            -4
+            -o StrictHostKeyChecking=no
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=3
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
+            -o PreferredAuthentications=password
+            -o PubkeyAuthentication=no
+            -o NumberOfPasswordPrompts=1
+          )
+
+          run_with_retry() {
+            local description="$1"
+            shift
+
+            for attempt in 1 2 3 4 5 6; do
+              echo "$description (attempt $attempt/6)"
+              if "$@"; then
+                return 0
+              else
+                status=$?
+              fi
+
+              if [ "$attempt" -eq 6 ]; then
+                echo "$description failed after 6 attempts"
+                return "$status"
+              fi
+
+              sleep $((attempt * 10))
+            done
+          }
+
           # Create directories via ssh
-          sshpass -e ssh -o StrictHostKeyChecking=no \
+          run_with_retry "Create mirror directories" sshpass -e ssh "${SSH_OPTIONS[@]}" \
             ${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }} \
             "powershell -Command \"New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\v${{ inputs.version }}'; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest'\""
 
           # Upload files directly to versioned directory using absolute path
           for f in artifacts/*; do
             echo "Uploading $(basename $f)..."
-            sshpass -e scp -o StrictHostKeyChecking=no \
+            run_with_retry "Upload $(basename "$f")" sshpass -e scp "${SSH_OPTIONS[@]}" \
               "$f" \
               "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}:/C:/nginx-1.30.2/packages/v${{ inputs.version }}/$(basename $f)"
           done
           echo "Upload complete."
 
           # Copy to latest
-          sshpass -e ssh -o StrictHostKeyChecking=no \
+          run_with_retry "Activate v${{ inputs.version }}" sshpass -e ssh "${SSH_OPTIONS[@]}" \
             ${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }} \
             "powershell -Command \"Remove-Item 'C:\nginx-1.30.2\packages\latest\*' -Force -ErrorAction SilentlyContinue; Copy-Item 'C:\nginx-1.30.2\packages\v${{ inputs.version }}\*' -Destination 'C:\nginx-1.30.2\packages\latest\' -Force; Get-ChildItem 'C:\nginx-1.30.2\packages\latest'\""
