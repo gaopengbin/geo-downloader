@@ -23,6 +23,9 @@ export interface AppState {
   /** 经纬度网格间隔（单位：度） */
   graticuleInterval: number
   setGraticuleInterval: (interval: number) => void
+  /** 经纬度网格是否根据当前视野自动选择间隔 */
+  graticuleAuto: boolean
+  setGraticuleAuto: (auto: boolean) => void
   /** 当前选中的行政区划代码（街道/区县/城市/省），用于边界下载 */
   currentAdminCode: string | null
   setCurrentAdminCode: (code: string | null) => void
@@ -44,6 +47,7 @@ type PersistedAppState = Partial<
     | 'overlayVisibilityByMode'
     | 'graticuleVisible'
     | 'graticuleInterval'
+    | 'graticuleAuto'
     | 'currentAdminCode'
     | 'adminSelection'
   >
@@ -78,6 +82,7 @@ function readPersistedAppState(): PersistedAppState {
         typeof state.graticuleInterval === 'number' && Number.isFinite(state.graticuleInterval)
           ? state.graticuleInterval
           : undefined,
+      graticuleAuto: typeof state.graticuleAuto === 'boolean' ? state.graticuleAuto : undefined,
       currentAdminCode:
         typeof state.currentAdminCode === 'string' ? state.currentAdminCode : null,
       adminSelection:
@@ -126,6 +131,8 @@ export const useAppStore = create<AppState>()(
       setGraticuleVisible: (visible) => set({ graticuleVisible: visible }),
       graticuleInterval: restoredAppState.graticuleInterval ?? 1,
       setGraticuleInterval: (interval) => set({ graticuleInterval: interval }),
+      graticuleAuto: restoredAppState.graticuleAuto ?? true,
+      setGraticuleAuto: (auto) => set({ graticuleAuto: auto }),
       currentAdminCode: restoredAppState.currentAdminCode ?? null,
       setCurrentAdminCode: (code) => set({ currentAdminCode: code }),
       adminSelection:
@@ -147,6 +154,7 @@ export const useAppStore = create<AppState>()(
         overlayVisibilityByMode: state.overlayVisibilityByMode,
         graticuleVisible: state.graticuleVisible,
         graticuleInterval: state.graticuleInterval,
+        graticuleAuto: state.graticuleAuto,
         currentAdminCode: state.currentAdminCode,
         adminSelection: state.adminSelection,
       }),

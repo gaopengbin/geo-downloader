@@ -83,6 +83,8 @@ jobs:
         run: cargo binstall -y --locked tauri-cli@^2
 
       - name: Build
+        env:
+          VITE_TELEMETRY_ENDPOINT: https://laogao.xyz/geod-telemetry/v1/events
         run: cargo tauri build --target ${{ matrix.target }}
 
       - name: Verify macOS app signature

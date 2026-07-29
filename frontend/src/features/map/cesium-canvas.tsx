@@ -9,6 +9,7 @@ import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { useSelectionStore, type LatLngRing, type MapBounds } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
+import { useMapStatusStore } from '@/store/map-status-store'
 import { loadCesium } from '@/lib/cesium-loader'
 import { invokeCommand, isTauriRuntime } from '@/lib/tauri'
 
@@ -50,7 +51,6 @@ export function CesiumCanvas() {
   const mode = useAppStore((s) => s.mode)
   const visible = mode === 'tiles3d'
 
-  const [status, setStatus] = useState({ coords: '经度: --  纬度: --', height: '高度: --' })
   const [drawMode, setDrawMode] = useState<DrawMode>(null)
   const [previewing, setPreviewing] = useState(false)
   const [hint, setHint] = useState<string | null>(null)
@@ -112,23 +112,21 @@ export function CesiumCanvas() {
             const carto = Cesium.Cartographic.fromCartesian(cartesian)
             const lng = Cesium.Math.toDegrees(carto.longitude)
             const lat = Cesium.Math.toDegrees(carto.latitude)
-            setStatus((prev) => ({
-              ...prev,
-              coords: `经度: ${lng.toFixed(6)}  纬度: ${lat.toFixed(6)}`,
-            }))
+            useMapStatusStore.getState().setCesiumPointer(lng, lat)
           } else {
-            setStatus((prev) => ({ ...prev, coords: '经度: --  纬度: --' }))
+            useMapStatusStore.getState().setCesiumPointer(null, null)
           }
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 
-        viewer.camera.percentageChanged = 0.01
-        viewer.camera.changed.addEventListener(() => {
+        const updateCameraHeight = () => {
           const height = viewer.camera.positionCartographic.height
           if (height !== undefined) {
-            const km = height > 1000 ? `${(height / 1000).toFixed(1)} km` : `${height.toFixed(0)} m`
-            setStatus((prev) => ({ ...prev, height: `高度: ${km}` }))
+            useMapStatusStore.getState().setCesiumHeight(height)
           }
-        })
+        }
+        viewer.camera.percentageChanged = 0.01
+        viewer.camera.changed.addEventListener(updateCameraHeight)
+        updateCameraHeight()
 
         viewerRef.current = viewer
         setReady(true)
@@ -142,6 +140,15 @@ export function CesiumCanvas() {
       cancelled = true
     }
   }, [visible])
+
+  useEffect(() => {
+    if (!visible || !ready || !viewerRef.current) return
+
+    const height = viewerRef.current.camera.positionCartographic.height
+    if (height !== undefined) {
+      useMapStatusStore.getState().setCesiumHeight(height)
+    }
+  }, [ready, visible])
 
   // 同步 selectionStore → Cesium 选区显示
   useEffect(() => {
@@ -760,13 +767,6 @@ export function CesiumCanvas() {
           )}
         </div>
       )}
-
-      {/* 状态栏 */}
-      <div className="pointer-events-none absolute bottom-2 left-2 z-10 flex items-center gap-2 rounded-md border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur tabular-nums">
-        <span>{status.coords}</span>
-        <span>·</span>
-        <span>{status.height}</span>
-      </div>
 
       {!ready && !error && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/60">

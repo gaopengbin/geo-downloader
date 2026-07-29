@@ -3,9 +3,13 @@ import { Boxes, CalendarClock, ClipboardList, History as HistoryIcon, Image as I
 import type { ComponentType, SVGProps } from 'react'
 
 import { AppShell } from '@/components/layout/app-shell'
+import { MapStatusBar } from '@/components/layout/map-status-bar'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AssistantButton } from '@/features/assistant/assistant-button'
 import { BatchDialog } from '@/features/batch/batch-dialog'
+import { TelemetryBootstrap } from '@/features/telemetry/telemetry-bootstrap'
+import { trackTelemetry } from '@/features/telemetry/telemetry-client'
+import { useTelemetryStore } from '@/features/telemetry/telemetry-store'
 import { HelpButton } from '@/features/onboarding/help-button'
 import { useOnboardingTour } from '@/features/onboarding/use-onboarding-tour'
 import {
@@ -123,6 +127,9 @@ function App() {
   const setMode = useAppStore((s) => s.setMode)
   const tab = useAppStore((s) => s.tab)
   const setTab = useAppStore((s) => s.setTab)
+  const telemetryConsent = useTelemetryStore((s) => s.consent)
+  const trackedModeRef = useRef<AppMode | null>(null)
+  const trackedTabRef = useRef<SidebarTab | null>(null)
 
   // 侧边栏拖拽宽度
   const [sidebarWidth, setSidebarWidth] = useState(380)
@@ -151,8 +158,23 @@ function App() {
     void checkForUpdates(true)
   }, [])
 
+  useEffect(() => {
+    if (trackedModeRef.current === mode) return
+    trackedModeRef.current = mode
+    void trackTelemetry('mode_changed', { mode })
+  }, [mode])
+
+  useEffect(() => {
+    if (trackedTabRef.current === tab) return
+    trackedTabRef.current = tab
+    void trackTelemetry('sidebar_tab_changed', { tab })
+  }, [tab])
+
   // 首次打开主界面的新手引导
-  const mainTour = useOnboardingTour({ id: 'main-v1' })
+  const mainTour = useOnboardingTour({
+    id: 'main-v1',
+    autoStartOnFirstVisit: telemetryConsent !== 'pending',
+  })
   // 三个模式的详细引导（手动启动，不自动弹出）
   const imageryTour = useOnboardingTour({
     id: 'imagery-v1',
@@ -225,7 +247,8 @@ function App() {
         </>
       }
     >
-      <div className="flex h-[calc(100vh-3rem)] w-screen overflow-hidden">
+      <div className="flex h-[calc(100vh-3rem)] w-screen flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* 左侧控制面板 */}
         <aside
           className="flex h-full shrink-0 flex-col border-r bg-background"
@@ -302,6 +325,8 @@ function App() {
         <BatchDialog />
         {/* 全局：检查更新对话框 */}
         <UpdateDialog />
+        {/* 全局：首次匿名统计授权 */}
+        <TelemetryBootstrap />
 
         {/* 拖拽条 */}
         <div
@@ -329,6 +354,8 @@ function App() {
           </div>
           <CesiumCanvas />
         </main>
+        </div>
+        <MapStatusBar />
       </div>
     </AppShell>
   )

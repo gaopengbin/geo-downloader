@@ -30,6 +30,7 @@ import { PanelSection } from '@/components/layout/panel-section'
 import { SourcesDialog } from '@/features/sources/sources-dialog'
 import { AboutDialog } from '@/features/about/about-dialog'
 import { useAssistantStore } from '@/features/assistant/assistant-store'
+import { TelemetrySettingsSection } from '@/features/telemetry/telemetry-settings-section'
 import {
   deleteAssistantApiKey,
   getAssistantSecretStatus,
@@ -665,6 +666,8 @@ export function SettingsPanel() {
           onDirChange={(v) => setValue('tile_cache_dir', v, { shouldDirty: true })}
         />
       </PanelSection>
+
+      <TelemetrySettingsSection />
 
       <div className="sticky bottom-0 -mx-3 border-t bg-background/95 px-3 py-2 backdrop-blur">
         <Button type="submit" className="w-full" disabled={!isDirty || mutation.isPending}>

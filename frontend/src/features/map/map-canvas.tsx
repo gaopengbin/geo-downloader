@@ -16,9 +16,11 @@ import {
   type MapBounds,
 } from '@/store/selection-store'
 import { useAppStore, type AppMode } from '@/store/app-store'
+import { useMapStatusStore } from '@/store/map-status-store'
 import { useVectorLayersStore } from '@/store/vector-layers-store'
 import { useWaybackStore } from '@/store/wayback-store'
 import { getSettings } from '@/features/settings/settings-api'
+import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
 import {
   buildWaybackTileUrl,
@@ -311,9 +313,17 @@ function snapUp(value: number, interval: number) {
   return Math.ceil(value / interval) * interval
 }
 
+function niceGraticuleInterval(maxInterval: number) {
+  if (!Number.isFinite(maxInterval) || maxInterval <= 0) return maxInterval
+  const magnitude = 10 ** Math.floor(Math.log10(maxInterval))
+  const normalized = maxInterval / magnitude
+  const step = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1
+  return step * magnitude
+}
+
 function trimDegree(value: number) {
-  const rounded = Math.round(value * 10000) / 10000
-  if (Math.abs(rounded - Math.round(rounded)) < 0.00001) return String(Math.round(rounded))
+  const rounded = Math.round(value * 1000000) / 1000000
+  if (Math.abs(rounded - Math.round(rounded)) < 0.0000001) return String(Math.round(rounded))
   return String(rounded).replace(/\.?0+$/, '')
 }
 
@@ -352,6 +362,7 @@ function drawGraticuleLayer(
   map: L.Map,
   group: L.LayerGroup,
   requestedInterval: number,
+  autoInterval: boolean,
 ) {
   group.clearLayers()
   const bounds = map.getBounds()
@@ -361,7 +372,10 @@ function drawGraticuleLayer(
   const north = clamp(bounds.getNorth(), -85, 85)
   if (east <= west || north <= south) return requestedInterval
 
-  let interval = requestedInterval
+  const lngSpan = east - west
+  const latSpan = north - south
+  const viewInterval = niceGraticuleInterval(Math.min(lngSpan, latSpan) / 4)
+  let interval = autoInterval ? viewInterval : requestedInterval
   let lineCount = Math.ceil((east - west) / interval) + Math.ceil((north - south) / interval)
   while (lineCount > MAX_GRATICULE_LINES) {
     interval *= 2
@@ -462,8 +476,6 @@ export function MapCanvas() {
   // 本地加载的矢量图层
   const vectorLayerMapRef = useRef<Map<string, L.GeoJSON>>(new Map())
   const [error] = useState<string | null>(null)
-  const [statusCoords, setStatusCoords] = useState<string>('经度: --  纬度: --')
-  const [statusZoom, setStatusZoom] = useState<string>('缩放: --')
   const [measureMode, setMeasureMode] = useState<MeasureMode | null>(null)
   const [measureControlContainer, setMeasureControlContainer] = useState<HTMLElement | null>(null)
   const [waybackProxyBaseUrl, setWaybackProxyBaseUrl] = useState<string | null>(null)
@@ -484,6 +496,8 @@ export function MapCanvas() {
   const setGraticuleVisible = useAppStore((s) => s.setGraticuleVisible)
   const graticuleInterval = useAppStore((s) => s.graticuleInterval)
   const setGraticuleInterval = useAppStore((s) => s.setGraticuleInterval)
+  const graticuleAuto = useAppStore((s) => s.graticuleAuto)
+  const setGraticuleAuto = useAppStore((s) => s.setGraticuleAuto)
   // 用 ref 跟踪以避免每次写入都重建 control
   const overlayMemRef = useRef(overlayVisibilityByMode)
   useEffect(() => {
@@ -715,16 +729,14 @@ export function MapCanvas() {
     }
 
     // 状态栏：鼠标经纬度 + 缩放级别
-    setStatusZoom(`缩放: ${map.getZoom()}`)
+    useMapStatusStore.getState().setLeafletZoom(map.getZoom())
     map.on('mousemove', (e: L.LeafletMouseEvent) => {
-      setStatusCoords(
-        `经度: ${e.latlng.lng.toFixed(6)}  纬度: ${e.latlng.lat.toFixed(6)}`,
-      )
+      useMapStatusStore.getState().setLeafletPointer(e.latlng.lng, e.latlng.lat)
     })
-    map.on('mouseout', () => setStatusCoords('经度: --  纬度: --'))
+    map.on('mouseout', () => useMapStatusStore.getState().setLeafletPointer(null, null))
     map.on('moveend', schedulePersistCurrentView)
     map.on('zoomend', () => {
-      setStatusZoom(`缩放: ${map.getZoom()}`)
+      useMapStatusStore.getState().setLeafletZoom(map.getZoom())
       schedulePersistCurrentView()
     })
 
@@ -787,7 +799,7 @@ export function MapCanvas() {
 
     const redraw = () => {
       if (!graticuleVisible) return
-      const effective = drawGraticuleLayer(map, layer, graticuleInterval)
+      const effective = drawGraticuleLayer(map, layer, graticuleInterval, graticuleAuto)
       setEffectiveGraticuleInterval(effective)
       if (!map.hasLayer(layer)) layer.addTo(map)
     }
@@ -804,7 +816,7 @@ export function MapCanvas() {
     return () => {
       map.off('moveend zoomend', redraw)
     }
-  }, [graticuleVisible, graticuleInterval])
+  }, [graticuleVisible, graticuleInterval, graticuleAuto])
 
   // 升序版本：oldest → newest（与 timeline 一致）
   const ascendingWaybackVersions = useMemo(() => {
@@ -1462,18 +1474,46 @@ export function MapCanvas() {
             <input
               type="checkbox"
               checked={graticuleVisible}
-              onChange={(e) => setGraticuleVisible(e.currentTarget.checked)}
+              onChange={(e) => {
+                const enabled = e.currentTarget.checked
+                setGraticuleVisible(enabled)
+                void trackTelemetry('graticule_changed', {
+                  enabled,
+                  interval_mode: graticuleAuto ? 'auto' : 'fixed',
+                  interval: graticuleInterval,
+                })
+              }}
               className="size-3.5 accent-primary"
             />
             经纬网
           </label>
           <select
-            value={String(graticuleInterval)}
-            onChange={(e) => setGraticuleInterval(Number(e.currentTarget.value))}
+            value={graticuleAuto ? 'auto' : String(graticuleInterval)}
+            onChange={(e) => {
+              const value = e.currentTarget.value
+              if (value === 'auto') {
+                setGraticuleAuto(true)
+                void trackTelemetry('graticule_changed', {
+                  enabled: graticuleVisible,
+                  interval_mode: 'auto',
+                  interval: graticuleInterval,
+                })
+                return
+              }
+              const interval = Number(value)
+              setGraticuleAuto(false)
+              setGraticuleInterval(interval)
+              void trackTelemetry('graticule_changed', {
+                enabled: graticuleVisible,
+                interval_mode: 'fixed',
+                interval,
+              })
+            }}
             disabled={!graticuleVisible}
             className="h-7 rounded-md border bg-background px-2 text-xs outline-none disabled:opacity-50"
             title="经纬网间隔"
           >
+            <option value="auto">自动</option>
             {GRATICULE_INTERVALS.map((interval) => (
               <option key={interval} value={interval}>
                 {interval}°
@@ -1481,18 +1521,19 @@ export function MapCanvas() {
             ))}
           </select>
         </div>
+        {graticuleVisible && effectiveGraticuleInterval !== null && graticuleAuto && (
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            当前显示 {trimDegree(effectiveGraticuleInterval)}°
+          </div>
+        )}
         {graticuleVisible &&
           effectiveGraticuleInterval !== null &&
+          !graticuleAuto &&
           effectiveGraticuleInterval !== graticuleInterval && (
             <div className="mt-1 text-[11px] text-muted-foreground">
-              视野过大，显示 {effectiveGraticuleInterval}°
+              网格过密，显示 {trimDegree(effectiveGraticuleInterval)}°
             </div>
           )}
-      </div>
-      <div className="pointer-events-none absolute bottom-2 left-2 z-10 flex items-center gap-2 rounded-md border bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur tabular-nums">
-        <span>{statusCoords}</span>
-        <span className="text-muted-foreground/40">|</span>
-        <span>{statusZoom}</span>
       </div>
     </div>
   )
