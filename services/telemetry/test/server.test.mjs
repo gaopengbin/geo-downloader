@@ -64,7 +64,11 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
 
   const address = server.address()
   const baseUrl = `http://127.0.0.1:${address.port}`
-  const payloadEvent = event()
+  const installId = crypto.randomUUID()
+  const eventDay = new Date().toISOString().slice(0, 10)
+  const firstSeen = `${eventDay}T00:00:01.000Z`
+  const lastActive = `${eventDay}T00:00:02.000Z`
+  const payloadEvent = event({ install_id: installId, occurred_at: firstSeen })
   const payload = JSON.stringify({ schema_version: 1, events: [payloadEvent] })
 
   const health = await fetch(`${baseUrl}/geod-telemetry/health`)
@@ -86,6 +90,25 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   assert.equal(duplicate.status, 202)
   assert.deepEqual(await duplicate.json(), { accepted: 1, inserted: 0 })
 
+  const activity = await fetch(`${baseUrl}/v1/events`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      schema_version: 1,
+      events: [
+        event({
+          event: 'mode_changed',
+          occurred_at: lastActive,
+          install_id: installId,
+          app_version: '3.6.7',
+          properties: { mode: 'imagery' },
+        }),
+      ],
+    }),
+  })
+  assert.equal(activity.status, 202)
+  assert.deepEqual(await activity.json(), { accepted: 1, inserted: 1 })
+
   const unauthorized = await fetch(`${baseUrl}/admin/stats`)
   assert.equal(unauthorized.status, 401)
 
@@ -95,6 +118,24 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   assert.equal(statsResponse.status, 200)
   const stats = await statsResponse.json()
   assert.equal(stats.totals.installs, 1)
-  assert.equal(stats.totals.event_count, 1)
+  assert.equal(stats.totals.wau, 1)
+  assert.equal(stats.totals.event_count, 2)
   assert.deepEqual(stats.platforms, [{ platform: 'windows', installs: 1 }])
+  assert.equal(
+    stats.daily.reduce((total, row) => total + row.new_installs, 0),
+    1,
+  )
+  assert.deepEqual(stats.devices, [
+    {
+      install_key: installId.slice(0, 8),
+      first_seen: firstSeen,
+      last_active: lastActive,
+      event_count: 2,
+      session_count: 2,
+      active_days: 1,
+      launch_count: 1,
+      current_version: '3.6.7',
+      platform: 'windows',
+    },
+  ])
 })

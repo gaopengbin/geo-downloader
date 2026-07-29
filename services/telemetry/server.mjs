@@ -1,10 +1,12 @@
 import { createServer } from 'node:http'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import initSqlJs from 'sql.js'
 
 const SERVICE_ROOT = path.dirname(fileURLToPath(import.meta.url))
+const require = createRequire(import.meta.url)
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/
@@ -223,7 +225,7 @@ function queryRows(database, sql, parameters = []) {
 }
 
 async function createDatabase(databasePath) {
-  const wasmPath = fileURLToPath(import.meta.resolve('sql.js/dist/sql-wasm.wasm'))
+  const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm')
   const SQL = await initSqlJs({ locateFile: () => wasmPath })
   let database
   try {
@@ -311,8 +313,9 @@ async function createDatabase(databasePath) {
         `SELECT
           COUNT(*) AS event_count,
           COUNT(DISTINCT install_id) AS installs,
-          COUNT(DISTINCT CASE WHEN event_day >= date('now', '-0 day') THEN install_id END) AS dau,
-          COUNT(DISTINCT CASE WHEN event_day >= date('now', '-29 day') THEN install_id END) AS mau
+          COUNT(DISTINCT CASE WHEN julianday(occurred_at) >= julianday('now', '-24 hours') THEN install_id END) AS dau,
+          COUNT(DISTINCT CASE WHEN julianday(occurred_at) >= julianday('now', '-7 days') THEN install_id END) AS wau,
+          COUNT(DISTINCT CASE WHEN julianday(occurred_at) >= julianday('now', '-30 days') THEN install_id END) AS mau
         FROM events`,
       )[0]
       return {
@@ -320,11 +323,29 @@ async function createDatabase(databasePath) {
         totals,
         daily: queryRows(
           database,
-          `SELECT event_day AS day, COUNT(DISTINCT install_id) AS active_installs,
-             COUNT(*) AS events
-           FROM events
-           WHERE event_day >= date('now', '-29 day')
-           GROUP BY event_day ORDER BY event_day`,
+          `WITH daily_activity AS (
+             SELECT event_day AS day, COUNT(DISTINCT install_id) AS active_installs,
+               COUNT(*) AS events
+             FROM events
+             WHERE event_day >= date('now', '-29 day')
+             GROUP BY event_day
+           ),
+           first_seen AS (
+             SELECT install_id, MIN(event_day) AS first_day
+             FROM events
+             GROUP BY install_id
+           ),
+           daily_installs AS (
+             SELECT first_day AS day, COUNT(*) AS new_installs
+             FROM first_seen
+             WHERE first_day >= date('now', '-29 day')
+             GROUP BY first_day
+           )
+           SELECT daily_activity.day, daily_activity.active_installs, daily_activity.events,
+             COALESCE(daily_installs.new_installs, 0) AS new_installs
+           FROM daily_activity
+           LEFT JOIN daily_installs ON daily_installs.day = daily_activity.day
+           ORDER BY daily_activity.day`,
         ),
         versions: queryRows(
           database,
@@ -340,6 +361,43 @@ async function createDatabase(databasePath) {
           database,
           `SELECT event_name AS event, COUNT(*) AS count
            FROM events GROUP BY event_name ORDER BY count DESC`,
+        ),
+        devices: queryRows(
+          database,
+          `WITH device_summary AS (
+             SELECT install_id,
+               MIN(occurred_at) AS first_seen,
+               MAX(occurred_at) AS last_active,
+               COUNT(*) AS event_count,
+               COUNT(DISTINCT session_id) AS session_count,
+               COUNT(DISTINCT event_day) AS active_days,
+               SUM(CASE WHEN event_name = 'app_started' THEN 1 ELSE 0 END) AS launch_count
+             FROM events
+             GROUP BY install_id
+           )
+           SELECT
+             substr(device_summary.install_id, 1, 8) AS install_key,
+             device_summary.first_seen,
+             device_summary.last_active,
+             device_summary.event_count,
+             device_summary.session_count,
+             device_summary.active_days,
+             device_summary.launch_count,
+             (
+               SELECT app_version FROM events latest
+               WHERE latest.install_id = device_summary.install_id
+               ORDER BY latest.occurred_at DESC, latest.received_at DESC
+               LIMIT 1
+             ) AS current_version,
+             (
+               SELECT platform FROM events latest
+               WHERE latest.install_id = device_summary.install_id
+               ORDER BY latest.occurred_at DESC, latest.received_at DESC
+               LIMIT 1
+             ) AS platform
+           FROM device_summary
+           ORDER BY device_summary.last_active DESC
+           LIMIT 200`,
         ),
       }
     },
@@ -372,40 +430,109 @@ function serveAdmin(response) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GeoD 匿名使用统计</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:#172033;font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}
-main{max-width:1100px;margin:0 auto;padding:32px 20px 60px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
-h1{margin:0;font-size:24px}.muted{color:#667085}.login{display:flex;gap:8px}input,button{height:38px;border:1px solid #d0d5dd;border-radius:6px;padding:0 12px;background:#fff}
-button{cursor:pointer;background:#2563eb;color:#fff;border-color:#2563eb;font-weight:600}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
-.card,.panel{background:#fff;border:1px solid #e4e7ec;border-radius:8px}.card{padding:18px}.value{font-size:28px;font-weight:700;margin-top:4px}
-.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}.panel{padding:18px;margin-bottom:16px}h2{font-size:16px;margin:0 0 14px}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #eef0f3;padding:8px 4px}th{color:#667085;font-weight:500}
-.error{color:#b42318}@media(max-width:720px){.cards{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}header{align-items:flex-start;gap:16px;flex-direction:column}}
+*{box-sizing:border-box}
+:root{color-scheme:light;--blue:#2563eb;--blue-soft:#eff6ff;--green:#059669;--amber:#d97706;--ink:#172033;--muted:#667085;--line:#e4e7ec;--surface:#fff;--page:#f5f7fb}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+main{max-width:1240px;margin:0 auto;padding:28px 20px 56px}
+header{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:22px}
+h1{margin:0;font-size:24px;line-height:1.25}.brand{color:var(--blue)}.muted{color:var(--muted)}
+.login{display:flex;gap:8px;flex:0 0 auto}input,button{height:38px;border:1px solid #d0d5dd;border-radius:6px;padding:0 12px;background:#fff;font:inherit}
+input{width:195px}input:focus,button:focus-visible{outline:3px solid #bfdbfe;outline-offset:1px}
+button{cursor:pointer;background:var(--blue);color:#fff;border-color:var(--blue);font-weight:600;transition:background .18s ease}
+button:hover{background:#1d4ed8}
+.cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.card,.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px}
+.card{padding:16px 18px;min-height:108px;position:relative;overflow:hidden}
+.card:before{content:"";position:absolute;left:0;top:0;width:100%;height:3px;background:var(--accent,var(--blue))}
+.card-label{color:var(--muted);font-size:13px}.value{font-size:28px;font-weight:700;line-height:1.2;margin-top:7px;font-variant-numeric:tabular-nums}
+.card-note{color:var(--muted);font-size:12px;margin-top:5px}
+.dashboard-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:16px;align-items:start}
+.dashboard-grid>*{min-width:0}.panel{padding:18px;min-width:0}.side-stack{display:grid;gap:16px;min-width:0}.full{grid-column:1/-1}
+.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+h2{font-size:16px;margin:0}.panel-note{font-size:12px;color:var(--muted)}
+.chart-wrap{width:100%;max-width:100%;aspect-ratio:3/1;min-height:220px;overflow:hidden}.chart-wrap svg{display:block;width:100%;max-width:100%;height:100%;overflow:hidden}
+.legend{display:flex;gap:16px;align-items:center;color:var(--muted);font-size:12px}.legend-item{display:flex;gap:6px;align-items:center}
+.legend-swatch{width:10px;height:10px;border-radius:2px;background:var(--swatch)}
+.distribution{display:grid;gap:12px}.bar-row{display:grid;gap:5px}.bar-meta{display:flex;justify-content:space-between;gap:12px;font-size:13px}
+.bar-value{font-variant-numeric:tabular-nums;color:var(--muted)}.bar-track{height:7px;background:#eef2f7;border-radius:4px;overflow:hidden}
+.bar-fill{height:100%;width:0;background:var(--bar,var(--blue));border-radius:4px}
+.table-scroll{width:100%;max-width:100%;overflow:auto}table{width:100%;border-collapse:collapse;white-space:nowrap}
+th,td{text-align:left;border-bottom:1px solid #eef0f3;padding:10px 8px}th{color:var(--muted);font-size:12px;font-weight:600;background:#fafbfc;position:sticky;top:0}
+td{font-variant-numeric:tabular-nums}.device{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#344054}
+.badge{display:inline-flex;align-items:center;min-height:24px;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600;background:#f2f4f7;color:#475467}
+.badge.active{background:#ecfdf3;color:#027a48}.badge.recent{background:#eff6ff;color:#1d4ed8}.badge.quiet{background:#fff7ed;color:#b45309}
+.empty{padding:28px 12px;text-align:center;color:var(--muted)}.error{padding:14px;border:1px solid #fecdca;background:#fef3f2;color:#b42318;border-radius:8px}
+details{margin-top:10px}summary{cursor:pointer;color:var(--blue);font-size:12px}.skeleton{height:160px;border-radius:8px;background:#eef2f7}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+@media(max-width:900px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}.dashboard-grid{grid-template-columns:1fr}.full{grid-column:auto}}
+@media(max-width:640px){main{padding:20px 12px 40px}header{align-items:stretch;flex-direction:column}.login{width:100%}.login input{min-width:0;flex:1}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.card{min-height:100px}.panel{padding:14px}.chart-wrap{aspect-ratio:4/3;min-height:230px}}
 </style>
 </head>
 <body><main>
-<header><div><h1>GeoD 匿名使用统计</h1><div class="muted" id="updated">等待载入</div></div>
+<header><div><h1><span class="brand">GeoD</span> 匿名使用统计</h1><div class="muted" id="updated">等待载入</div></div>
 <div class="login"><input id="token" type="password" placeholder="管理口令"><button id="load">查看统计</button></div></header>
 <div id="content"></div>
 </main><script>
 const tokenInput=document.getElementById('token')
 tokenInput.value=localStorage.getItem('geod_telemetry_admin_token')||''
 document.getElementById('load').onclick=load
+tokenInput.addEventListener('keydown',function(event){if(event.key==='Enter')load()})
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function table(rows,columns){return '<table><thead><tr>'+columns.map(c=>'<th>'+esc(c[0])+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+columns.map(c=>'<td>'+esc(row[c[1]])+'</td>').join('')+'</tr>').join('')+'</tbody></table>'}
+function number(value){const parsed=Number(value);return Number.isFinite(parsed)?parsed:0}
+function table(rows,columns){if(!rows.length)return '<div class="empty">暂无数据</div>';return '<div class="table-scroll"><table><thead><tr>'+columns.map(c=>'<th>'+esc(c[0])+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+columns.map(c=>'<td>'+esc(row[c[1]])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'}
+function formatTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'-':date.toLocaleString('zh-CN',{hour12:false})}
+function fillDaily(rows){
+ const byDay=new Map(rows.map(row=>[row.day,row])),result=[],today=new Date()
+ for(let offset=29;offset>=0;offset--){const date=new Date(today);date.setHours(12,0,0,0);date.setDate(date.getDate()-offset);const day=date.toISOString().slice(0,10);result.push(byDay.get(day)||{day,active_installs:0,events:0,new_installs:0})}
+ return result
+}
+function trendChart(rows){
+ const data=fillDaily(rows),width=760,height=250,left=38,right=14,top=18,bottom=34,plotWidth=width-left-right,plotHeight=height-top-bottom
+ const maxActive=Math.max(1,...data.map(row=>number(row.active_installs))),maxEvents=Math.max(1,...data.map(row=>number(row.events)))
+ const x=index=>left+(index/(data.length-1))*plotWidth
+ const y=value=>top+plotHeight-(number(value)/maxActive)*plotHeight
+ const eventHeight=value=>(number(value)/maxEvents)*plotHeight
+ const points=data.map((row,index)=>x(index).toFixed(1)+','+y(row.active_installs).toFixed(1)).join(' ')
+ const area=left+','+(top+plotHeight)+' '+points+' '+(left+plotWidth)+','+(top+plotHeight)
+ let grid='',bars='',dots=''
+ for(let index=0;index<5;index++){const gy=top+(index/4)*plotHeight;const label=Math.round(maxActive*(1-index/4));grid+='<line x1="'+left+'" y1="'+gy+'" x2="'+(left+plotWidth)+'" y2="'+gy+'" stroke="#e9edf3"/><text x="'+(left-8)+'" y="'+(gy+4)+'" text-anchor="end" fill="#98a2b3" font-size="11">'+label+'</text>'}
+ data.forEach(function(row,index){const barWidth=Math.max(3,plotWidth/data.length-4),barHeight=eventHeight(row.events),cx=x(index);bars+='<rect x="'+(cx-barWidth/2)+'" y="'+(top+plotHeight-barHeight)+'" width="'+barWidth+'" height="'+barHeight+'" rx="2" fill="#dbeafe"><title>'+esc(row.day)+'：'+number(row.events)+' 个事件</title></rect>';if(number(row.active_installs)>0)dots+='<circle cx="'+cx+'" cy="'+y(row.active_installs)+'" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="2"><title>'+esc(row.day)+'：'+number(row.active_installs)+' 个活跃设备，'+number(row.new_installs)+' 个首次出现</title></circle>'})
+ const labels=[0,9,19,29].map(index=>'<text x="'+x(index)+'" y="'+(height-9)+'" text-anchor="'+(index===0?'start':index===29?'end':'middle')+'" fill="#98a2b3" font-size="11">'+esc(data[index].day.slice(5))+'</text>').join('')
+ return '<div class="chart-wrap"><svg viewBox="0 0 '+width+' '+height+'" role="img" aria-label="近 30 天活跃设备与事件趋势">'+grid+bars+'<polygon points="'+area+'" fill="#eff6ff"/><polyline points="'+points+'" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>'+dots+labels+'</svg></div>'
+}
+const platformLabels={windows:'Windows',macos:'macOS',linux:'Linux',web:'Web',unknown:'未知'}
+const eventLabels={app_started:'应用启动',mode_changed:'功能模式切换',sidebar_tab_changed:'侧栏切换',graticule_changed:'经纬网设置'}
+function distribution(rows,labelKey,valueKey,color,labelMap){
+ if(!rows.length)return '<div class="empty">暂无数据</div>'
+ const max=Math.max(1,...rows.map(row=>number(row[valueKey])))
+ return '<div class="distribution">'+rows.map(function(row){const value=number(row[valueKey]),label=labelMap?.[row[labelKey]]||row[labelKey];return '<div class="bar-row"><div class="bar-meta"><span>'+esc(label)+'</span><span class="bar-value">'+value+'</span></div><div class="bar-track"><div class="bar-fill" style="--bar:'+color+';width:'+Math.max(3,value/max*100).toFixed(1)+'%"></div></div></div>'}).join('')+'</div>'
+}
+function activity(lastActive){
+ const age=Date.now()-new Date(lastActive).getTime()
+ if(age<=24*60*60*1000)return ['24 小时','active']
+ if(age<=7*24*60*60*1000)return ['近 7 日','recent']
+ if(age<=30*24*60*60*1000)return ['近 30 日','quiet']
+ return ['较早','']
+}
+function deviceTable(rows){
+ if(!rows.length)return '<div class="empty">暂无设备数据</div>'
+ return '<div class="table-scroll"><table><thead><tr><th>匿名设备</th><th>首次出现</th><th>最后活跃</th><th>状态</th><th>启动</th><th>会话</th><th>活跃天数</th><th>事件</th><th>版本</th><th>平台</th></tr></thead><tbody>'+rows.map(function(row){const state=activity(row.last_active);return '<tr><td class="device">'+esc(row.install_key)+'</td><td>'+esc(formatTime(row.first_seen))+'</td><td>'+esc(formatTime(row.last_active))+'</td><td><span class="badge '+state[1]+'">'+state[0]+'</span></td><td>'+number(row.launch_count)+'</td><td>'+number(row.session_count)+'</td><td>'+number(row.active_days)+'</td><td>'+number(row.event_count)+'</td><td>'+esc(row.current_version)+'</td><td>'+esc(platformLabels[row.platform]||row.platform)+'</td></tr>'}).join('')+'</tbody></table></div>'
+}
 async function load(){
  const token=tokenInput.value.trim();localStorage.setItem('geod_telemetry_admin_token',token)
- const content=document.getElementById('content');content.innerHTML='<div class="muted">载入中...</div>'
+ const content=document.getElementById('content');content.innerHTML='<div class="skeleton"></div>'
  try{
   const response=await fetch('stats',{headers:{authorization:'Bearer '+token}})
   if(!response.ok)throw new Error(response.status===401?'管理口令不正确':'载入失败：HTTP '+response.status)
   const data=await response.json(),t=data.totals
   document.getElementById('updated').textContent='更新时间：'+new Date(data.generated_at).toLocaleString()
   content.innerHTML='<div class="cards">'+
-   [['累计安装',t.installs],['今日活跃',t.dau],['30 日活跃',t.mau],['累计事件',t.event_count]].map(x=>'<div class="card"><div class="muted">'+x[0]+'</div><div class="value">'+esc(x[1])+'</div></div>').join('')+
-   '</div><div class="grid"><div><section class="panel"><h2>近 30 天活跃</h2>'+table(data.daily,[['日期','day'],['活跃安装','active_installs'],['事件数','events']])+'</section></div>'+
-   '<div><section class="panel"><h2>版本分布</h2>'+table(data.versions,[['版本','version'],['安装','installs']])+'</section>'+
-   '<section class="panel"><h2>平台分布</h2>'+table(data.platforms,[['平台','platform'],['安装','installs']])+'</section>'+
-   '<section class="panel"><h2>功能事件</h2>'+table(data.events,[['事件','event'],['次数','count']])+'</section></div></div>'
+   [['匿名设备',t.installs,'去重安装实例','#2563eb'],['24 小时活跃',t.dau,'滚动时间窗','#059669'],['7 日活跃',t.wau,'最近 7 天','#0d9488'],['30 日活跃',t.mau,'最近 30 天','#7c3aed'],['累计事件',t.event_count,'已接收事件','#d97706']].map(x=>'<div class="card" style="--accent:'+x[3]+'"><div class="card-label">'+x[0]+'</div><div class="value">'+esc(x[1])+'</div><div class="card-note">'+x[2]+'</div></div>').join('')+
+   '</div><div class="dashboard-grid"><section class="panel"><div class="panel-head"><div><h2>活跃趋势</h2><div class="panel-note">最近 30 天，缺失日期按 0 计</div></div><div class="legend"><span class="legend-item"><i class="legend-swatch" style="--swatch:#2563eb"></i>活跃设备</span><span class="legend-item"><i class="legend-swatch" style="--swatch:#dbeafe"></i>事件量</span></div></div>'+trendChart(data.daily)+'<details><summary>每日数据</summary>'+table(data.daily,[['日期','day'],['活跃设备','active_installs'],['首次出现','new_installs'],['事件数','events']])+'</details></section>'+
+   '<div class="side-stack"><section class="panel"><div class="panel-head"><h2>版本分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.versions,'version','installs','#2563eb')+'</section>'+
+   '<section class="panel"><div class="panel-head"><h2>平台分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.platforms,'platform','installs','#059669',platformLabels)+'</section>'+
+   '<section class="panel"><div class="panel-head"><h2>功能使用</h2><span class="panel-note">事件次数</span></div>'+distribution(data.events,'event','count','#d97706',eventLabels)+'</section></div>'+
+   '<section class="panel full"><div class="panel-head"><div><h2>设备活跃明细</h2><div class="panel-note">首次出现为首次成功上报时间，不等同于系统安装时间</div></div><span class="panel-note">最多显示 200 个匿名设备</span></div>'+deviceTable(data.devices)+'</section></div>'
  }catch(error){content.innerHTML='<div class="error">'+esc(error.message)+'</div>'}
 }
 if(tokenInput.value)load()
@@ -488,7 +615,9 @@ export async function createTelemetryServer(options = {}) {
 }
 
 const launchedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+  typeof process !== 'undefined' &&
+  process.argv?.[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
 
 if (launchedDirectly) {
   const config = loadConfig()
