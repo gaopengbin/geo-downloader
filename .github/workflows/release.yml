@@ -151,7 +151,7 @@ jobs:
         with:
           name: release-${{ matrix.label }}
           path: GeoDownloader_*
-          retention-days: 1
+          retention-days: 7
 
   release:
     needs: build
@@ -194,7 +194,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Report production handoff
+      - name: Dispatch production deployment
         if: ${{ steps.version.outputs.PRERELEASE != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.DASHBOARD_DEPLOY_TOKEN }}
         run: |
-          echo "The private gaopengbin-dashboard runner will reconcile this release to production within five minutes."
+          gh api \
+            --method POST \
+            repos/gaopengbin/gaopengbin-dashboard/dispatches \
+            --input - <<'JSON'
+          {
+            "event_type": "deploy",
+            "client_payload": {
+              "project": "geo-downloader",
+              "target": "mirror",
+              "version": "${{ steps.version.outputs.VERSION }}",
+              "ref": "${{ github.sha }}"
+            }
+          }
+          JSON
