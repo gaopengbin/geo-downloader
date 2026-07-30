@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -161,7 +161,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get version
         id: version
@@ -194,95 +194,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  deploy-mirror:
-    # Pre-release builds stay on GitHub and must not replace the stable auto-update feed.
-    if: ${{ !contains(github.ref_name, '-') }}
-    needs: [build, release]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Get version
-        id: version
+      - name: Report production handoff
+        if: ${{ steps.version.outputs.PRERELEASE != 'true' }}
         run: |
-          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\(.*\)".*/\1/')
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Download release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p artifacts
-          gh release download "v${{ steps.version.outputs.VERSION }}" \
-            --repo ${{ github.repository }} \
-            --pattern "GeoDownloader_*" \
-            --dir artifacts
-          gh api "repos/${{ github.repository }}/releases/tags/v${{ steps.version.outputs.VERSION }}" \
-            | jq --arg base "https://laogao.xyz/packages/latest/" '{
-                tag_name,
-                html_url,
-                body,
-                draft,
-                prerelease,
-                assets: [.assets[] | {
-                  name,
-                  size,
-                  browser_download_url: ($base + .name)
-                }]
-              }' > artifacts/update.json
-          ls -la artifacts/
-
-      - name: Create directories and upload
-        env:
-          SSHPASS: ${{ secrets.MIRROR_PASSWORD }}
-        run: |
-          sudo apt-get install -y sshpass
-
-          SSH_OPTIONS=(
-            -4
-            -o StrictHostKeyChecking=no
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=3
-            -o ServerAliveInterval=15
-            -o ServerAliveCountMax=3
-            -o PreferredAuthentications=password
-            -o PubkeyAuthentication=no
-            -o NumberOfPasswordPrompts=1
-          )
-
-          run_with_retry() {
-            local description="$1"
-            shift
-
-            for attempt in 1 2 3 4 5 6; do
-              echo "$description (attempt $attempt/6)"
-              if "$@"; then
-                return 0
-              else
-                status=$?
-              fi
-
-              if [ "$attempt" -eq 6 ]; then
-                echo "$description failed after 6 attempts"
-                return "$status"
-              fi
-
-              sleep $((attempt * 10))
-            done
-          }
-
-          run_with_retry "Create mirror directories" sshpass -e ssh "${SSH_OPTIONS[@]}" \
-            ${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }} \
-            "powershell -Command \"New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\v${{ steps.version.outputs.VERSION }}'; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\packages\latest'\""
-
-          for f in artifacts/*; do
-            echo "Uploading $(basename $f)..."
-            run_with_retry "Upload $(basename "$f")" sshpass -e scp "${SSH_OPTIONS[@]}" \
-              "$f" \
-              "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}:/C:/nginx-1.30.2/packages/v${{ steps.version.outputs.VERSION }}/$(basename $f)"
-          done
-
-          run_with_retry "Activate v${{ steps.version.outputs.VERSION }}" sshpass -e ssh "${SSH_OPTIONS[@]}" \
-            ${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }} \
-            "powershell -Command \"Remove-Item 'C:\nginx-1.30.2\packages\latest\*' -Force -ErrorAction SilentlyContinue; Copy-Item 'C:\nginx-1.30.2\packages\v${{ steps.version.outputs.VERSION }}\*' -Destination 'C:\nginx-1.30.2\packages\latest\' -Force\""
+          echo "The private gaopengbin-dashboard runner will reconcile this release to production within five minutes."
