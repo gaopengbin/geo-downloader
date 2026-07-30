@@ -121,6 +121,9 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   assert.equal(stats.totals.wau, 1)
   assert.equal(stats.totals.event_count, 2)
   assert.deepEqual(stats.platforms, [{ platform: 'windows', installs: 1 }])
+  assert.deepEqual(stats.event_details.modes, [{ value: 'imagery', count: 1 }])
+  assert.deepEqual(stats.event_details.sidebar_tabs, [])
+  assert.deepEqual(stats.event_details.graticule_enabled, [])
   assert.equal(
     stats.daily.reduce((total, row) => total + row.new_installs, 0),
     1,

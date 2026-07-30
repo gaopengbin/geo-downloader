@@ -362,6 +362,43 @@ async function createDatabase(databasePath) {
           `SELECT event_name AS event, COUNT(*) AS count
            FROM events GROUP BY event_name ORDER BY count DESC`,
         ),
+        event_details: {
+          modes: queryRows(
+            database,
+            `SELECT json_extract(properties_json, '$.mode') AS value, COUNT(*) AS count
+             FROM events
+             WHERE event_name = 'mode_changed'
+             GROUP BY value ORDER BY count DESC`,
+          ),
+          sidebar_tabs: queryRows(
+            database,
+            `SELECT json_extract(properties_json, '$.tab') AS value, COUNT(*) AS count
+             FROM events
+             WHERE event_name = 'sidebar_tab_changed'
+             GROUP BY value ORDER BY count DESC`,
+          ),
+          graticule_enabled: queryRows(
+            database,
+            `SELECT json_extract(properties_json, '$.enabled') AS value, COUNT(*) AS count
+             FROM events
+             WHERE event_name = 'graticule_changed'
+             GROUP BY value ORDER BY count DESC`,
+          ),
+          graticule_modes: queryRows(
+            database,
+            `SELECT json_extract(properties_json, '$.interval_mode') AS value, COUNT(*) AS count
+             FROM events
+             WHERE event_name = 'graticule_changed'
+             GROUP BY value ORDER BY count DESC`,
+          ),
+          graticule_intervals: queryRows(
+            database,
+            `SELECT json_extract(properties_json, '$.interval') AS value, COUNT(*) AS count
+             FROM events
+             WHERE event_name = 'graticule_changed'
+             GROUP BY value ORDER BY count DESC LIMIT 12`,
+          ),
+        },
         devices: queryRows(
           database,
           `WITH device_summary AS (
@@ -456,6 +493,10 @@ h2{font-size:16px;margin:0}.panel-note{font-size:12px;color:var(--muted)}
 .distribution{display:grid;gap:12px}.bar-row{display:grid;gap:5px}.bar-meta{display:flex;justify-content:space-between;gap:12px;font-size:13px}
 .bar-value{font-variant-numeric:tabular-nums;color:var(--muted)}.bar-track{height:7px;background:#eef2f7;border-radius:4px;overflow:hidden}
 .bar-fill{height:100%;width:0;background:var(--bar,var(--blue));border-radius:4px}
+.event-group{display:grid;gap:8px}.event-group+.event-group{padding-top:12px;border-top:1px solid #eef0f3}
+.event-details{display:grid;gap:7px;padding:2px 0 0 12px;border-left:2px solid #dbeafe}.event-detail-title{color:var(--muted);font-size:11px;font-weight:600}
+.detail-list{display:grid;gap:6px}.detail-row{display:grid;grid-template-columns:minmax(72px,1fr) minmax(60px,1.5fr) auto;gap:8px;align-items:center;font-size:12px}
+.detail-track{height:4px;background:#eef2f7;border-radius:2px;overflow:hidden}.detail-fill{height:100%;background:#60a5fa;border-radius:2px}
 .table-scroll{width:100%;max-width:100%;overflow:auto}table{width:100%;border-collapse:collapse;white-space:nowrap}
 th,td{text-align:left;border-bottom:1px solid #eef0f3;padding:10px 8px}th{color:var(--muted);font-size:12px;font-weight:600;background:#fafbfc;position:sticky;top:0}
 td{font-variant-numeric:tabular-nums}.device{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#344054}
@@ -502,10 +543,30 @@ function trendChart(rows){
 }
 const platformLabels={windows:'Windows',macos:'macOS',linux:'Linux',web:'Web',unknown:'未知'}
 const eventLabels={app_started:'应用启动',mode_changed:'功能模式切换',sidebar_tab_changed:'侧栏切换',graticule_changed:'经纬网设置'}
+const modeLabels={imagery:'GeoTIFF',dem:'DEM',wayback:'Wayback',tiles3d:'3D',vector:'OSM',mvt:'MVT'}
+const sidebarLabels={download:'资源下载',history:'下载中心',settings:'设置'}
+const graticuleEnabledLabels={'1':'启用','0':'关闭'}
+const graticuleModeLabels={auto:'自动间隔',fixed:'固定间隔'}
 function distribution(rows,labelKey,valueKey,color,labelMap){
  if(!rows.length)return '<div class="empty">暂无数据</div>'
  const max=Math.max(1,...rows.map(row=>number(row[valueKey])))
  return '<div class="distribution">'+rows.map(function(row){const value=number(row[valueKey]),label=labelMap?.[row[labelKey]]||row[labelKey];return '<div class="bar-row"><div class="bar-meta"><span>'+esc(label)+'</span><span class="bar-value">'+value+'</span></div><div class="bar-track"><div class="bar-fill" style="--bar:'+color+';width:'+Math.max(3,value/max*100).toFixed(1)+'%"></div></div></div>'}).join('')+'</div>'
+}
+function detailList(title,rows,labelMap,suffix){
+ if(!rows?.length)return ''
+ const max=Math.max(1,...rows.map(row=>number(row.count)))
+ return '<div><div class="event-detail-title">'+esc(title)+'</div><div class="detail-list">'+rows.map(function(row){const value=String(row.value),label=labelMap?.[value]||value+(suffix||'');return '<div class="detail-row"><span>'+esc(label)+'</span><span class="detail-track"><i class="detail-fill" style="display:block;width:'+Math.max(4,number(row.count)/max*100).toFixed(1)+'%"></i></span><span class="bar-value">'+number(row.count)+'</span></div>'}).join('')+'</div></div>'
+}
+function eventDetail(event,details){
+ if(event==='mode_changed')return detailList('功能模式',details.modes,modeLabels)
+ if(event==='sidebar_tab_changed')return detailList('侧栏页面',details.sidebar_tabs,sidebarLabels)
+ if(event==='graticule_changed')return detailList('显示状态',details.graticule_enabled,graticuleEnabledLabels)+detailList('间隔方式',details.graticule_modes,graticuleModeLabels)+detailList('固定间隔',details.graticule_intervals,null,'°')
+ return ''
+}
+function eventDistribution(rows,details){
+ if(!rows.length)return '<div class="empty">暂无数据</div>'
+ const max=Math.max(1,...rows.map(row=>number(row.count)))
+ return '<div class="distribution">'+rows.map(function(row){const value=number(row.count),detail=eventDetail(row.event,details);return '<div class="event-group"><div class="bar-row"><div class="bar-meta"><span>'+esc(eventLabels[row.event]||row.event)+'</span><span class="bar-value">'+value+'</span></div><div class="bar-track"><div class="bar-fill" style="--bar:#d97706;width:'+Math.max(3,value/max*100).toFixed(1)+'%"></div></div></div>'+(detail?'<div class="event-details">'+detail+'</div>':'')+'</div>'}).join('')+'</div>'
 }
 function activity(lastActive){
  const age=Date.now()-new Date(lastActive).getTime()
@@ -531,7 +592,7 @@ async function load(){
    '</div><div class="dashboard-grid"><section class="panel"><div class="panel-head"><div><h2>活跃趋势</h2><div class="panel-note">最近 30 天，缺失日期按 0 计</div></div><div class="legend"><span class="legend-item"><i class="legend-swatch" style="--swatch:#2563eb"></i>活跃设备</span><span class="legend-item"><i class="legend-swatch" style="--swatch:#dbeafe"></i>事件量</span></div></div>'+trendChart(data.daily)+'<details><summary>每日数据</summary>'+table(data.daily,[['日期','day'],['活跃设备','active_installs'],['首次出现','new_installs'],['事件数','events']])+'</details></section>'+
    '<div class="side-stack"><section class="panel"><div class="panel-head"><h2>版本分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.versions,'version','installs','#2563eb')+'</section>'+
    '<section class="panel"><div class="panel-head"><h2>平台分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.platforms,'platform','installs','#059669',platformLabels)+'</section>'+
-   '<section class="panel"><div class="panel-head"><h2>功能使用</h2><span class="panel-note">事件次数</span></div>'+distribution(data.events,'event','count','#d97706',eventLabels)+'</section></div>'+
+   '<section class="panel"><div class="panel-head"><h2>功能使用</h2><span class="panel-note">事件次数</span></div>'+eventDistribution(data.events,data.event_details)+'</section></div>'+
    '<section class="panel full"><div class="panel-head"><div><h2>设备活跃明细</h2><div class="panel-note">首次出现为首次成功上报时间，不等同于系统安装时间</div></div><span class="panel-note">最多显示 200 个匿名设备</span></div>'+deviceTable(data.devices)+'</section></div>'
  }catch(error){content.innerHTML='<div class="error">'+esc(error.message)+'</div>'}
 }
