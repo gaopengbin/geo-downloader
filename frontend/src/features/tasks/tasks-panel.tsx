@@ -12,14 +12,12 @@ import {
   Play,
   RefreshCw,
   Trash2,
-  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { isTauriRuntime } from '@/lib/tauri'
-import { useAppStore } from '@/store/app-store'
 import {
   cancelTask,
   discardResumableTask,
@@ -256,23 +254,30 @@ function TaskRow({
   selectionDisabled?: boolean
 }) {
   const qc = useQueryClient()
-  const refresh = () => qc.invalidateQueries({ queryKey: ['active-tasks'] })
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ['active-tasks'] })
+    qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
+  }
   const [showLogs, setShowLogs] = useState(false)
   const [elapsed, setElapsed] = useState<number>(0)
   const inTauri = isTauriRuntime()
+  const status = String(task.status)
 
   // 计时器：活动状态时滚动；暂停 / 结束后冻结当前时长
   useEffect(() => {
     const start = getStartTime(task.id)
     const status = String(task.status)
-    if (isFinished(status) || status === 'paused' || status === 'pending_decision') {
-      setElapsed(Date.now() - start)
-      return
-    }
     const update = () => setElapsed(Date.now() - start)
-    update()
+    if (isFinished(status) || status === 'paused' || status === 'pending_decision') {
+      const timeoutId = window.setTimeout(update, 0)
+      return () => window.clearTimeout(timeoutId)
+    }
+    const timeoutId = window.setTimeout(update, 0)
     const id = setInterval(update, 1000)
-    return () => clearInterval(id)
+    return () => {
+      window.clearTimeout(timeoutId)
+      clearInterval(id)
+    }
   }, [task.id, task.status])
 
   // 订阅本任务进度事件，触发列表刷新（保证状态变化即时）
@@ -299,18 +304,28 @@ function TaskRow({
     onSuccess: refresh,
     onError: (e) => toast.error(`操作失败：${String(e)}`),
   })
-  const cancelMutation = useMutation({
-    mutationFn: () => cancelTask(task.id),
-    onSuccess: () => {
-      toast.success('任务已取消')
-      refresh()
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const ok = await askDialog(
+        '确定删除此任务？\n\n下载会停止，任务临时缓存会被清理；已经输出到保存目录的文件不会删除。',
+        { title: '删除任务', kind: 'warning' },
+      )
+      if (!ok) return false
+
+      if (isCompletedWithGaps(status) || isFinished(status)) {
+        await removeTask(task.id)
+      } else {
+        await cancelTask(task.id)
+        if (status === 'pending_decision') {
+          await discardResumableTask(task.id, true)
+        }
+      }
+      return true
     },
-    onError: (e) => toast.error(`取消失败：${String(e)}`),
-  })
-  const removeMutation = useMutation({
-    mutationFn: () => removeTask(task.id),
-    onSuccess: () => {
+    onSuccess: (changed) => {
+      if (!changed) return
       taskStartTimes.delete(task.id)
+      toast.success('任务已删除')
       refresh()
     },
     onError: (e) => toast.error(`删除失败：${String(e)}`),
@@ -334,7 +349,6 @@ function TaskRow({
     onError: (e) => toast.error(`补漏失败：${String(e)}`),
   })
 
-  const status = String(task.status)
   const progress = typeof task.progress === 'number' ? task.progress : 0
   const total = task.total ?? 0
   const completed = task.completed ?? 0
@@ -402,7 +416,7 @@ function TaskRow({
           </Button>
           {isActive(status) && (
             <>
-              {(status === 'downloading' || status === 'paused') && (
+              {(status === 'pending' || status === 'downloading' || status === 'paused') && (
                 <Button
                   size="icon"
                   variant="ghost"
@@ -444,16 +458,6 @@ function TaskRow({
                   <Download className="size-3.5" />
                 </Button>
               )}
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => cancelMutation.mutate()}
-                disabled={cancelMutation.isPending}
-                className="size-7"
-                title="取消"
-              >
-                <X className="size-3.5" />
-              </Button>
             </>
           )}
           {isCompletedWithGaps(status) && (
@@ -469,26 +473,16 @@ function TaskRow({
               >
                 <RefreshCw className="size-3.5" />
               </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => removeMutation.mutate()}
-                disabled={removeMutation.isPending}
-                className="size-7"
-                title="从列表移除"
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
             </>
           )}
-          {isFinished(status) && (
+          {(isActive(status) || isCompletedWithGaps(status) || isFinished(status)) && (
             <Button
               size="icon"
               variant="ghost"
-              onClick={() => removeMutation.mutate()}
-              disabled={removeMutation.isPending}
-              className="size-7"
-              title="移除"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="size-7 text-muted-foreground hover:text-destructive"
+              title="删除任务"
             >
               <Trash2 className="size-3.5" />
             </Button>
@@ -539,7 +533,6 @@ function ResumableRow({
   selectionDisabled?: boolean
 }) {
   const qc = useQueryClient()
-  const setTab = useAppStore((s) => s.setTab)
 
   const resumeMutation = useMutation({
     mutationFn: () => resumeTask(task.task_id),
@@ -547,7 +540,6 @@ function ResumableRow({
       toast.success(`已恢复任务（${res.task_id.slice(0, 8)}）`)
       qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
-      setTab('history')
     },
     onError: (e) => toast.error(`恢复失败：${String(e)}`),
   })
@@ -577,7 +569,7 @@ function ResumableRow({
   })
 
   return (
-    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5 text-sm">
+    <div className="rounded-md border p-2.5 text-sm">
       <div className="flex items-start gap-2">
         <input
           type="checkbox"
@@ -585,7 +577,7 @@ function ResumableRow({
           onChange={(e) => onSelectedChange(e.currentTarget.checked)}
           disabled={selectionDisabled}
           aria-label={`选择 ${task.task_name}`}
-          className="mt-1 size-4 rounded border-amber-500/40 accent-primary"
+          className="mt-1 size-4 rounded border-border accent-primary"
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -614,28 +606,28 @@ function ResumableRow({
             {task.created_at && <span>{task.created_at}</span>}
           </div>
         </div>
-      </div>
-      <div className="mt-2 flex items-center gap-2 pl-6">
-        <Button
-          size="sm"
-          variant="default"
-          onClick={() => resumeMutation.mutate()}
-          disabled={resumeMutation.isPending}
-          className="h-7 text-xs"
-        >
-          <Play className="mr-1 size-3" />
-          继续下载
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => discardMutation.mutate()}
-          disabled={discardMutation.isPending}
-          className="h-7 text-xs"
-        >
-          <Trash2 className="mr-1 size-3" />
-          丢弃
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => resumeMutation.mutate()}
+            disabled={resumeMutation.isPending}
+            className="size-7"
+            title="继续下载"
+          >
+            <Play className="size-3.5" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => discardMutation.mutate()}
+            disabled={discardMutation.isPending}
+            className="size-7 text-muted-foreground hover:text-destructive"
+            title="删除任务"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -680,11 +672,17 @@ export function TasksPanel() {
   }, [inTauri, qc])
 
   const tasks = useMemo(() => tasksQuery.data ?? [], [tasksQuery.data])
-  const resumable = useMemo(() => resumableQuery.data ?? [], [resumableQuery.data])
-  const [selectedActiveIds, setSelectedActiveIds] = useState<Set<string>>(() => new Set())
-  const [selectedResumableIds, setSelectedResumableIds] = useState<Set<string>>(() => new Set())
-  const activeCount = useMemo(
-    () => tasks.filter((t) => isActive(String(t.status))).length,
+  const resumable = useMemo(() => {
+    const inMemoryIds = new Set(tasks.map((task) => task.id))
+    return (resumableQuery.data ?? []).filter((task) => !inMemoryIds.has(task.task_id))
+  }, [resumableQuery.data, tasks])
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(() => new Set())
+  const runningCount = useMemo(
+    () => tasks.filter((t) => ACTIVE_STATES.includes(String(t.status) as TaskStatus)).length,
+    [tasks],
+  )
+  const pausedCount = useMemo(
+    () => tasks.filter((t) => String(t.status) === 'paused').length,
     [tasks],
   )
   const finishedCount = useMemo(
@@ -697,14 +695,27 @@ export function TasksPanel() {
     [tasks],
   )
   const visibleTaskIds = useMemo(() => visibleTasks.map((t) => t.id), [visibleTasks])
-  const selectedActiveTasks = useMemo(
-    () => visibleTasks.filter((t) => selectedActiveIds.has(t.id)),
-    [visibleTasks, selectedActiveIds],
+  const resumableIds = useMemo(() => resumable.map((t) => t.task_id), [resumable])
+  const allTaskIds = useMemo(
+    () => [...new Set([...visibleTaskIds, ...resumableIds])],
+    [resumableIds, visibleTaskIds],
   )
-  const selectedActiveCount = selectedActiveTasks.length
-  const allActiveSelected = visibleTasks.length > 0 && selectedActiveCount === visibleTasks.length
+  const selectedActiveTasks = useMemo(
+    () => visibleTasks.filter((t) => selectedTaskIds.has(t.id)),
+    [visibleTasks, selectedTaskIds],
+  )
+  const selectedResumable = useMemo(
+    () => resumable.filter((t) => selectedTaskIds.has(t.task_id)),
+    [resumable, selectedTaskIds],
+  )
+  const selectedTaskCount = selectedActiveTasks.length + selectedResumable.length
+  const allTasksSelected = allTaskIds.length > 0 && selectedTaskCount === allTaskIds.length
   const selectedPausableCount = useMemo(
-    () => selectedActiveTasks.filter((t) => String(t.status) === 'downloading').length,
+    () =>
+      selectedActiveTasks.filter((t) => {
+        const status = String(t.status)
+        return status === 'pending' || status === 'downloading'
+      }).length,
     [selectedActiveTasks],
   )
   const selectedContinuableCount = useMemo(
@@ -712,45 +723,12 @@ export function TasksPanel() {
       selectedActiveTasks.filter((t) => {
         const status = String(t.status)
         return status === 'paused' || status === 'pending_decision' || isCompletedWithGaps(status)
-      }).length,
-    [selectedActiveTasks],
+      }).length + selectedResumable.length,
+    [selectedActiveTasks, selectedResumable.length],
   )
-  const selectedCancelableCount = useMemo(
-    () => selectedActiveTasks.filter((t) => isActive(String(t.status))).length,
-    [selectedActiveTasks],
-  )
-  const selectedRemovableCount = useMemo(
-    () => selectedActiveTasks.filter((t) => isCompletedWithGaps(String(t.status))).length,
-    [selectedActiveTasks],
-  )
-  const resumableIds = useMemo(() => resumable.map((t) => t.task_id), [resumable])
-  const selectedResumable = useMemo(
-    () => resumable.filter((t) => selectedResumableIds.has(t.task_id)),
-    [resumable, selectedResumableIds],
-  )
-  const selectedCount = selectedResumable.length
-  const allResumableSelected = resumable.length > 0 && selectedCount === resumable.length
 
-  useEffect(() => {
-    setSelectedActiveIds((prev) => {
-      const valid = new Set(visibleTaskIds)
-      const next = new Set([...prev].filter((id) => valid.has(id)))
-      if (next.size === prev.size) return prev
-      return next
-    })
-  }, [visibleTaskIds])
-
-  useEffect(() => {
-    setSelectedResumableIds((prev) => {
-      const valid = new Set(resumableIds)
-      const next = new Set([...prev].filter((id) => valid.has(id)))
-      if (next.size === prev.size) return prev
-      return next
-    })
-  }, [resumableIds])
-
-  const toggleActiveSelection = useCallback((taskId: string, checked: boolean) => {
-    setSelectedActiveIds((prev) => {
+  const toggleTaskSelection = useCallback((taskId: string, checked: boolean) => {
+    setSelectedTaskIds((prev) => {
       const next = new Set(prev)
       if (checked) next.add(taskId)
       else next.delete(taskId)
@@ -758,69 +736,44 @@ export function TasksPanel() {
     })
   }, [])
 
-  const selectAllActive = useCallback(() => {
-    setSelectedActiveIds(new Set(visibleTaskIds))
-  }, [visibleTaskIds])
+  const selectAllTasks = useCallback(() => {
+    setSelectedTaskIds(new Set(allTaskIds))
+  }, [allTaskIds])
 
-  const clearActiveSelection = useCallback(() => {
-    setSelectedActiveIds(new Set())
+  const clearTaskSelection = useCallback(() => {
+    setSelectedTaskIds(new Set())
   }, [])
 
-  const invertActiveSelection = useCallback(() => {
-    setSelectedActiveIds((prev) => {
+  const invertTaskSelection = useCallback(() => {
+    setSelectedTaskIds((prev) => {
       const next = new Set<string>()
-      for (const id of visibleTaskIds) {
+      for (const id of allTaskIds) {
         if (!prev.has(id)) next.add(id)
       }
       return next
     })
-  }, [visibleTaskIds])
-
-  const toggleResumableSelection = useCallback((taskId: string, checked: boolean) => {
-    setSelectedResumableIds((prev) => {
-      const next = new Set(prev)
-      if (checked) next.add(taskId)
-      else next.delete(taskId)
-      return next
-    })
-  }, [])
-
-  const selectAllResumable = useCallback(() => {
-    setSelectedResumableIds(new Set(resumableIds))
-  }, [resumableIds])
-
-  const clearResumableSelection = useCallback(() => {
-    setSelectedResumableIds(new Set())
-  }, [])
-
-  const invertResumableSelection = useCallback(() => {
-    setSelectedResumableIds((prev) => {
-      const next = new Set<string>()
-      for (const id of resumableIds) {
-        if (!prev.has(id)) next.add(id)
-      }
-      return next
-    })
-  }, [resumableIds])
+  }, [allTaskIds])
 
   const refreshTaskLists = useCallback(() => {
     qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
     qc.invalidateQueries({ queryKey: ['active-tasks'] })
   }, [qc])
 
-  const pauseSelectedActiveMutation = useMutation({
+  const pauseSelectedMutation = useMutation({
     mutationFn: async () => {
-      const targets = selectedActiveTasks.filter((t) => String(t.status) === 'downloading')
+      const targets = selectedActiveTasks.filter((t) => {
+        const status = String(t.status)
+        return status === 'pending' || status === 'downloading'
+      })
       let success = 0
       for (const task of targets) {
-        await togglePauseTask(task.id)
-        success += 1
+        if (await togglePauseTask(task.id)) success += 1
       }
       return success
     },
     onSuccess: (count) => {
       toast.success(`已暂停 ${count} 个任务`)
-      clearActiveSelection()
+      clearTaskSelection()
       refreshTaskLists()
     },
     onError: (e) => {
@@ -829,7 +782,7 @@ export function TasksPanel() {
     },
   })
 
-  const continueSelectedActiveMutation = useMutation({
+  const continueSelectedMutation = useMutation({
     mutationFn: async () => {
       const targets = selectedActiveTasks.filter((t) => {
         const status = String(t.status)
@@ -842,11 +795,15 @@ export function TasksPanel() {
         else await resumeTask(task.id)
         success += 1
       }
+      for (const task of selectedResumable) {
+        await resumeTask(task.task_id)
+        success += 1
+      }
       return success
     },
     onSuccess: (count) => {
       toast.success(`已继续 ${count} 个任务`)
-      clearActiveSelection()
+      clearTaskSelection()
       refreshTaskLists()
     },
     onError: (e) => {
@@ -855,89 +812,36 @@ export function TasksPanel() {
     },
   })
 
-  const cancelSelectedActiveMutation = useMutation({
+  const deleteSelectedMutation = useMutation({
     mutationFn: async () => {
-      const targets = selectedActiveTasks.filter((t) => isActive(String(t.status)))
-      let success = 0
-      for (const task of targets) {
-        await cancelTask(task.id)
-        success += 1
-      }
-      return success
-    },
-    onSuccess: (count) => {
-      toast.success(`已取消 ${count} 个下载任务`)
-      clearActiveSelection()
-      refreshTaskLists()
-    },
-    onError: (e) => {
-      toast.error(`批量取消失败：${String(e)}`)
-      refreshTaskLists()
-    },
-  })
-
-  const removeSelectedActiveMutation = useMutation({
-    mutationFn: async () => {
-      const targets = selectedActiveTasks.filter((t) => isCompletedWithGaps(String(t.status)))
-      let success = 0
-      for (const task of targets) {
-        await removeTask(task.id)
-        taskStartTimes.delete(task.id)
-        success += 1
-      }
-      return success
-    },
-    onSuccess: (count) => {
-      toast.success(`已从列表删除 ${count} 条任务`)
-      clearActiveSelection()
-      refreshTaskLists()
-    },
-    onError: (e) => {
-      toast.error(`批量删除失败：${String(e)}`)
-      refreshTaskLists()
-    },
-  })
-
-  const resumeAllMutation = useMutation({
-    mutationFn: async () => {
-      const targets = [...selectedResumable]
-      let success = 0
-      for (const task of targets) {
-        await resumeTask(task.task_id)
-        success += 1
-      }
-      return success
-    },
-    onSuccess: (count) => {
-      toast.success(`已恢复 ${count} 个中断任务`)
-      clearResumableSelection()
-      refreshTaskLists()
-    },
-    onError: (e) => {
-      toast.error(`批量恢复失败：${String(e)}`)
-      refreshTaskLists()
-    },
-  })
-
-  const discardAllMutation = useMutation({
-    mutationFn: async () => {
-      const targets = [...selectedResumable]
-      const ok = await askDialog(`确定从列表中移除选中的 ${targets.length} 个中断任务？`, {
-        title: '批量丢弃任务',
+      const ok = await askDialog(`确定删除选中的 ${selectedTaskCount} 个任务？`, {
+        title: '批量删除任务',
         kind: 'warning',
       })
       if (!ok) return 0
 
-      const deleteCache = await askDialog(
-        '是否同时删除这些任务已下载的瓦片缓存？\n\n选"否"将保留缓存，下次重新创建相同任务时可复用。',
-        {
-          title: '清理缓存',
-          kind: 'warning',
-        },
-      )
+      const deleteCache =
+        selectedResumable.length === 0 ||
+        (await askDialog(
+          '是否同时删除中断任务已下载的瓦片缓存？\n\n选"否"将保留缓存，下次重新创建相同任务时仍可复用。',
+          { title: '清理缓存', kind: 'warning' },
+        ))
 
       let success = 0
-      for (const task of targets) {
+      for (const task of selectedActiveTasks) {
+        const status = String(task.status)
+        if (isCompletedWithGaps(status) || isFinished(status)) {
+          await removeTask(task.id)
+        } else {
+          await cancelTask(task.id)
+          if (status === 'pending_decision') {
+            await discardResumableTask(task.id, true)
+          }
+        }
+        taskStartTimes.delete(task.id)
+        success += 1
+      }
+      for (const task of selectedResumable) {
         await discardResumableTask(task.task_id, deleteCache)
         success += 1
       }
@@ -945,23 +849,21 @@ export function TasksPanel() {
     },
     onSuccess: (count) => {
       if (count > 0) {
-        toast.success(`已丢弃 ${count} 个中断任务`)
-        clearResumableSelection()
+        toast.success(`已删除 ${count} 个任务`)
+        clearTaskSelection()
         refreshTaskLists()
       }
     },
     onError: (e) => {
-      toast.error(`批量丢弃失败：${String(e)}`)
+      toast.error(`批量删除失败：${String(e)}`)
       refreshTaskLists()
     },
   })
 
-  const isBatchingActive =
-    pauseSelectedActiveMutation.isPending ||
-    continueSelectedActiveMutation.isPending ||
-    cancelSelectedActiveMutation.isPending ||
-    removeSelectedActiveMutation.isPending
-  const isBatchingResumable = resumeAllMutation.isPending || discardAllMutation.isPending
+  const isBatching =
+    pauseSelectedMutation.isPending ||
+    continueSelectedMutation.isPending ||
+    deleteSelectedMutation.isPending
 
   if (!inTauri) {
     return (
@@ -975,15 +877,24 @@ export function TasksPanel() {
     <div className="space-y-3">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>
-          活动 <span className="font-semibold text-foreground">{activeCount}</span> · 已结束{' '}
-          <span className="font-semibold text-foreground">{finishedCount}</span>
+          任务 <span className="font-semibold text-foreground">{allTaskIds.length}</span> · 进行中{' '}
+          <span className="font-semibold text-foreground">{runningCount}</span>
+          {pausedCount > 0 && (
+            <>
+              {' · '}暂停 <span className="font-semibold text-foreground">{pausedCount}</span>
+            </>
+          )}
           {resumable.length > 0 && (
             <>
-              {' · '}
-              中断{' '}
+              {' · '}中断{' '}
               <span className="font-semibold text-amber-600 dark:text-amber-400">
                 {resumable.length}
               </span>
+            </>
+          )}
+          {finishedCount > 0 && (
+            <>
+              {' · '}历史 <span className="font-semibold text-foreground">{finishedCount}</span>
             </>
           )}
         </span>
@@ -1002,147 +913,69 @@ export function TasksPanel() {
         </Button>
       </div>
 
-      {/* 中断的任务（断点续传）*/}
-      {resumable.length > 0 && (
-        <div className="space-y-2">
+      <div className="space-y-2">
+        {allTaskIds.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-medium text-amber-600 dark:text-amber-400">
-              中断的任务 · 已选 {selectedCount} / {resumable.length}
+            <div className="text-xs font-medium text-muted-foreground">
+              任务列表 · 已选 {selectedTaskCount} / {allTaskIds.length}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1">
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={allResumableSelected ? clearResumableSelection : selectAllResumable}
-                disabled={isBatchingResumable || resumable.length === 0}
+                onClick={allTasksSelected ? clearTaskSelection : selectAllTasks}
+                disabled={isBatching}
                 className="h-7 px-2 text-xs"
               >
-                {allResumableSelected ? '取消全选' : '全选'}
+                {allTasksSelected ? '取消全选' : '全选'}
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={invertResumableSelection}
-                disabled={isBatchingResumable || resumable.length === 0}
+                onClick={invertTaskSelection}
+                disabled={isBatching}
                 className="h-7 px-2 text-xs"
               >
                 反选
               </Button>
               <Button
                 size="sm"
+                variant="outline"
+                onClick={() => pauseSelectedMutation.mutate()}
+                disabled={isBatching || selectedPausableCount === 0}
+                className="h-7 text-xs"
+              >
+                <Pause className="mr-1 size-3" />
+                暂停
+              </Button>
+              <Button
+                size="sm"
                 variant="default"
-                onClick={() => resumeAllMutation.mutate()}
-                disabled={isBatchingResumable || selectedCount === 0}
+                onClick={() => continueSelectedMutation.mutate()}
+                disabled={isBatching || selectedContinuableCount === 0}
                 className="h-7 text-xs"
               >
                 <Play className="mr-1 size-3" />
-                继续选中
+                继续
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => discardAllMutation.mutate()}
-                disabled={isBatchingResumable || selectedCount === 0}
-                className="h-7 text-xs"
+                onClick={() => deleteSelectedMutation.mutate()}
+                disabled={isBatching || selectedTaskCount === 0}
+                className="h-7 text-xs text-muted-foreground hover:text-destructive"
               >
                 <Trash2 className="mr-1 size-3" />
-                丢弃选中
+                删除
               </Button>
             </div>
           </div>
-          {resumable.map((t) => (
-            <ResumableRow
-              key={t.task_id}
-              task={t}
-              selected={selectedResumableIds.has(t.task_id)}
-              onSelectedChange={(checked) => toggleResumableSelection(t.task_id, checked)}
-              selectionDisabled={isBatchingResumable}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* 活动任务 */}
-      <div className="space-y-2">
-        {(resumable.length > 0 || visibleTasks.length > 0) && (
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-medium text-muted-foreground">
-              活动任务
-              {visibleTasks.length > 0 && (
-                <> · 已选 {selectedActiveCount} / {visibleTasks.length}</>
-              )}
-            </div>
-            {visibleTasks.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={allActiveSelected ? clearActiveSelection : selectAllActive}
-                  disabled={isBatchingActive || visibleTasks.length === 0}
-                  className="h-7 px-2 text-xs"
-                >
-                  {allActiveSelected ? '取消全选' : '全选'}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={invertActiveSelection}
-                  disabled={isBatchingActive || visibleTasks.length === 0}
-                  className="h-7 px-2 text-xs"
-                >
-                  反选
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => pauseSelectedActiveMutation.mutate()}
-                  disabled={isBatchingActive || selectedPausableCount === 0}
-                  className="h-7 text-xs"
-                >
-                  <Pause className="mr-1 size-3" />
-                  暂停选中
-                </Button>
-                <Button
-                  size="sm"
-                  variant="default"
-                  onClick={() => continueSelectedActiveMutation.mutate()}
-                  disabled={isBatchingActive || selectedContinuableCount === 0}
-                  className="h-7 text-xs"
-                >
-                  <Play className="mr-1 size-3" />
-                  继续选中
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => cancelSelectedActiveMutation.mutate()}
-                  disabled={isBatchingActive || selectedCancelableCount === 0}
-                  className="h-7 text-xs"
-                  title="取消选中的下载任务"
-                >
-                  <X className="mr-1 size-3" />
-                  取消下载
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => removeSelectedActiveMutation.mutate()}
-                  disabled={isBatchingActive || selectedRemovableCount === 0}
-                  className="h-7 text-xs"
-                  title="从下载中心列表删除选中的任务"
-                >
-                  <Trash2 className="mr-1 size-3" />
-                  从列表删除
-                </Button>
-              </div>
-            )}
-          </div>
         )}
         {tasksQuery.isLoading && <p className="text-xs text-muted-foreground">加载中...</p>}
-        {!tasksQuery.isLoading && visibleTasks.length === 0 && (
+        {!tasksQuery.isLoading && !resumableQuery.isLoading && allTaskIds.length === 0 && (
           <div className="flex flex-col items-center gap-2 py-8 text-xs text-muted-foreground">
             <Inbox className="size-7 opacity-50" />
-            <p>暂无活动任务</p>
+            <p>暂无下载任务</p>
             {finishedCount > 0 && (
               <p>已完成 {finishedCount} 项已转入历史记录</p>
             )}
@@ -1152,9 +985,18 @@ export function TasksPanel() {
           <TaskRow
             key={t.id}
             task={t}
-            selected={selectedActiveIds.has(t.id)}
-            onSelectedChange={(checked) => toggleActiveSelection(t.id, checked)}
-            selectionDisabled={isBatchingActive}
+            selected={selectedTaskIds.has(t.id)}
+            onSelectedChange={(checked) => toggleTaskSelection(t.id, checked)}
+            selectionDisabled={isBatching}
+          />
+        ))}
+        {resumable.map((t) => (
+          <ResumableRow
+            key={t.task_id}
+            task={t}
+            selected={selectedTaskIds.has(t.task_id)}
+            onSelectedChange={(checked) => toggleTaskSelection(t.task_id, checked)}
+            selectionDisabled={isBatching}
           />
         ))}
       </div>

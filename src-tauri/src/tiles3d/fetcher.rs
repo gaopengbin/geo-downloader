@@ -1,5 +1,8 @@
 use crate::task::PauseControl;
-use crate::tiles3d::filter::{filter_tileset, filter_tileset_all, SelectionRegion};
+use crate::tiles3d::filter::{
+    filter_tileset, filter_tileset_all, filter_tileset_with_parent_transform, SelectionRegion,
+    TileTransform, IDENTITY_TRANSFORM,
+};
 use crate::tiles3d::tileset::{
     IonEndpointResponse, ResolvedEndpoint, Tiles3dSource, Tileset, TilesetSummary,
 };
@@ -419,6 +422,7 @@ impl Tiles3dFetcher {
         let resolve_result = self
             .resolve_and_stream(
                 &filter_result.download_uris,
+                &filter_result.uri_transforms,
                 &base_url,
                 &query_params,
                 output_dir,
@@ -460,11 +464,19 @@ impl Tiles3dFetcher {
             total: final_total,
             completed: final_completed,
             failed: final_failed,
-            status: format!(
-                "完成: {} 成功, {} 失败",
-                final_completed, final_failed
-            ),
+            status: if final_failed > 0 {
+                format!("下载不完整: {} 成功, {} 失败", final_completed, final_failed)
+            } else {
+                format!("完成: {} 成功", final_completed)
+            },
         });
+
+        if final_failed > 0 {
+            return Err(format!(
+                "3D Tiles 下载不完整：{} 个内容文件下载失败",
+                final_failed
+            ));
+        }
 
         Ok(output_tileset_path)
     }
@@ -476,6 +488,7 @@ impl Tiles3dFetcher {
     async fn resolve_and_stream(
         &self,
         initial_uris: &[String],
+        initial_transforms: &HashMap<String, TileTransform>,
         root_base: &str,
         query_params: &str,
         output_dir: &Path,
@@ -487,7 +500,13 @@ impl Tiles3dFetcher {
         use futures::stream::FuturesUnordered;
         use std::pin::Pin;
 
-        type FetchResult = (String, String, u8, Result<(Tileset, Vec<u8>), String>);
+        type FetchResult = (
+            String,
+            String,
+            u8,
+            TileTransform,
+            Result<(Tileset, Vec<u8>), String>,
+        );
 
         let mut visited: HashSet<String> = HashSet::new();
         let sem = Arc::new(tokio::sync::Semaphore::new(50));
@@ -531,6 +550,10 @@ impl Tiles3dFetcher {
 
             let clean_uri = uri.split('?').next().unwrap_or(uri);
             let is_json = clean_uri.to_lowercase().ends_with(".json");
+            let inherited_transform = initial_transforms
+                .get(uri)
+                .copied()
+                .unwrap_or(IDENTITY_TRANSFORM);
 
             if is_json {
                 let json_base = absolute_url
@@ -543,7 +566,7 @@ impl Tiles3dFetcher {
                     let _permit = sem_clone.acquire().await.unwrap();
                     let fetch_url = append_query(&absolute_url, &qp);
                     let result = self.fetch_raw_tileset(&fetch_url).await;
-                    (absolute_url, json_base, 0u8, result)
+                    (absolute_url, json_base, 0u8, inherited_transform, result)
                 }));
             } else {
                 // 非 JSON → 立即推入下载通道
@@ -559,7 +582,7 @@ impl Tiles3dFetcher {
         let mut resolve_failures = 0u32;
 
         // 连续流水线：子 tileset 一发现就立即入队解析，不等当前批次完成
-        while let Some((url, base, retries, result)) = in_flight.next().await {
+        while let Some((url, base, retries, inherited_transform, result)) = in_flight.next().await {
             if cancel.is_cancelled() {
                 return Err("已取消".to_string());
             }
@@ -573,8 +596,12 @@ impl Tiles3dFetcher {
                     }
 
                     // 对子 tileset 应用空间过滤（如有选区）
-                    let sub_uris = if let Some(reg) = region {
-                        let filter_result = filter_tileset(&sub_tileset, reg);
+                    let (sub_uris, sub_transforms) = if let Some(reg) = region {
+                        let filter_result = filter_tileset_with_parent_transform(
+                            &sub_tileset,
+                            reg,
+                            &inherited_transform,
+                        );
                         // 重写子 tileset URI 为本地相对路径（离线预览需要）
                         let json_dir = json_local.rsplit_once('/')
                             .map(|(d, _)| format!("{}/", d))
@@ -598,7 +625,7 @@ impl Tiles3dFetcher {
                         } else {
                             let _ = tokio::fs::write(&dest, &raw_bytes).await;
                         }
-                        filter_result.download_uris
+                        (filter_result.download_uris, filter_result.uri_transforms)
                     } else {
                         // 无选区：重写 URI 为本地相对路径
                         let all_uris = collect_tile_content_uris(&sub_tileset.root);
@@ -624,7 +651,7 @@ impl Tiles3dFetcher {
                         } else {
                             let _ = tokio::fs::write(&dest, &raw_bytes).await;
                         }
-                        all_uris
+                        (all_uris, HashMap::new())
                     };
 
                     for sub_uri in &sub_uris {
@@ -637,6 +664,10 @@ impl Tiles3dFetcher {
 
                         let clean_sub = sub_uri.split('?').next().unwrap_or(sub_uri);
                         if clean_sub.to_lowercase().ends_with(".json") {
+                            let child_transform = sub_transforms
+                                .get(sub_uri)
+                                .copied()
+                                .unwrap_or(inherited_transform);
                             let json_base = abs
                                 .rsplit_once('/')
                                 .map(|(b, _)| format!("{}/", b))
@@ -647,7 +678,7 @@ impl Tiles3dFetcher {
                                 let _permit = sem_clone.acquire().await.unwrap();
                                 let fetch_url = append_query(&abs, &qp);
                                 let result = self.fetch_raw_tileset(&fetch_url).await;
-                                (abs, json_base, 0u8, result)
+                                (abs, json_base, 0u8, child_transform, result)
                             }));
                         } else {
                             total_discovered.fetch_add(1, Ordering::Relaxed);
@@ -677,7 +708,7 @@ impl Tiles3dFetcher {
                             tokio::time::sleep(delay).await;
                             let fetch_url = append_query(&url, &qp);
                             let result = self.fetch_raw_tileset(&fetch_url).await;
-                            (url, base, next_retries, result)
+                            (url, base, next_retries, inherited_transform, result)
                         }));
                     } else {
                         resolve_failures += 1;
@@ -691,15 +722,27 @@ impl Tiles3dFetcher {
         }
 
         if resolve_failures > 0 {
-            log::warn!(
-                "解析阶段完成，{} 个 tileset JSON 解析失败（子树丢失）",
+            return Err(format!(
+                "{} 个外部 tileset 解析失败，下载结果不完整",
                 resolve_failures
-            );
+            ));
         }
 
         // tx 在这里被 drop，下载消费者的 rx.recv() 将返回 None 退出循环
         Ok(())
     }
+}
+
+fn temporary_download_path(dest: &Path) -> Result<PathBuf, String> {
+    let file_name = dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "下载目标文件名无效".to_string())?;
+    Ok(dest.with_file_name(format!(
+        "{}.{}.tmp",
+        file_name,
+        uuid::Uuid::new_v4()
+    )))
 }
 
 /// 下载单个文件，带重试
@@ -740,18 +783,20 @@ async fn download_file(
                     .map_err(|e| format!("读取响应体失败: {}", e))?;
 
                 // 写入临时文件后重命名，防止写入一半被中断
-                let tmp_path = dest.with_extension("tmp");
+                let tmp_path = temporary_download_path(dest)?;
                 if let Some(parent) = tmp_path.parent() {
                     tokio::fs::create_dir_all(parent)
                         .await
                         .map_err(|e| format!("创建目录失败: {}", e))?;
                 }
-                tokio::fs::write(&tmp_path, &bytes)
-                    .await
-                    .map_err(|e| format!("写入文件失败: {}", e))?;
-                tokio::fs::rename(&tmp_path, dest)
-                    .await
-                    .map_err(|e| format!("重命名文件失败: {}", e))?;
+                if let Err(error) = tokio::fs::write(&tmp_path, &bytes).await {
+                    let _ = tokio::fs::remove_file(&tmp_path).await;
+                    return Err(format!("写入文件失败: {}", error));
+                }
+                if let Err(error) = tokio::fs::rename(&tmp_path, dest).await {
+                    let _ = tokio::fs::remove_file(&tmp_path).await;
+                    return Err(format!("重命名文件失败: {}", error));
+                }
 
                 return Ok(());
             }
@@ -919,5 +964,22 @@ fn strip_query_params_from_tile(tile: &mut crate::tiles3d::tileset::Tile) {
         for child in children.iter_mut() {
             strip_query_params_from_tile(child);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn temporary_paths_preserve_full_file_name_and_are_unique() {
+        let glb = temporary_download_path(Path::new("tiles/a.glb")).unwrap();
+        let b3dm = temporary_download_path(Path::new("tiles/a.b3dm")).unwrap();
+        let second_glb = temporary_download_path(Path::new("tiles/a.glb")).unwrap();
+
+        assert!(glb.file_name().unwrap().to_string_lossy().starts_with("a.glb."));
+        assert!(b3dm.file_name().unwrap().to_string_lossy().starts_with("a.b3dm."));
+        assert_ne!(glb, b3dm);
+        assert_ne!(glb, second_glb);
     }
 }

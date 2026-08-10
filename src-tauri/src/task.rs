@@ -204,7 +204,13 @@ impl TaskManager {
             ) {
                 return;
             }
-            entry.info.status = status;
+            entry.info.status = if entry.pause_control.is_paused()
+                && matches!(status, TaskStatus::Pending | TaskStatus::Downloading)
+            {
+                TaskStatus::Paused
+            } else {
+                status
+            };
             entry.info.progress = progress;
             entry.info.completed = completed;
             entry.info.failed_count = failed_count;
@@ -305,6 +311,10 @@ impl TaskManager {
                 && entry.info.status != TaskStatus::Cancelled
             {
                 entry.cancel_token.cancel();
+                // A paused worker is waiting on PauseControl and would not observe the
+                // cancellation token until it is woken up.
+                entry.pause_control.flag.store(false, Ordering::Relaxed);
+                entry.pause_control.notify.notify_waiters();
                 return true;
             }
         }
@@ -322,7 +332,10 @@ impl TaskManager {
     /// 暂停/恢复任务，返回 (成功, 当前是否暂停)
     pub fn toggle_pause(&self, id: &str) -> (bool, bool) {
         if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
-            if !matches!(entry.info.status, TaskStatus::Downloading | TaskStatus::Paused) {
+            if !matches!(
+                entry.info.status,
+                TaskStatus::Pending | TaskStatus::Downloading | TaskStatus::Paused
+            ) {
                 return (false, false);
             }
             let is_paused = entry.pause_control.is_paused();
@@ -524,6 +537,61 @@ mod tests {
             assert!(manager.get_log_metadata(id).unwrap().stored_size > 0);
         }
         assert_eq!(manager.active_log_paths().len(), 4);
+    }
+
+    #[test]
+    fn concurrent_tasks_pause_independently() {
+        let tmp = TempDir::new().unwrap();
+        let manager = TaskManager::new_with_log_dir(tmp.path().to_path_buf());
+        for id in ["first-task", "second-task"] {
+            manager.create_task(
+                id.to_string(), id.to_string(), "source".to_string(), "Source".to_string(),
+                1, "tiles".to_string(), "D:/output".to_string(), 100,
+            );
+            manager.update_progress(id, TaskStatus::Downloading, 10.0, 10, 0, None);
+        }
+
+        assert_eq!(manager.toggle_pause("second-task"), (true, true));
+        let tasks = manager.get_all_tasks();
+        assert_eq!(
+            tasks.iter().find(|task| task.id == "first-task").unwrap().status,
+            TaskStatus::Downloading
+        );
+        assert_eq!(
+            tasks.iter().find(|task| task.id == "second-task").unwrap().status,
+            TaskStatus::Paused
+        );
+
+        assert_eq!(manager.toggle_pause("first-task"), (true, true));
+        assert_eq!(manager.toggle_pause("second-task"), (true, false));
+        let tasks = manager.get_all_tasks();
+        assert_eq!(
+            tasks.iter().find(|task| task.id == "first-task").unwrap().status,
+            TaskStatus::Paused
+        );
+        assert_eq!(
+            tasks.iter().find(|task| task.id == "second-task").unwrap().status,
+            TaskStatus::Downloading
+        );
+    }
+
+    #[test]
+    fn pending_task_can_be_paused_and_cancelled() {
+        let tmp = TempDir::new().unwrap();
+        let manager = TaskManager::new_with_log_dir(tmp.path().to_path_buf());
+        let (_, pause) = manager.create_task(
+            "pending-task".to_string(), "task".to_string(), "source".to_string(),
+            "Source".to_string(), 1, "tiles".to_string(), "D:/output".to_string(), 100,
+        );
+
+        assert_eq!(manager.toggle_pause("pending-task"), (true, true));
+        manager.update_progress(
+            "pending-task", TaskStatus::Downloading, 0.0, 0, 0, None,
+        );
+        assert_eq!(manager.get_all_tasks()[0].status, TaskStatus::Paused);
+
+        assert!(manager.cancel_task("pending-task"));
+        assert!(!pause.is_paused());
     }
 }
 

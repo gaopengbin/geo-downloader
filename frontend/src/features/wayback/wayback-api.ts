@@ -68,6 +68,10 @@ export function getWaybackScanProgress(scanId: string) {
   return invokeCommand<WaybackScanProgress | null>('get_wayback_scan_progress', { scanId })
 }
 
+export function cancelWaybackScan(scanId: string) {
+  return invokeCommand<boolean>('cancel_wayback_scan', { scanId })
+}
+
 export function downloadWaybackIncremental(req: WaybackIncrementalRequest) {
   return invokeCommand<WaybackIncrementalResult>('download_wayback_incremental', { req })
 }

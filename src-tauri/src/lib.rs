@@ -151,6 +151,7 @@ pub fn run() {
             commands::probe_wayback_max_zoom,
             commands::scan_wayback_metadata,
             commands::get_wayback_scan_progress,
+            commands::cancel_wayback_scan,
             commands::download_wayback_incremental,
             // 更新
             commands::get_update_info,

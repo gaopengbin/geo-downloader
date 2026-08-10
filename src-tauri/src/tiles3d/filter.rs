@@ -1,4 +1,63 @@
 use crate::tiles3d::tileset::{BoundingVolume, Tile, Tileset};
+use std::collections::HashMap;
+
+pub type TileTransform = [f64; 16];
+
+pub const IDENTITY_TRANSFORM: TileTransform = [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+];
+
+fn multiply_transforms(left: &TileTransform, right: &TileTransform) -> TileTransform {
+    let mut result = [0.0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            result[column * 4 + row] = (0..4)
+                .map(|k| left[k * 4 + row] * right[column * 4 + k])
+                .sum();
+        }
+    }
+    result
+}
+
+fn cumulative_transform(parent: &TileTransform, local: Option<&Vec<f64>>) -> TileTransform {
+    let Some(values) = local.filter(|values| values.len() == 16 && values.iter().all(|v| v.is_finite())) else {
+        return *parent;
+    };
+    let mut matrix = [0.0; 16];
+    matrix.copy_from_slice(values);
+    multiply_transforms(parent, &matrix)
+}
+
+fn transform_point(matrix: &TileTransform, point: [f64; 3]) -> [f64; 3] {
+    let [x, y, z] = point;
+    [
+        matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
+        matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13],
+        matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14],
+    ]
+}
+
+fn transform_vector(matrix: &TileTransform, vector: [f64; 3]) -> [f64; 3] {
+    let [x, y, z] = vector;
+    [
+        matrix[0] * x + matrix[4] * y + matrix[8] * z,
+        matrix[1] * x + matrix[5] * y + matrix[9] * z,
+        matrix[2] * x + matrix[6] * y + matrix[10] * z,
+    ]
+}
+
+fn linear_scale_upper_bound(matrix: &TileTransform) -> f64 {
+    let max_column_sum = (0..3)
+        .map(|column| (0..3).map(|row| matrix[column * 4 + row].abs()).sum::<f64>())
+        .fold(0.0, f64::max);
+    let max_row_sum = (0..3)
+        .map(|row| (0..3).map(|column| matrix[column * 4 + row].abs()).sum::<f64>())
+        .fold(0.0, f64::max);
+    (max_column_sum * max_row_sum).sqrt()
+}
 
 // ============================================================
 // 空间过滤：包围体与多边形相交判定
@@ -164,6 +223,15 @@ impl BoundingVolume {
     /// 将包围体转为经纬度矩形 [west, south, east, north]（度），用于空间过滤
     /// region 类型直接转换；box/sphere 类型计算近似外接矩形
     pub fn to_filter_rect(&self) -> Option<[f64; 4]> {
+        self.to_filter_rect_with_transform(&IDENTITY_TRANSFORM)
+    }
+
+    /// 3D Tiles 的 transform 使用列主序，并且需要沿 tile 树逐级累乘。
+    /// region 已经是 EPSG:4979 全局坐标，规范规定不应用 tile transform。
+    pub fn to_filter_rect_with_transform(
+        &self,
+        transform: &TileTransform,
+    ) -> Option<[f64; 4]> {
         if let Some(ref region) = self.region {
             if region.len() >= 4 {
                 return Some([
@@ -176,11 +244,11 @@ impl BoundingVolume {
         }
 
         if let Some(ref b) = self.box_volume {
-            return self.box_to_rect(b);
+            return self.box_to_rect(b, transform);
         }
 
         if let Some(ref s) = self.sphere {
-            return self.sphere_to_rect(s);
+            return self.sphere_to_rect(s, transform);
         }
 
         None
@@ -188,17 +256,17 @@ impl BoundingVolume {
 
     /// OBB → 近似经纬度矩形
     /// box: [cx, cy, cz, x0, x1, x2, y0, y1, y2, z0, z1, z2]
-    fn box_to_rect(&self, b: &[f64]) -> Option<[f64; 4]> {
+    fn box_to_rect(&self, b: &[f64], transform: &TileTransform) -> Option<[f64; 4]> {
         if b.len() < 12 {
             return None;
         }
-        let (cx, cy, cz) = (b[0], b[1], b[2]);
+        let center = transform_point(transform, [b[0], b[1], b[2]]);
 
         // 8 个顶点 = center ± x_half ± y_half ± z_half
         let half_axes = [
-            [b[3], b[4], b[5]],   // x half-axis
-            [b[6], b[7], b[8]],   // y half-axis
-            [b[9], b[10], b[11]], // z half-axis
+            transform_vector(transform, [b[3], b[4], b[5]]),
+            transform_vector(transform, [b[6], b[7], b[8]]),
+            transform_vector(transform, [b[9], b[10], b[11]]),
         ];
 
         let mut min_x = f64::MAX;
@@ -209,9 +277,9 @@ impl BoundingVolume {
         for sx in &[-1.0f64, 1.0] {
             for sy in &[-1.0f64, 1.0] {
                 for sz in &[-1.0f64, 1.0] {
-                    let x = cx + sx * half_axes[0][0] + sy * half_axes[1][0] + sz * half_axes[2][0];
-                    let y = cy + sx * half_axes[0][1] + sy * half_axes[1][1] + sz * half_axes[2][1];
-                    let z = cz + sx * half_axes[0][2] + sy * half_axes[1][2] + sz * half_axes[2][2];
+                    let x = center[0] + sx * half_axes[0][0] + sy * half_axes[1][0] + sz * half_axes[2][0];
+                    let y = center[1] + sx * half_axes[0][1] + sy * half_axes[1][1] + sz * half_axes[2][1];
+                    let z = center[2] + sx * half_axes[0][2] + sy * half_axes[1][2] + sz * half_axes[2][2];
 
                     // ECEF → 经纬度（近似）
                     let (lng, lat) = ecef_to_lonlat(x, y, z);
@@ -227,12 +295,13 @@ impl BoundingVolume {
     }
 
     /// Sphere → 近似经纬度矩形
-    fn sphere_to_rect(&self, s: &[f64]) -> Option<[f64; 4]> {
+    fn sphere_to_rect(&self, s: &[f64], transform: &TileTransform) -> Option<[f64; 4]> {
         if s.len() < 4 {
             return None;
         }
-        let (cx, cy, cz, r) = (s[0], s[1], s[2], s[3]);
-        let (lng, lat) = ecef_to_lonlat(cx, cy, cz);
+        let center = transform_point(transform, [s[0], s[1], s[2]]);
+        let r = s[3] * linear_scale_upper_bound(transform);
+        let (lng, lat) = ecef_to_lonlat(center[0], center[1], center[2]);
 
         // 近似：在地表，1度纬度约 111km
         let r_km = r / 1000.0;
@@ -276,6 +345,8 @@ pub struct FilterResult {
     pub tileset: Tileset,
     /// 需要下载的内容 URI 列表（相对于 tileset.json 的路径）
     pub download_uris: Vec<String>,
+    /// 每个内容 URI 所在 tile 的累计变换，供外部 tileset 继续继承。
+    pub uri_transforms: HashMap<String, TileTransform>,
     /// 过滤前的总节点数
     pub original_count: usize,
     /// 过滤后保留的节点数
@@ -286,8 +357,17 @@ pub struct FilterResult {
 
 /// 对 tileset 进行空间过滤
 pub fn filter_tileset(tileset: &Tileset, region: &SelectionRegion) -> FilterResult {
+    filter_tileset_with_parent_transform(tileset, region, &IDENTITY_TRANSFORM)
+}
+
+pub fn filter_tileset_with_parent_transform(
+    tileset: &Tileset,
+    region: &SelectionRegion,
+    parent_transform: &TileTransform,
+) -> FilterResult {
     let original_count = count_tiles(&tileset.root);
     let mut download_uris = Vec::new();
+    let mut uri_transforms = HashMap::new();
     let mut filtered_count = 0usize;
     let mut content_count = 0usize;
 
@@ -295,8 +375,10 @@ pub fn filter_tileset(tileset: &Tileset, region: &SelectionRegion) -> FilterResu
         &tileset.root,
         region,
         &mut download_uris,
+        &mut uri_transforms,
         &mut filtered_count,
         &mut content_count,
+        parent_transform,
     );
 
     // 根节点不能为空——如果完全不相交，返回一个空壳
@@ -314,6 +396,7 @@ pub fn filter_tileset(tileset: &Tileset, region: &SelectionRegion) -> FilterResu
     FilterResult {
         tileset: filtered_tileset,
         download_uris,
+        uri_transforms,
         original_count,
         filtered_count,
         content_count,
@@ -330,6 +413,7 @@ pub fn filter_tileset_all(tileset: &Tileset) -> FilterResult {
     FilterResult {
         tileset: tileset.clone(),
         download_uris,
+        uri_transforms: HashMap::new(),
         original_count: total,
         filtered_count: total,
         content_count,
@@ -352,12 +436,15 @@ fn filter_tile(
     tile: &Tile,
     region: &SelectionRegion,
     download_uris: &mut Vec<String>,
+    uri_transforms: &mut HashMap<String, TileTransform>,
     filtered_count: &mut usize,
     content_count: &mut usize,
+    parent_transform: &TileTransform,
 ) -> Option<Tile> {
+    let transform = cumulative_transform(parent_transform, tile.transform.as_ref());
     let self_intersects = tile
         .bounding_volume
-        .to_filter_rect()
+        .to_filter_rect_with_transform(&transform)
         .map(|rect| region.intersects_rect(rect))
         .unwrap_or(true); // 无法判定包围体时，保守保留
 
@@ -368,7 +455,17 @@ fn filter_tile(
         .map(|children| {
             children
                 .iter()
-                .filter_map(|child| filter_tile(child, region, download_uris, filtered_count, content_count))
+                .filter_map(|child| {
+                    filter_tile(
+                        child,
+                        region,
+                        download_uris,
+                        uri_transforms,
+                        filtered_count,
+                        content_count,
+                        &transform,
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -391,6 +488,7 @@ fn filter_tile(
         // 收集需要下载的 URI
         for uri in tile.content_uris() {
             download_uris.push(uri.to_string());
+            uri_transforms.entry(uri.to_string()).or_insert(transform);
             *content_count += 1;
         }
     } else {
@@ -446,5 +544,35 @@ mod tests {
     fn test_segments_intersect() {
         assert!(segments_intersect([0.0, 0.0], [10.0, 10.0], [0.0, 10.0], [10.0, 0.0]));
         assert!(!segments_intersect([0.0, 0.0], [5.0, 5.0], [6.0, 6.0], [10.0, 10.0]));
+    }
+
+    #[test]
+    fn applies_ancestor_transform_to_child_box() {
+        let tileset: Tileset = serde_json::from_value(serde_json::json!({
+            "asset": { "version": "1.1" },
+            "geometricError": 1000.0,
+            "root": {
+                "boundingVolume": { "box": [6378137.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 100.0] },
+                "geometricError": 1000.0,
+                "transform": [0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+                "children": [{
+                    "boundingVolume": { "box": [6378137.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0] },
+                    "geometricError": 0.0,
+                    "content": { "uri": "tile.b3dm" }
+                }]
+            }
+        })).unwrap();
+        let region = SelectionRegion::new(&[
+            vec![89.9, -0.1],
+            vec![90.1, -0.1],
+            vec![90.1, 0.1],
+            vec![89.9, 0.1],
+        ]);
+
+        let result = filter_tileset(&tileset, &region);
+
+        assert_eq!(result.download_uris, vec!["tile.b3dm"]);
+        assert_eq!(result.filtered_count, 2);
+        assert_eq!(result.uri_transforms["tile.b3dm"][1], 1.0);
     }
 }

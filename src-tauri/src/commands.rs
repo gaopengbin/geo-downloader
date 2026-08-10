@@ -697,17 +697,20 @@ fn task_log(app: &AppHandle, tm: &Arc<TaskManager>, task_id: &str, level: &str, 
 struct ZoomLevelResult {
     file_size: u64,
     actual_count: u32,
+    /// 真实下载失败数，不包含图源明确返回的无数据瓦片。
     failed_count: u32,
     no_data: u32,
     pyramid_built: bool,
-    /// 有数据的瓦片数（Issue #31）：`actual_count - failed_count`，其中 `failed_count`
-    /// 实际上包含真失败 + no_data（因为 `tile_files` 只装有图像数据的瓦片）。
-    /// 即：本字段 = 网络下载成功 + 缓存命中，**不含 no_data**。
+    /// 有数据的瓦片数（网络下载成功 + 缓存命中），不含 no_data。
     /// 这样设计是为了让"全 404 区域"也能被 `min_export_success_ratio` 阈值拦截，
     /// 避免生成大片留白的 GeoTIFF。
     success_count: u32,
     /// 该级别是否已导出（Issue #31）：成功率 < 阈值时跳过导出停留为 Paused
     exported: bool,
+}
+
+fn real_failure_count(missing_count: u32, no_data_count: u32) -> u32 {
+    missing_count.saturating_sub(no_data_count)
 }
 
 /// 执行单个 zoom 级别的下载（核心逻辑，被 execute_download_task 循环调用）
@@ -887,9 +890,9 @@ async fn execute_zoom_level(
         return Err("任务已取消".to_string());
     }
     
-    let failed_count = actual_count - tile_files.len() as u32;
+    let missing_count = actual_count.saturating_sub(tile_files.len() as u32);
     let no_data_final = no_data_tracker.load(std::sync::atomic::Ordering::Relaxed);
-    let real_failed = if failed_count > no_data_final { failed_count - no_data_final } else { 0 };
+    let failed_count = real_failure_count(missing_count, no_data_final);
     let download_elapsed = level_start.elapsed();
     let completed_after_download = completed_offset.saturating_add(actual_count.saturating_sub(failed_count));
     let failed_after_download = failed_offset.saturating_add(failed_count);
@@ -898,8 +901,8 @@ async fn execute_zoom_level(
     if no_data_final > 0 {
         summary_parts.push(format!("无数据 {} 张", no_data_final));
     }
-    if real_failed > 0 {
-        summary_parts.push(format!("失败 {} 张", real_failed));
+    if failed_count > 0 {
+        summary_parts.push(format!("失败 {} 张", failed_count));
     }
     task_log(app, tm, task_id, "INFO", &format!(
         "下载完成，{}，耗时 {:.1}s",
@@ -1056,12 +1059,12 @@ async fn execute_zoom_level(
     // 在导出之前，根据 AppSettings.min_export_success_ratio 决定本级别去向：
     // - success_count == 0：硬规则失败，return Err 让上层 mark Failed
     // - success_ratio < min_ratio：跳过导出，缓存保留，标 exported=false（上层会 mark Paused 待用户决策）
-    // - 否则正常导出（即使有少量失败，仍走自动导出流水线，上层根据 failed_count 决定 Completed / CompletedWithGaps）
+    // - 否则正常导出（即使有少量失败，仍走自动导出流水线，上层根据真实失败数决定 Completed / CompletedWithGaps）
     //
     // 注：这里的 success_count = tile_files.len()（有图像数据的瓦片），
-    // failed_count 实际包含真失败 + no_data。这样"全 404 无覆盖"任务也能被阈值拦截，
+    // missing_count 包含真失败 + no_data。这样"全 404 无覆盖"任务也能被阈值拦截，
     // 避免直接生成大片留白的 GeoTIFF。
-    let level_success_count = actual_count.saturating_sub(failed_count);
+    let level_success_count = actual_count.saturating_sub(missing_count);
     let level_success_ratio = if actual_count > 0 {
         level_success_count as f32 / actual_count as f32
     } else {
@@ -1660,7 +1663,10 @@ async fn execute_download_task(
             let level_msg = if !result.exported {
                 format!("z{} 跳过导出（成功 {} 张 / 共 {} 张）", zoom, result.success_count, result.actual_count)
             } else {
-                format!("z{} 完成（成功 {} 张，失败 {} 张）", zoom, result.actual_count.saturating_sub(result.failed_count), result.failed_count)
+                format!(
+                    "z{} 完成（成功 {} 张，无数据 {} 张，失败 {} 张）",
+                    zoom, result.success_count, result.no_data, result.failed_count
+                )
             };
             tm.update_progress(task_id, TaskStatus::Downloading, progress_offset.min(99.0), completed_offset, failed_offset, Some(level_msg.clone()));
             let _ = app.emit(&event_name, TaskProgressPayload {
@@ -1933,27 +1939,19 @@ pub fn remove_task(task_manager: State<'_, Arc<TaskManager>>, task_id: String) {
 
 // ============ 断点续传相关命令 ============
 
-/// 获取可恢复的任务列表（排除当前活动任务）
+/// 获取可恢复的任务列表（排除仍在本次进程任务管理器中的任务）
 #[tauri::command]
 pub fn get_resumable_tasks(task_manager: State<'_, Arc<TaskManager>>) -> Vec<PersistedTask> {
-    let active_ids: std::collections::HashSet<String> = task_manager
+    // task_file 在下载期间始终存在，用于崩溃恢复。暂停只是当前进程内的运行状态，
+    // 不能同时把它暴露成“中断任务”，否则前端恢复会以同一 ID 再启动一条下载流程。
+    let in_memory_ids: std::collections::HashSet<String> = task_manager
         .get_all_tasks()
         .into_iter()
-        .filter(|task| {
-            matches!(
-                task.status,
-                TaskStatus::Pending
-                    | TaskStatus::Downloading
-                    | TaskStatus::Merging
-                    | TaskStatus::Processing
-                    | TaskStatus::Exporting
-            )
-        })
         .map(|t| t.id)
         .collect();
     crate::task::load_resumable_tasks()
         .into_iter()
-        .filter(|t| !active_ids.contains(&t.task_id))
+        .filter(|t| !in_memory_ids.contains(&t.task_id))
         .collect()
 }
 
@@ -2156,6 +2154,13 @@ fn scan_temp_dir_for_zoom(
 #[cfg(test)]
 mod resumable_tile_scan_tests {
     use super::*;
+
+    #[test]
+    fn no_data_tiles_are_not_counted_as_real_failures() {
+        assert_eq!(real_failure_count(12, 12), 0);
+        assert_eq!(real_failure_count(12, 7), 5);
+        assert_eq!(real_failure_count(3, 8), 0);
+    }
 
     #[test]
     fn scans_sharded_and_legacy_tile_files() {
@@ -3789,21 +3794,31 @@ pub async fn scan_wayback_metadata(
     let total_estimate = 192u32 * layer_count;
 
     // 提前在 progress map 中占位，避免前端在 fetch_releases_raw 期间轮询到 None 后误判为"扫描已结束"
-    crate::wayback_metadata::insert_placeholder_progress(&progress_map, &scan_id, total_estimate).await;
+    let cancel = crate::wayback_metadata::insert_placeholder_progress(
+        &progress_map,
+        &scan_id,
+        total_estimate,
+    )
+    .await;
 
     let sid = scan_id.clone();
     tokio::spawn(async move {
-        let _ = crate::wayback_metadata::scan_metadata(
+        let result = crate::wayback_metadata::scan_metadata(
             req.bbox,
             req.zoom_min,
             req.zoom_max,
             true,
             req.proxy,
-            progress_map,
-            sid,
+            progress_map.clone(),
+            sid.clone(),
             scan_mode,
+            cancel,
         )
         .await;
+        if let Err(error) = result {
+            log::warn!("wayback metadata scan {} ended: {}", sid, error);
+        }
+        crate::wayback_metadata::remove_progress(&progress_map, &sid).await;
     });
 
     Ok(ScanWaybackResponse::Scanning {
@@ -3818,6 +3833,14 @@ pub async fn get_wayback_scan_progress(
     progress: State<'_, crate::wayback_metadata::ScanProgressMap>,
 ) -> Result<Option<crate::wayback_metadata::WaybackScanProgress>, String> {
     Ok(crate::wayback_metadata::get_progress(progress.inner(), &scan_id).await)
+}
+
+#[tauri::command]
+pub async fn cancel_wayback_scan(
+    scan_id: String,
+    progress: State<'_, crate::wayback_metadata::ScanProgressMap>,
+) -> Result<bool, String> {
+    Ok(crate::wayback_metadata::cancel_scan(progress.inner(), &scan_id).await)
 }
 
 /// 按勾选的拍摄日期批量发起下载

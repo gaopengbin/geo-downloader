@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
+use tokio_util::sync::CancellationToken;
 
 /// 缓存 TTL（秒）= 7 天
 const CACHE_TTL_SEC: i64 = 7 * 24 * 3600;
@@ -159,12 +160,12 @@ pub fn normalize_scan_mode(scan_mode: Option<&str>) -> String {
 // 进度跟踪
 // ============================================================
 
-#[derive(Default)]
 pub struct ScanState {
     current: u32,
     total: u32,
     started_at: Option<std::time::Instant>,
     footprints_so_far: u32,
+    cancel: CancellationToken,
 }
 
 pub type ScanProgressMap = Arc<Mutex<HashMap<String, ScanState>>>;
@@ -185,7 +186,12 @@ pub async fn get_progress(map: &ScanProgressMap, scan_id: &str) -> Option<Waybac
 }
 
 /// 命令入口处提前占位，避免 fetch_releases_raw 期间前端轮询拿到 None
-pub async fn insert_placeholder_progress(map: &ScanProgressMap, scan_id: &str, total: u32) {
+pub async fn insert_placeholder_progress(
+    map: &ScanProgressMap,
+    scan_id: &str,
+    total: u32,
+) -> CancellationToken {
+    let cancel = CancellationToken::new();
     let mut m = map.lock().await;
     m.insert(
         scan_id.to_string(),
@@ -194,8 +200,24 @@ pub async fn insert_placeholder_progress(map: &ScanProgressMap, scan_id: &str, t
             total,
             started_at: Some(std::time::Instant::now()),
             footprints_so_far: 0,
+            cancel: cancel.clone(),
         },
     );
+    cancel
+}
+
+pub async fn cancel_scan(map: &ScanProgressMap, scan_id: &str) -> bool {
+    let m = map.lock().await;
+    if let Some(state) = m.get(scan_id) {
+        state.cancel.cancel();
+        true
+    } else {
+        false
+    }
+}
+
+pub async fn remove_progress(map: &ScanProgressMap, scan_id: &str) {
+    map.lock().await.remove(scan_id);
 }
 
 // ============================================================
@@ -317,8 +339,13 @@ pub async fn scan_metadata(
     progress: ScanProgressMap,
     scan_id: String,
     scan_mode: String,
+    cancel: CancellationToken,
 ) -> Result<WaybackScanResult, String> {
     let scan_mode = normalize_scan_mode(Some(&scan_mode));
+
+    if cancel.is_cancelled() {
+        return Err("扫描已取消".to_string());
+    }
 
     if !force_refresh {
         if let Some(cached) = load_cache(&bbox, z_min, z_max, &scan_mode) {
@@ -356,7 +383,10 @@ pub async fn scan_metadata(
         bbox
     };
 
-    let releases = fetch_releases_raw(proxy.as_deref()).await?;
+    let releases = tokio::select! {
+        _ = cancel.cancelled() => return Err("扫描已取消".to_string()),
+        result = fetch_releases_raw(proxy.as_deref()) => result?,
+    };
     let total_tasks = (releases.len() as u32) * (layers.len() as u32);
 
     {
@@ -368,6 +398,7 @@ pub async fn scan_metadata(
                 total: total_tasks,
                 started_at: Some(std::time::Instant::now()),
                 footprints_so_far: 0,
+                cancel: cancel.clone(),
             },
         );
     }
@@ -400,27 +431,39 @@ pub async fn scan_metadata(
             let release_id = release_id.clone();
             let release_date = release_date.clone();
             let dead_services = Arc::clone(&dead_services);
+            let cancel = cancel.clone();
 
             let handle = tokio::spawn(async move {
-                let _permit = sem.acquire().await.ok();
-                let footprints = query_layer_with_retry(
-                    &client,
-                    &metadata_url,
-                    layer_id,
-                    &query_bbox,
-                    &release_id,
-                    &release_date,
-                    release_num,
-                    &dead_services,
-                )
-                .await
-                .unwrap_or_else(|e| {
-                    log::warn!(
-                        "wayback metadata: release={} layer={} 查询失败: {}",
-                        release_id, layer_id, e
-                    );
-                    Vec::new()
-                });
+                let _permit = tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    permit = sem.acquire() => match permit {
+                        Ok(permit) => permit,
+                        Err(_) => return,
+                    },
+                };
+                let footprints = tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    result = query_layer_with_retry(
+                        &client,
+                        &metadata_url,
+                        layer_id,
+                        &query_bbox,
+                        &release_id,
+                        &release_date,
+                        release_num,
+                        &dead_services,
+                    ) => result.unwrap_or_else(|e| {
+                        log::warn!(
+                            "wayback metadata: release={} layer={} 查询失败: {}",
+                            release_id, layer_id, e
+                        );
+                        Vec::new()
+                    }),
+                };
+
+                if cancel.is_cancelled() {
+                    return;
+                }
 
                 let added = footprints.len() as u32;
                 {
@@ -439,6 +482,10 @@ pub async fn scan_metadata(
 
     for h in handles {
         let _ = h.await;
+    }
+
+    if cancel.is_cancelled() {
+        return Err("扫描已取消".to_string());
     }
 
     let raw = Arc::try_unwrap(collected)
@@ -464,10 +511,7 @@ pub async fn scan_metadata(
     save_cache(&result).ok();
 
     // 清理进度状态
-    {
-        let mut m = progress.lock().await;
-        m.remove(&scan_id);
-    }
+    remove_progress(&progress, &scan_id).await;
 
     Ok(result)
 }
@@ -908,6 +952,18 @@ mod tests {
 
         assert_ne!(fast, fine);
         assert_eq!(fast, unknown);
+    }
+
+    #[tokio::test]
+    async fn cancelling_scan_signals_the_registered_token() {
+        let progress = new_progress_map();
+        let token = insert_placeholder_progress(&progress, "scan-1", 10).await;
+
+        assert!(cancel_scan(&progress, "scan-1").await);
+        assert!(token.is_cancelled());
+
+        remove_progress(&progress, "scan-1").await;
+        assert!(!cancel_scan(&progress, "scan-1").await);
     }
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import { Download, FolderOpen, History, Loader2, RefreshCw, Search } from 'lucide-react'
+import { Download, FolderOpen, History, Loader2, RefreshCw, Search, Square } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,7 @@ import { useSelectionStore } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
 import { useWaybackStore } from '@/store/wayback-store'
 import {
+  cancelWaybackScan,
   createWaybackTask,
   downloadWaybackIncremental,
   getWaybackScanProgress,
@@ -146,6 +147,7 @@ export function WaybackPage() {
   const [estimating, setEstimating] = useState(false)
   const [incSelected, setIncSelected] = useState<Set<string>>(new Set())
   const scanAbortRef = useRef(false)
+  const activeScanIdRef = useRef<string | null>(null)
   const supportsSelectionCrop =
     format === 'geotiff' || format === 'png' || format === 'mbtiles' || format === 'gpkg'
   const effectiveCropToShape = cropToShape && supportsSelectionCrop
@@ -442,14 +444,23 @@ export function WaybackPage() {
         release_date_to: releaseDateTo || null,
       })
 
+      if (scanAbortRef.current) {
+        if (res.kind === 'scanning') {
+          await cancelWaybackScan(res.scan_id).catch(() => false)
+        }
+        throw new Error('__user_cancelled__')
+      }
+
       if (res.kind === 'result') {
         return res
       }
 
       // 后台扫描中，轮询进度
       const scanId = res.scan_id
+      activeScanIdRef.current = scanId
       while (!scanAbortRef.current) {
         await new Promise((r) => setTimeout(r, 1500))
+        if (scanAbortRef.current) break
         const prog = await getWaybackScanProgress(scanId).catch(() => null)
         if (!prog) {
           // 扫描完成 → 重新查缓存
@@ -488,7 +499,29 @@ export function WaybackPage() {
       toast.error(`扫描失败：${msg}`)
       setScanProgress(null)
     },
+    onSettled: () => {
+      activeScanIdRef.current = null
+      setScanProgress(null)
+    },
   })
+
+  const stopScan = () => {
+    scanAbortRef.current = true
+    const scanId = activeScanIdRef.current
+    if (scanId) {
+      void cancelWaybackScan(scanId).catch((error) => {
+        console.warn('停止 Wayback 扫描失败', error)
+      })
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      scanAbortRef.current = true
+      const scanId = activeScanIdRef.current
+      if (scanId) void cancelWaybackScan(scanId).catch(() => undefined)
+    }
+  }, [])
 
   // 增量结果过滤
   const filteredReleases: WaybackReleaseSummary[] = useMemo(() => {
@@ -930,10 +963,10 @@ export function WaybackPage() {
 
           {/* 增量下载 */}
           <TabsContent value="incremental" className="mt-3 space-y-2">
-            <div className="flex items-center gap-2 text-xs">
-              <Label className="text-xs">扫描模式</Label>
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 text-xs">
+              <Label className="whitespace-nowrap text-xs">扫描模式</Label>
               <Select value={scanMode} onValueChange={(v) => setScanMode(v as 'fast' | 'fine' | 'official')}>
-                <SelectTrigger className="h-7 w-32 text-xs">
+                <SelectTrigger className="h-7 w-full text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -942,23 +975,30 @@ export function WaybackPage() {
                   <SelectItem value="fine">fine（多层准确）</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
               <Button
                 size="sm"
-                className="ml-auto h-7 text-xs"
-                onClick={() => scanMutation.mutate({})}
-                disabled={scanMutation.isPending || !bounds}
+                variant={scanMutation.isPending ? 'outline' : 'default'}
+                className="h-7 min-w-0 text-xs"
+                onClick={scanMutation.isPending ? stopScan : () => scanMutation.mutate({})}
+                disabled={!scanMutation.isPending && !bounds}
               >
                 {scanMutation.isPending ? (
-                  <Loader2 className="mr-1 size-3 animate-spin" />
+                  <Square className="mr-1 size-3" />
                 ) : (
                   <Search className="mr-1 size-3" />
                 )}
-                {scanReleases.length > 0 ? '重新扫描' : '扫描影像清单'}
+                {scanMutation.isPending
+                  ? '停止扫描'
+                  : scanReleases.length > 0
+                    ? '重新扫描'
+                    : '扫描影像清单'}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs"
+                className="h-7 min-w-0 text-xs"
                 onClick={() => scanMutation.mutate({ forceRefresh: true })}
                 disabled={scanMutation.isPending || !bounds}
                 title="跳过本地缓存，强制向 ESRI 服务器重新扫描"

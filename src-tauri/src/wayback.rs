@@ -281,7 +281,8 @@ pub async fn probe_max_zoom(
         let (x, y) = lat_lng_to_tile(lat, lng, z);
         let url = format!("{}/{}/{}/{}/{}", WAYBACK_TILE_BASE_URL, version_id, z, y, x);
         match client
-            .head(&url)
+            .get(&url)
+            .header(reqwest::header::RANGE, "bytes=0-0")
             .header("Origin", "https://livingatlas.arcgis.com")
             .header("Referer", "https://livingatlas.arcgis.com/")
             .send()
