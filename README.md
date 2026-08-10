@@ -201,4 +201,4 @@ geo-downloader/
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=gaopengbin/geo-downloader&type=Date)](https://star-history.com/#gaopengbin/geo-downloader&Date)
+[![Star History Chart](https://raw.githubusercontent.com/gaopengbin/geo-downloader/star-history-data/.github/star-history/chart.svg)](https://github.com/gaopengbin/geo-downloader)

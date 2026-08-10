@@ -1,0 +1,39 @@
+name: Update Star History
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    concurrency:
+      group: star-history
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out chart data branch
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: star-history-data
+          path: star-history-data
+
+      - name: Generate star history chart
+        uses: nicoloboschi/gh-stars@c659f0480850de4072c66927d0a6c86769f416c5 # v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          history-path: star-history-data/.github/star-history/data.json
+          svg-path: star-history-data/.github/star-history/chart.svg
+          line-color: '#2563eb'
+
+      - name: Commit updated chart
+        working-directory: star-history-data
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/star-history/data.json .github/star-history/chart.svg
+          git diff --cached --quiet || git commit -m 'chore: update star history'
+          git push
