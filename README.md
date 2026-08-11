@@ -34,6 +34,8 @@
 
 GeoD 是一款免费开源的跨平台地理空间数据工具，支持浏览 OpenStreetMap 底图、通过 Overpass 下载 OSM 矢量要素，以及从用户合法授权的 XYZ 瓦片服务导出 GeoTIFF 等本地格式。
 
+GeoD 已收录于社区维护的 [OSM Apps Catalog](https://osm-apps.org/?app=1308821580&page=app)；该目录收录不代表 OpenStreetMap Foundation 对本项目的官方认可或背书。
+
 > **使用提示**：本工具是基于开源协议发布的桌面客户端，**不内置任何地图数据**。所有数据来自使用者自行配置的第三方服务，**请自行获取合法授权并遵守相关条款与法规**。下载所得数据版权归原数据方所有。详见 [使用条款与免责声明](https://geodownloader.pages.dev/disclaimer.html)。
 
 ---

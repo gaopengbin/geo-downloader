@@ -24,6 +24,8 @@
 
 GeoD is a free and open-source desktop application for browsing and exporting geospatial data. It can display OpenStreetMap basemaps, download selected OpenStreetMap vector features through Overpass, work with user-authorized XYZ and vector tile services, and export local datasets for GIS workflows.
 
+GeoD is listed in the community-maintained [OSM Apps Catalog](https://osm-apps.org/?app=1308821580&page=app). This listing does not imply endorsement by the OpenStreetMap Foundation.
+
 GeoD does not bundle map data or grant rights to third-party services. You are responsible for choosing a source that permits your intended access, download, storage, and redistribution. See the [terms and disclaimer](https://geodownloader.pages.dev/disclaimer.html).
 
 ## Download
