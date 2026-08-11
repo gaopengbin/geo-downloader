@@ -1,0 +1,23 @@
+* {
+  box-sizing: border-box;
+  /* account for navbar when scrolling via hash links */
+  scroll-margin-top: calc(36px + 64px + 36px);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  padding: 0;
+  margin: 0;
+  font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 300;
+}
+
+body * {
+  scrollbar-color: #60a5fa #00000030;
+  scrollbar-width: thin;
+}

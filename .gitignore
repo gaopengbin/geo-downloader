@@ -6,6 +6,8 @@ src-tauri/gen/
 # Node (如果前端使用)
 node_modules/
 dist/
+website/.next/
+website/out/
 
 # IDE
 .vscode/

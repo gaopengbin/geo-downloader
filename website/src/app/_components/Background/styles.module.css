@@ -1,0 +1,103 @@
+.bg {
+  /*
+  background: url(/geod/background.svg) bottom -200px center no-repeat,
+    url(/geod/background-pattern.svg) top center,
+    var(--backgroundColor);
+  background-size: cover;
+  */
+  background:
+    radial-gradient(
+      78% 162% at 22% 108%,
+      rgb(96 165 250 / 0.3) 0%,
+      rgb(96 165 250 / 0.18) 30%,
+      rgb(96 165 250 / 0.08) 48%,
+      rgb(96 165 250 / 0) 74%
+    ),
+    radial-gradient(
+      64% 68% at 82% 78%,
+      rgb(37 99 235 / 0.26) 0%,
+      rgb(37 99 235 / 0.14) 32%,
+      rgb(37 99 235 / 0.05) 48%,
+      rgb(37 99 235 / 0) 76%
+    ),
+    linear-gradient(180deg, #050816 0%, #0a1121 30%, #101c44 62%, #121b33 100%);
+  height: 100vh;
+  width: 100%;
+  z-index: -1;
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+
+  /* fixes SVG rendering glitch on scroll in iOS */
+  -webkit-transform: scale(1);
+}
+
+.bg::before,
+.bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.bg::before {
+  background-image: radial-gradient(
+    circle,
+    rgb(152 162 179 / 0.24) 0 1.5px,
+    transparent 1.6px
+  );
+  background-position: center bottom;
+  background-size: 23px 23px;
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    rgb(0 0 0 / 0.18) 0%,
+    rgb(0 0 0 / 0.28) 22%,
+    rgb(0 0 0 / 0.48) 90%,
+    rgb(0 0 0 / 0.9) 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    rgb(0 0 0 / 0.18) 0%,
+    rgb(0 0 0 / 0.28) 22%,
+    rgb(0 0 0 / 0.48) 90%,
+    rgb(0 0 0 / 0.9) 100%
+  );
+  opacity: 0.9;
+}
+
+.bg::after {
+  inset: -18% -12% -14%;
+  background:
+    radial-gradient(
+      72% 58% at 18% 100%,
+      rgb(96 165 250 / 0.4) 0%,
+      rgb(96 165 250 / 0.24) 30%,
+      rgb(96 165 250 / 0.12) 48%,
+      rgb(96 165 250 / 0) 74%
+    ),
+    radial-gradient(
+      48% 34% at 48% 96%,
+      rgb(147 197 253 / 0.2) 0%,
+      rgb(147 197 253 / 0.08) 42%,
+      rgb(147 197 253 / 0) 76%
+    ),
+    radial-gradient(
+      44% 56% at 86% 64%,
+      rgb(59 130 246 / 0.54) 0%,
+      rgb(59 130 246 / 0.24) 34%,
+      rgb(59 130 246 / 0.08) 50%,
+      rgb(59 130 246 / 0) 76%
+    ),
+    radial-gradient(
+      34% 42% at 72% 80%,
+      rgb(37 99 235 / 0.34) 0%,
+      rgb(37 99 235 / 0.14) 36%,
+      rgb(37 99 235 / 0) 72%
+    );
+  filter: blur(72px);
+  opacity: 0.95;
+}
+
+.sticky {
+  position: fixed;
+  inset: 0;
+}

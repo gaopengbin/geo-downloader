@@ -1,0 +1,126 @@
+.container {
+  box-sizing: border-box;
+
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  margin: auto;
+  padding: 6px;
+  gap: 8px;
+
+  overflow-x: auto;
+
+  min-width: 0;
+  max-width: 100%;
+
+  flex: 0 1 auto;
+}
+
+.tab {
+  font-weight: 600;
+  font-size: 16px;
+  line-height: 24px;
+
+  color: var(--highEmphasisTextColor);
+
+  display: flex;
+  position: relative;
+  padding: 8px 12px;
+
+  flex: 0 0;
+
+  opacity: 0.5;
+}
+
+.label {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  text-wrap: nowrap;
+}
+
+.icon {
+  display: flex;
+  width: 24px;
+  height: 24px;
+}
+
+.selected.selected {
+  opacity: 1;
+}
+
+.pill {
+  background: #272727cc;
+  border: 1px solid var(--activeBorderColor);
+  border-radius: 1000px;
+}
+
+.pill .tab {
+  border-radius: 100px;
+}
+
+.pill .tab:hover {
+  opacity: 0.75;
+}
+
+.pill .selected.selected {
+  background: #433f43;
+  opacity: 1;
+}
+
+.underline {
+  gap: 32px;
+  padding-bottom: 16px;
+}
+
+.underline .tab {
+  padding-left: 4px;
+  padding-right: 4px;
+  padding-bottom: 16px;
+}
+
+.underline .tab::before {
+  content: "";
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  height: 4px;
+  width: 100%;
+  border-radius: 1000px;
+  background-color: white;
+  opacity: 0;
+}
+
+.underline .tab::after {
+  content: "";
+  position: absolute;
+  bottom: -4px;
+  left: 0;
+  height: 4px;
+  width: 100%;
+  border-radius: 1000px;
+  background-color: white;
+  transform-origin: left;
+  transform: scaleX(0);
+  transition: transform var(--transitionDuration)
+    var(--transitionTimingFunction);
+}
+.underline .tab:hover {
+  color: var(--hoverTextColor);
+  opacity: 1;
+}
+
+.underline .tab:hover::before {
+  opacity: 0.5;
+}
+
+.underline .selected::before {
+  opacity: 0.5;
+}
+
+.underline .selected::after {
+  transform: scaleX(1);
+}

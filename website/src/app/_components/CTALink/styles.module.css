@@ -1,0 +1,113 @@
+@property --fromColor {
+  syntax: "<color>";
+  initial-value: #ffffff00;
+  inherits: false;
+}
+
+@property --toColor {
+  syntax: "<color>";
+  initial-value: #ffffff1a;
+  inherits: false;
+}
+
+@property --angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.ctaLink {
+  --ctaHighlightColor: #ffffff66;
+  --ctaHighlightHoverAngle: 180deg;
+  --ctaHighlightDelay: 0.2s;
+  text-wrap: nowrap;
+  font-weight: 600;
+  font-size: 18px;
+  line-height: 28px;
+  text-align: center;
+
+  padding: 16px 22px;
+  width: fit-content;
+  border-radius: 1000px;
+
+  background: var(--baseBackground);
+
+  position: relative;
+  background-clip: padding-box;
+  border: solid 2px transparent;
+  isolation: isolate;
+
+  color: var(--activeTextColor);
+}
+
+.ctaLink::before {
+  content: "";
+
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+
+  z-index: -2;
+  margin: -2px;
+  border-radius: inherit;
+
+  background: linear-gradient(var(--angle), var(--fromColor), var(--toColor)),
+    var(--baseBackground);
+
+  transition: --angle var(--transitionDuration) var(--transitionTimingFunction)
+      var(--ctaHighlightDelay),
+    --fromColor var(--transitionDuration) var(--transitionTimingFunction),
+    --toColor var(--transitionDuration) var(--transitionTimingFunction);
+}
+.ctaLink::after {
+  content: "";
+
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+
+  z-index: -1;
+  border-radius: inherit;
+
+  background: var(--baseBackground);
+}
+
+.ctaLink:hover::before {
+  --toColor: var(--ctaHighlightColor);
+  --angle: var(--ctaHighlightHoverAngle);
+}
+
+.ctaLink.primary {
+  --baseBackground: radial-gradient(
+    50% 50% at 50% 50%,
+    var(--activeBaseColor) 0%,
+    var(--activeBaseColor) 100%
+  );
+}
+
+.ctaLink.secondary {
+  --baseBackground: linear-gradient(
+    0deg,
+    var(--activeBaseColor),
+    var(--activeBaseColor)
+  );
+}
+
+.ctaLink.tertiary {
+  --baseBackground: #272727;
+  color: var(--activeBorderColor);
+}
+
+.ctaLink.tertiary::before {
+  background: linear-gradient(var(--angle), var(--fromColor), var(--toColor)),
+    linear-gradient(0deg, var(--activeBorderColor), var(--activeBorderColor)),
+    var(--baseBackground);
+}
+
+.ctaLink.full {
+  width: 100%;
+}

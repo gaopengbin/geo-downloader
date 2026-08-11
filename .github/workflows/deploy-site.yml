@@ -3,8 +3,14 @@ name: Deploy Site
 on:
   push:
     branches: [main]
-    paths: ['site/**']
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy-site.yml'
   workflow_dispatch:
+
+concurrency:
+  group: geod-website-production
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -13,9 +19,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: website/yarn.lock
+
+      - name: Install dependencies
+        working-directory: website
+        run: yarn install --frozen-lockfile
+
+      - name: Build website
+        working-directory: website
+        run: yarn build
+
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy site --project-name=geodownloader
+          command: pages deploy website/out --project-name=geodownloader --branch=main
