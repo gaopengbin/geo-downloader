@@ -26,23 +26,27 @@
   <img src="https://img.shields.io/badge/rust-1.77+-orange?logo=rust" alt="Rust">
 </p>
 
+**GeoD** is a free and open-source desktop tool for browsing and downloading geospatial data from OpenStreetMap, XYZ tile services and other user-authorized sources. It exports GeoTIFF and other local formats on Windows, macOS and Linux.
+
+GeoD 是一款免费开源的跨平台地理空间数据下载工具，支持浏览和下载 OpenStreetMap、XYZ 瓦片服务及其他由用户合法授权的数据源，并导出 GeoTIFF 等本地格式。
+
 > **使用提示**：本工具是基于开源协议发布的桌面客户端，**不内置任何地图数据**。所有数据来自使用者自行配置的第三方服务，**请自行获取合法授权并遵守相关条款与法规**。下载所得数据版权归原数据方所有。详见 [使用条款与免责声明](https://geodownloader.pages.dev/disclaimer.html)。
 
 ---
 
 ## 下载安装
 
-前往 [Releases](https://github.com/gaopengbin/geo-downloader/releases) 下载对应平台安装包：
+前往 [Latest Release](https://github.com/gaopengbin/geo-downloader/releases/latest) 下载最新稳定版。GeoD 免费提供 Windows、macOS 和 Linux 安装包：
 
-| 平台 | 稳定版 (v3.4.5) |
-|---|---|
-| Windows x64 | [setup.exe](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.5/GeoDownloader_3.4.5_windows_x64-setup.exe) |
-| macOS Apple Silicon | [arm64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.5/GeoDownloader_3.4.5_macos_arm64.dmg) |
-| macOS Intel | [x64.dmg](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.5/GeoDownloader_3.4.5_macos_x64.dmg) |
-| Linux (Debian/Ubuntu) | [.deb](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.5/GeoDownloader_3.4.5_linux_amd64.deb) |
-| Linux (AppImage) | [AppImage](https://github.com/gaopengbin/geo-downloader/releases/download/v3.4.5/GeoDownloader_3.4.5_linux_amd64.AppImage) |
+| 平台 | 安装包 | 下载入口 |
+|---|---|---|
+| Windows x64 | `GeoDownloader_*_windows_x64-setup.exe` | [Latest Release](https://github.com/gaopengbin/geo-downloader/releases/latest) |
+| macOS Apple Silicon | `GeoDownloader_*_macos_arm64.dmg` | [Latest Release](https://github.com/gaopengbin/geo-downloader/releases/latest) |
+| macOS Intel | `GeoDownloader_*_macos_x64.dmg` | [Latest Release](https://github.com/gaopengbin/geo-downloader/releases/latest) |
+| Linux (Debian/Ubuntu) | `GeoDownloader_*_linux_amd64.deb` | [Latest Release](https://github.com/gaopengbin/geo-downloader/releases/latest) |
+| Linux (AppImage) | `GeoDownloader_*_linux_amd64.AppImage` | [Latest Release](https://github.com/gaopengbin/geo-downloader/releases/latest) |
 
-> **v3.4.5**：缓存命中性能起飞（#25 + #26：1258 张全命中从 ~10s 降到 <50ms 量级）；部分失败任务导出策略（#31：少量失败默认仍生成 TIF + 缺块徽章 + 「补漏重导」/「强制按现状导出」按钮）；下载预估精度修复（#30：原 23GB 实际 408GB → 按图源 LUT 重算 + 双字段 UI）；shapefile 单 .shp 导入修复 + 5 项任务管理 UX 修复。详见 [Release Notes](https://github.com/gaopengbin/geo-downloader/releases/tag/v3.4.5)。
+每个版本的更新内容和校验信息以 [Releases](https://github.com/gaopengbin/geo-downloader/releases) 页面为准。
 
 > macOS 首次打开提示"无法验证开发者"时：右键安装包 → 打开，或在「系统设置 → 隐私与安全性」放行。
 
@@ -51,7 +55,7 @@
 ## 功能总览
 
 ### 影像瓦片下载
-- 内置 OSM、ArcGIS 卫星/地形/街道、天地图、Carto、Google、高德、OpenTopoMap 等数十个图源
+- 内置 OpenStreetMap（OSM）、ArcGIS 卫星/地形/街道、天地图、Carto、Google、高德、OpenTopoMap 等数十个图源
 - 支持自定义任意 `{z}/{x}/{y}` 模板，可配置 Subdomains、Referer、API Key
 - 多任务并行 + 可调并发（10–100），实时进度
 - 缩放级别区间下载，自动按图源最大级别约束
@@ -183,7 +187,9 @@ geo-downloader/
 
 ## 许可证
 
-[MIT License](LICENSE) © 2025–2026 gaopengbin
+GeoD 源代码按照 [MIT License](LICENSE) 免费开放使用。第三方地图与数据仍受各自许可和使用条款约束。
+
+Copyright © 2025–2026 gaopengbin
 
 ---
 
