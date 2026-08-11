@@ -8,6 +8,7 @@ import {
   getStableReleases,
   type ReleaseAssetKind,
 } from "@/lib/github-releases";
+import { TrackedDownloadLink } from "@/app/_components/ProductAnalytics";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -358,7 +359,7 @@ export default async function SDKPage() {
           </div>
           <div className={styles.downloadGrid}>
             {downloadOptions.map((item) => (
-              <a
+              <TrackedDownloadLink
                 key={`${item.platform}-${item.detail}`}
                 className={cn(styles.card, styles.downloadCard)}
                 href={
@@ -367,6 +368,8 @@ export default async function SDKPage() {
                 }
                 target="_blank"
                 rel="noopener noreferrer"
+                platform={item.kind}
+                version={latestRelease.tag_name}
               >
                 <span className={styles.downloadIcon} aria-hidden="true">
                   <MdiIcon path={item.iconPath} size={1.15} />
@@ -378,7 +381,7 @@ export default async function SDKPage() {
                 <span className={styles.downloadArrow} aria-hidden="true">
                   <ArrowUpRight size={18} strokeWidth={1.8} />
                 </span>
-              </a>
+              </TrackedDownloadLink>
             ))}
           </div>
           <p className={styles.downloadNote}>

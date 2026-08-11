@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, test } from 'node:test'
 import { createTelemetryServer, validateEnvelope } from '../server.mjs'
+import { validateProductEnvelope } from '../product-events.mjs'
 
 const cleanup = []
 
@@ -39,6 +40,51 @@ test('rejects unknown event properties', () => {
         events: [event({ properties: { url: 'https://example.com' } })],
       }),
     /properties must be empty/,
+  )
+})
+
+test('validates product events without accepting content fields', () => {
+  const eventId = crypto.randomUUID()
+  const visitorId = crypto.randomUUID()
+  const sessionId = crypto.randomUUID()
+  const [normalized] = validateProductEnvelope({
+    schema_version: 1,
+    product: 'wechat-dialog-generator',
+    events: [{
+      event_id: eventId,
+      event: 'dialog_created',
+      occurred_at: new Date().toISOString(),
+      visitor_id: visitorId,
+      session_id: sessionId,
+      properties: {
+        message_count_bucket: '6-20',
+        participant_count_bucket: '2',
+        path: '/wechat-dialog-generator/',
+        source: 'google',
+      },
+    }],
+  })
+  assert.equal(normalized.product, 'wechat-dialog-generator')
+  assert.equal(normalized.eventName, 'dialog_created')
+  assert.equal(normalized.properties.message_count_bucket, '6-20')
+  assert.throws(
+    () => validateProductEnvelope({
+      schema_version: 1,
+      product: 'wechat-dialog-generator',
+      events: [{
+        event_id: crypto.randomUUID(),
+        event: 'dialog_created',
+        occurred_at: new Date().toISOString(),
+        visitor_id: visitorId,
+        session_id: sessionId,
+        properties: {
+          message_count_bucket: '6-20',
+          participant_count_bucket: '2',
+          content: 'private chat text',
+        },
+      }],
+    }),
+    /properties are invalid/,
   )
 })
 
@@ -141,4 +187,94 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
       platform: 'windows',
     },
   ])
+
+
+  const productVisitorId = crypto.randomUUID()
+  const productSessionId = crypto.randomUUID()
+  const productEvents = [
+    {
+      event_id: crypto.randomUUID(),
+      event: 'page_view',
+      occurred_at: new Date().toISOString(),
+      visitor_id: productVisitorId,
+      session_id: productSessionId,
+      properties: { path: '/', referrer_host: 'www.google.com' },
+    },
+    {
+      event_id: crypto.randomUUID(),
+      event: 'dialog_created',
+      occurred_at: new Date().toISOString(),
+      visitor_id: productVisitorId,
+      session_id: productSessionId,
+      properties: {
+        path: '/',
+        message_count_bucket: '6-20',
+        participant_count_bucket: '2',
+      },
+    },
+    {
+      event_id: crypto.randomUUID(),
+      event: 'image_exported',
+      occurred_at: new Date().toISOString(),
+      visitor_id: productVisitorId,
+      session_id: productSessionId,
+      properties: {
+        path: '/',
+        capture_mode: 'standard',
+        message_count_bucket: '6-20',
+      },
+    },
+  ]
+  const productResponse = await fetch(`${baseUrl}/geod-telemetry/v1/product-events`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: 'https://gaopengbin.github.io',
+    },
+    body: JSON.stringify({
+      schema_version: 1,
+      product: 'wechat-dialog-generator',
+      events: productEvents,
+    }),
+  })
+  assert.equal(productResponse.status, 202)
+  assert.deepEqual(await productResponse.json(), { accepted: 3, inserted: 3 })
+  assert.equal(
+    productResponse.headers.get('access-control-allow-origin'),
+    'https://gaopengbin.github.io',
+  )
+
+  const rejectedOrigin = await fetch(`${baseUrl}/v1/product-events`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: 'https://example.com',
+    },
+    body: JSON.stringify({
+      schema_version: 1,
+      product: 'wechat-dialog-generator',
+      events: productEvents,
+    }),
+  })
+  assert.equal(rejectedOrigin.status, 403)
+
+  const productStatsResponse = await fetch(`${baseUrl}/admin/product-stats`, {
+    headers: { authorization: 'Bearer test-token' },
+  })
+  assert.equal(productStatsResponse.status, 200)
+  const productStats = await productStatsResponse.json()
+  const wechat = productStats.products.find(
+    (item) => item.product === 'wechat-dialog-generator',
+  )
+  assert.equal(wechat.visitors, 1)
+  assert.equal(wechat.funnel[0].event, 'page_view')
+  assert.equal(wechat.funnel[0].visitors, 1)
+  assert.equal(wechat.funnel[2].event, 'image_exported')
+  assert.equal(wechat.funnel[2].conversion_rate, 1)
+
+  const publicStatsResponse = await fetch(`${baseUrl}/geod-telemetry/public/product-stats`)
+  assert.equal(publicStatsResponse.status, 200)
+  assert.equal(publicStatsResponse.headers.get('access-control-allow-origin'), '*')
+  const publicStats = await publicStatsResponse.json()
+  assert.equal(publicStats.products[0].visitors, 1)
 })

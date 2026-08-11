@@ -4,6 +4,12 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import initSqlJs from 'sql.js'
+import {
+  initializeProductEvents,
+  insertProductEvents,
+  productStats,
+  validateProductEnvelope,
+} from './product-events.mjs'
 
 const SERVICE_ROOT = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -19,6 +25,10 @@ const EVENT_NAMES = new Set([
 const PLATFORMS = new Set(['windows', 'macos', 'linux', 'web', 'unknown'])
 const MODES = new Set(['imagery', 'dem', 'wayback', 'tiles3d', 'vector', 'mvt'])
 const SIDEBAR_TABS = new Set(['download', 'history', 'settings'])
+const PRODUCT_EVENT_ORIGINS = new Set([
+  'https://gaopengbin.github.io',
+  'https://geodownloader.pages.dev',
+])
 
 function envInteger(value, fallback, minimum, maximum) {
   const parsed = Number.parseInt(value ?? '', 10)
@@ -185,8 +195,8 @@ function sendError(response, status, message, code) {
   sendJson(response, status, { error: { code, message } })
 }
 
-function setCors(response) {
-  response.setHeader('access-control-allow-origin', '*')
+function setCors(response, origin = '*') {
+  response.setHeader('access-control-allow-origin', origin)
   response.setHeader('access-control-allow-headers', 'content-type')
   response.setHeader('access-control-allow-methods', 'POST, OPTIONS')
   response.setHeader('access-control-max-age', '86400')
@@ -252,6 +262,7 @@ async function createDatabase(databasePath) {
     CREATE INDEX IF NOT EXISTS events_install_idx ON events(install_id);
     CREATE INDEX IF NOT EXISTS events_name_idx ON events(event_name);
   `)
+  initializeProductEvents(database)
 
   await mkdir(path.dirname(databasePath), { recursive: true })
   let writeChain = Promise.resolve()
@@ -306,6 +317,18 @@ async function createDatabase(databasePath) {
       const operation = writeChain.then(() => insert(events))
       writeChain = operation.catch(() => {})
       return operation
+    },
+    insertProduct(events) {
+      const operation = writeChain.then(async () => {
+        const inserted = insertProductEvents(database, events)
+        await persist()
+        return inserted
+      })
+      writeChain = operation.catch(() => {})
+      return operation
+    },
+    productStats() {
+      return productStats(database)
     },
     stats() {
       const totals = queryRows(
@@ -641,15 +664,55 @@ export async function createTelemetryServer(options = {}) {
       return
     }
 
+    if (
+      request.method === 'GET' &&
+      ['/public/product-stats', '/geod-telemetry/public/product-stats'].includes(url.pathname)
+    ) {
+      setCors(response)
+      sendJson(response, 200, database.productStats())
+      return
+    }
+
+    if (
+      request.method === 'GET' &&
+      ['/admin/product-stats', '/geod-telemetry/admin/product-stats'].includes(url.pathname)
+    ) {
+      const token = await readAdminToken(config.adminTokenFile)
+      if (!token || request.headers.authorization !== `Bearer ${token}`) {
+        sendError(response, 401, 'unauthorized', 'unauthorized')
+        return
+      }
+      sendJson(response, 200, database.productStats())
+      return
+    }
+
     const isEventsPath = ['/v1/events', '/geod-telemetry/v1/events'].includes(url.pathname)
+    const isProductEventsPath = [
+      '/v1/product-events',
+      '/geod-telemetry/v1/product-events',
+    ].includes(url.pathname)
+    const productOrigin = typeof request.headers.origin === 'string'
+      ? request.headers.origin
+      : ''
     if (isEventsPath) setCors(response)
-    if (request.method === 'OPTIONS' && isEventsPath) {
+    if (isProductEventsPath && PRODUCT_EVENT_ORIGINS.has(productOrigin)) {
+      setCors(response, productOrigin)
+    }
+    if (request.method === 'OPTIONS' && (isEventsPath || isProductEventsPath)) {
+      if (isProductEventsPath && !PRODUCT_EVENT_ORIGINS.has(productOrigin)) {
+        sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
+        return
+      }
       response.writeHead(204)
       response.end()
       return
     }
-    if (request.method !== 'POST' || !isEventsPath) {
+    if (request.method !== 'POST' || (!isEventsPath && !isProductEventsPath)) {
       sendError(response, 404, 'not found', 'not_found')
+      return
+    }
+    if (isProductEventsPath && !PRODUCT_EVENT_ORIGINS.has(productOrigin)) {
+      sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
       return
     }
     if (!checkRateLimit(requestAddress(request))) {
@@ -658,8 +721,13 @@ export async function createTelemetryServer(options = {}) {
     }
 
     try {
-      const events = validateEnvelope(await readJsonBody(request, config.maxBodyBytes))
-      const inserted = await database.insert(events)
+      const body = await readJsonBody(request, config.maxBodyBytes)
+      const events = isProductEventsPath
+        ? validateProductEnvelope(body)
+        : validateEnvelope(body)
+      const inserted = isProductEventsPath
+        ? await database.insertProduct(events)
+        : await database.insert(events)
       sendJson(response, 202, { accepted: events.length, inserted })
     } catch (error) {
       sendError(

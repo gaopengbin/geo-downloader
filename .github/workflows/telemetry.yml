@@ -34,7 +34,7 @@ jobs:
             "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}" \
             "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\services\geod-telemetry' | Out-Null; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\tools' | Out-Null\""
 
-          for file in package.json package-lock.json server.mjs; do
+          for file in package.json package-lock.json server.mjs product-events.mjs; do
             sshpass -e scp -o StrictHostKeyChecking=no \
               "services/telemetry/$file" \
               "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}:/C:/nginx-1.30.2/services/geod-telemetry/$file"
@@ -60,3 +60,5 @@ jobs:
             https://laogao.xyz/geod-telemetry/health
           curl --fail --silent --show-error \
             https://laogao.xyz/geod-telemetry/admin/ > /dev/null
+          curl --fail --silent --show-error \
+            https://laogao.xyz/geod-telemetry/public/product-stats > /dev/null
