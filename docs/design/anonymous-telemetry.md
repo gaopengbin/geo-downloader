@@ -51,6 +51,20 @@ The production collector is deployed at:
 - Ingest: `https://laogao.xyz/geod-telemetry/v1/events`
 - Aggregate dashboard: `https://laogao.xyz/geod-telemetry/admin/`
 
+## First-party product events
+
+The same service also stores privacy-limited events for the public GeoD website
+and WeChat Dialog Generator in a separate `product_events` SQLite table.
+
+- Ingest: `https://laogao.xyz/geod-telemetry/v1/product-events`
+- Public aggregates: `https://laogao.xyz/geod-telemetry/public/product-stats`
+
+Web events use random browser-local visitor and session IDs. Only page paths,
+referrer host names, UTM attribution, download platform/version, message-count
+buckets, participant-count buckets, and export modes are accepted. Chat content,
+avatars, generated images, URLs with query strings, coordinates, source URLs,
+local paths, IP addresses, and downloaded content are never stored.
+
 It validates this schema, rejects unknown fields, rate-limits requests,
 deduplicates by `event_id`, and does not retain request IP addresses in the
 database or application logs. The dashboard exposes installs, DAU, MAU,

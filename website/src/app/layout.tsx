@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { DEFAULT_OG_IMAGE, SITE_URL, SITE_URL_OBJECT } from "@/lib/site";
+import { ProductPageView } from "@/app/_components/ProductAnalytics";
 
 export const metadata: Metadata = {
   applicationName: "GeoD",
@@ -49,6 +50,7 @@ export default function RootLayout({
         <meta name="theme-color" content="#2563eb" />
       </head>
       <body suppressHydrationWarning>
+        <ProductPageView />
         <div className="min-h-screen">{children}</div>
       </body>
     </html>
