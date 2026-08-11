@@ -108,8 +108,17 @@ impl TileDownloader {
     fn get_headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
 
-        // 随机 User-Agent
-        let ua = USER_AGENTS.choose(&mut rand::thread_rng()).unwrap();
+        let is_osm_standard = self.source.id == "osm"
+            && self.source.url.contains("tile.openstreetmap.org");
+        let ua = if is_osm_standard {
+            concat!(
+                "GeoD/",
+                env!("CARGO_PKG_VERSION"),
+                " (+https://geodownloader.pages.dev/; https://github.com/gaopengbin/geo-downloader/issues)"
+            )
+        } else {
+            USER_AGENTS.choose(&mut rand::thread_rng()).unwrap()
+        };
         headers.insert(
             reqwest::header::USER_AGENT,
             ua.parse().unwrap(),
@@ -121,14 +130,18 @@ impl TileDownloader {
         );
 
         // 设置 Referer
-        let referer = if self.source.url.contains("tianditu") {
-            "https://map.tianditu.gov.cn/"
+        let referer = if is_osm_standard {
+            None
+        } else if self.source.url.contains("tianditu") {
+            Some("https://map.tianditu.gov.cn/")
         } else if self.source.url.contains("arcgis") || self.source.url.contains("maptiles.arcgis.com") {
-            "https://livingatlas.arcgis.com/"
+            Some("https://livingatlas.arcgis.com/")
         } else {
-            "https://www.google.com/maps"
+            Some("https://www.google.com/maps")
         };
-        headers.insert(reqwest::header::REFERER, referer.parse().unwrap());
+        if let Some(referer) = referer {
+            headers.insert(reqwest::header::REFERER, referer.parse().unwrap());
+        }
 
         headers
     }
@@ -717,4 +730,32 @@ pub fn create_blank_tile() -> RgbImage {
         config::TILE_SIZE,
         image::Rgb([255, 255, 255]),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn osm_standard_requests_identify_geod_without_fake_referer() {
+        let source = config::get_tile_sources(None)
+            .remove("osm")
+            .expect("built-in OSM source");
+        assert_eq!(
+            source.url,
+            "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        );
+        assert!(source.subdomains.is_empty());
+        let downloader = TileDownloader::new(source, None).expect("downloader");
+        let headers = downloader.get_headers();
+
+        let user_agent = headers
+            .get(reqwest::header::USER_AGENT)
+            .expect("user-agent")
+            .to_str()
+            .expect("valid user-agent");
+        assert!(user_agent.starts_with("GeoD/"));
+        assert!(user_agent.contains("geodownloader.pages.dev"));
+        assert!(!headers.contains_key(reqwest::header::REFERER));
+    }
 }

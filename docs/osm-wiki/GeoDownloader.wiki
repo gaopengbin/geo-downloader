@@ -55,6 +55,8 @@ GeoD is not an OpenStreetMap editor and does not upload changes to the OpenStree
 
 The public OpenStreetMap Standard tile service must not be used for bulk downloading, prefetching or creating offline tile archives. Users who need offline raster data must use a self-hosted service or a provider whose terms explicitly permit that use. See the [[Tile usage policy]] and [https://www.openstreetmap.org/copyright OpenStreetMap copyright and licence] pages.
 
+GeoD uses the canonical <code>tile.openstreetmap.org</code> URL, displays linked attribution on the map, and leaves preview caching to the embedded browser. If a user attempts to create a raster download task with the built-in Standard source, the application presents the policy, recommends switching to an alternative, and requires an explicit decision before creating a task. Proceeding in the application does not grant permission from the service operator or override the tile usage policy.
+
 == Other features ==
 
 * Area selection by map drawing, place search, administrative region, GeoJSON, Shapefile, KML or KMZ

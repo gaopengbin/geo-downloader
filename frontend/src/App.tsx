@@ -27,6 +27,7 @@ import { MapCanvas } from '@/features/map/map-canvas'
 import { CesiumCanvas } from '@/features/map/cesium-canvas'
 import { WaybackTimeline } from '@/features/wayback/wayback-timeline'
 import { SettingsPanel } from '@/features/settings/settings-panel'
+import { OsmDownloadPolicyDialog } from '@/features/sources/osm-download-policy-dialog'
 import { TasksPanel } from '@/features/tasks/tasks-panel'
 import { HistoryPanel } from '@/features/history/history-panel'
 import { PanelSection } from '@/components/layout/panel-section'
@@ -323,6 +324,8 @@ function App() {
 
         {/* 全局：批量下载对话框 */}
         <BatchDialog />
+        {/* 全局：OSM Standard 下载政策确认 */}
+        <OsmDownloadPolicyDialog />
         {/* 全局：检查更新对话框 */}
         <UpdateDialog />
         {/* 全局：首次匿名统计授权 */}

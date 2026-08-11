@@ -5,7 +5,10 @@ GeoDownloader 数据源列表
 
 1. OpenStreetMap (OSM)
    - 最大层级：19
-   - 免费使用，需注明来源
+   - 内置 OpenStreetMap Standard 仅用于正常交互预览，并显示版权署名
+   - 公共标准瓦片服务不允许批量下载、预取或制作离线瓦片包
+   - 离线任务请使用自建服务，或选择明确允许下载的服务商
+   - 政策原文：https://operations.osmfoundation.org/policies/tiles/
 
 2. ArcGIS 系列
    - ArcGIS Satellite（卫星影像）：最大层级 19
@@ -56,4 +59,4 @@ GeoDownloader 数据源列表
 - 支持配置 API Key
 - 支持设置最大层级限制
 
-配置方式：设置页面 → 自定义数据源 → 添加
+配置方式：设置 → 其他 → 图源管理 → 自定义图源

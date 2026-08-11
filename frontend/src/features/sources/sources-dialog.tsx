@@ -33,6 +33,9 @@ import { useAssistantStore } from '@/features/assistant/assistant-store'
 import { getSettings, saveSettings } from '@/features/settings/settings-api'
 import { ASSISTANT_ACTION_EVENT } from '@/features/assistant/assistant-actions'
 import {
+  OSM_TILE_USAGE_POLICY_URL,
+} from '@/features/sources/osm-download-policy'
+import {
   analyzeTileSourceUrl,
   blankCustomSource,
   builtinToOverrideDraft,
@@ -650,6 +653,21 @@ export function SourcesDialog() {
             管理自定义图源、覆盖内置图源参数、设置默认图源。
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/25 bg-amber-500/8 p-3 text-xs leading-5 text-muted-foreground">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <p>
+            OpenStreetMap Standard 适合交互预览，不允许批量或离线瓦片下载。离线任务请优先配置自建服务，或选择明确允许下载的服务商。{' '}
+            <a
+              href={OSM_TILE_USAGE_POLICY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              查看 OSMF 政策
+            </a>
+          </p>
+        </div>
 
         {loading ? (
           <div className="flex items-center justify-center py-12 text-muted-foreground">

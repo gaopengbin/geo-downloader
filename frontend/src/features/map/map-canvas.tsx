@@ -31,6 +31,10 @@ import type { TileSource } from '@/types/api'
 import { createCachedTileLayer } from '@/features/map/cached-tile-layer'
 import { isMvtUrl } from '@/features/mvt/is-mvt-url'
 import { discoverLayers as discoverMvtLayers, buildStyle as buildMvtStyle } from '@/features/mvt/mvt-style'
+import {
+  OSM_COPYRIGHT_URL,
+  OSM_STANDARD_SOURCE_ID,
+} from '@/features/sources/osm-download-policy'
 
 // 修复 Leaflet 默认图标路径
 const iconRetinaUrl = new URL(
@@ -42,6 +46,16 @@ const shadowUrl = new URL('leaflet/dist/images/marker-shadow.png', import.meta.u
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 delete (L.Icon.Default.prototype as any)._getIconUrl
 L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl })
+
+const OSM_STANDARD_ATTRIBUTION = `&copy; <a href="${OSM_COPYRIGHT_URL}" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors`
+
+function isOsmStandardTileUrl(url: string): boolean {
+  try {
+    return new URL(url.replace('{s}.', '')).hostname === 'tile.openstreetmap.org'
+  } catch {
+    return false
+  }
+}
 
 // 修复 leaflet-draw 1.0.4 的 readableArea ReferenceError(type is not defined)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -545,8 +559,8 @@ export function MapCanvas() {
       restoredView?.zoom ?? 4,
     )
     // 占位底图，等图源列表加载后会切换
-    const fallback = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap',
+    const fallback = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: OSM_STANDARD_ATTRIBUTION,
       maxZoom: 19,
     }).addTo(map)
     baseLayersRef.current.set('__fallback', fallback)
@@ -896,14 +910,23 @@ export function MapCanvas() {
       // 跳过 MVT 矢量瓦片源：Leaflet 选区底图只能渲染光栅，请求 PBF 浪费带宽且会报 404
       if (isMvtUrl(c.url)) continue
       try {
-        const layer = createCachedTileLayer(c.url, {
-          sourceKey: key,
-          displayName: c.name ?? key,
-          urlTemplate: c.url,
-          attribution: c.attribution ?? '',
-          maxZoom: c.max_zoom ?? 22,
-          subdomains: c.subdomains ?? 'abc',
-        })
+        const isOsmStandard =
+          key === OSM_STANDARD_SOURCE_ID && isOsmStandardTileUrl(c.url)
+        // OSM Standard 仅用于交互预览，交给 WebView 的 HTTP 缓存处理，
+        // 避免写入 GeoD 的长期离线瓦片缓存。
+        const layer = isOsmStandard
+          ? L.tileLayer(c.url, {
+              attribution: OSM_STANDARD_ATTRIBUTION,
+              maxZoom: c.max_zoom ?? 19,
+            })
+          : createCachedTileLayer(c.url, {
+              sourceKey: key,
+              displayName: c.name ?? key,
+              urlTemplate: c.url,
+              attribution: c.attribution ?? '',
+              maxZoom: c.max_zoom ?? 22,
+              subdomains: c.subdomains ?? 'abc',
+            })
         cache.set(key, layer)
       } catch {
         // skip bad url

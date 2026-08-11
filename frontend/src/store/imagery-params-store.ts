@@ -9,6 +9,7 @@ export type ImageryMode = 'imagery' | 'dem' | 'mvt'
 export interface ImageryParamsSnapshot {
   source: string
   sourceName: string
+  sourceUrl: string
   zoom: number
   zoomMax: number | null
   format: OutputFormat
@@ -37,6 +38,7 @@ export const useImageryParamsStore = create<ImageryParamsState>()(
     (set) => ({
       source: '',
       sourceName: '',
+      sourceUrl: '',
       zoom: 15,
       zoomMax: null,
       format: 'geotiff' as OutputFormat,

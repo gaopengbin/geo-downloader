@@ -50,6 +50,15 @@ export default function DisclaimerPage() {
           <p>
             特别说明：OpenStreetMap 官方公共标准瓦片服务主要用于正常的交互式地图浏览，
             <strong>不适合作为批量或离线下载源</strong>。建议优先使用自建瓦片服务，或选择明确允许离线使用的服务商。
+            具体要求请查看{' '}
+            <a
+              href="https://operations.osmfoundation.org/policies/tiles/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              OSMF Tile Usage Policy
+            </a>
+            。
             如仍使用第三方公共服务，请先阅读其
             {" "}
             <a

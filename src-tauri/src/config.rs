@@ -109,11 +109,8 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
         TileSource {
             id: "osm".to_string(),
             name: "OpenStreetMap".to_string(),
-            url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
-            subdomains: vec!["a", "b", "c"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
+            url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
+            subdomains: vec![],
             max_zoom: 19,
             attribution: "© OpenStreetMap contributors".to_string(),
         },

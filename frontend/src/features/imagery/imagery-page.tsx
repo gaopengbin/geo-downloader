@@ -29,6 +29,10 @@ import {
 import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import {
+  focusImagerySourcePicker,
+  requestOsmDownloadApproval,
+} from '@/features/sources/osm-download-policy'
 import { isMvtUrl } from '@/features/mvt/is-mvt-url'
 import { useSelectionStore, type MapBounds } from '@/store/selection-store'
 import { useMultiFeatureSubmit } from '@/features/region/use-multi-feature-submit'
@@ -470,6 +474,15 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       const { bounds, polygon } = useSelectionStore.getState()
       if (!bounds) throw new Error('请先在地图上绘制选区')
       const sourceMeta = sourcesQuery.data?.[values.source]
+      const policyDecision = await requestOsmDownloadApproval(
+        values.source,
+        sourceMeta?.url,
+      )
+      if (policyDecision === 'switch') {
+        focusImagerySourcePicker()
+        throw new Error('__user_cancelled__')
+      }
+      if (policyDecision === 'cancel') throw new Error('__user_cancelled__')
       const levels = [...values.zoom_levels].sort((a, b) => a - b)
       const zMin = levels[0]
       const zMax = levels[levels.length - 1]
@@ -663,11 +676,14 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   // 同步影像下载参数到全局 store，供批量下载对话框读取
   const sourceMetaName =
     sourceList.find((s) => s.key === source)?.name ?? source
+  const sourceMetaUrl =
+    sourceList.find((s) => s.key === source)?.url ?? ''
   useEffect(() => {
     if (isDemMode || isMvtMode) return
     useImageryParamsStore.getState().set({
       source,
       sourceName: sourceMetaName,
+      sourceUrl: sourceMetaUrl,
       zoom,
       zoomMax: zoomMax > zoom ? zoomMax : null,
       format: format as OutputFormat,
@@ -681,6 +697,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     isMvtMode,
     source,
     sourceMetaName,
+    sourceMetaUrl,
     zoom,
     zoomMax,
     format,
@@ -760,7 +777,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             }}
             disabled={sourcesLoading}
           >
-            <SelectTrigger>
+            <SelectTrigger data-agent-target="imagery-source-select">
               <SelectValue placeholder={sourcesLoading ? '加载中...' : '请选择'} />
             </SelectTrigger>
             <SelectContent>

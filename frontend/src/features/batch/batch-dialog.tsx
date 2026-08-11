@@ -28,6 +28,10 @@ import { useSelectionStore } from '@/store/selection-store'
 import { createDownloadTask } from '@/features/download/download-api'
 import { getSettings } from '@/features/settings/settings-api'
 import {
+  focusImagerySourcePicker,
+  requestOsmDownloadApproval,
+} from '@/features/sources/osm-download-policy'
+import {
   bboxAreaKm2,
   collectPropertyKeys,
   deduplicateFilenames,
@@ -117,6 +121,19 @@ export function BatchDialog() {
       toast.error('请先在影像下载面板选择图源与参数')
       return
     }
+
+    const policyDecision = await requestOsmDownloadApproval(
+      params.source,
+      params.sourceUrl,
+    )
+    if (policyDecision === 'switch') {
+      close()
+      useAppStore.getState().setMode('imagery')
+      useAppStore.getState().setTab('download')
+      focusImagerySourcePicker()
+      return
+    }
+    if (policyDecision === 'cancel') return
 
     let dir: string | null = null
     try {
