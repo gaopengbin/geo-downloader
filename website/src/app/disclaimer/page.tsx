@@ -58,17 +58,7 @@ export default function DisclaimerPage() {
             >
               OSMF Tile Usage Policy
             </a>
-            。
-            如仍使用第三方公共服务，请先阅读其
-            {" "}
-            <a
-              href="https://operations.osmfoundation.org/policies/tiles/"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Tile Usage Policy
-            </a>
-            ，确认授权、署名、缓存和访问频率要求后再继续。
+            。如使用其他第三方公共服务，请另行阅读对应服务商的使用条款，确认授权、署名、缓存和访问频率要求后再继续。
           </p>
 
           <h2>三、版权归属</h2>
