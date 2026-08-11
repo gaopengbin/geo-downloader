@@ -4,6 +4,10 @@
 </h1>
 
 <p align="center">
+  <b>简体中文</b> · <a href="README_EN.md">English</a>
+</p>
+
+<p align="center">
   <a href="https://geodownloader.pages.dev"><b>官网</b></a> ·
   <a href="https://github.com/gaopengbin/geo-downloader/releases/latest"><b>下载安装</b></a> ·
   <a href="https://github.com/gaopengbin/geo-downloader/discussions"><b>Discussions</b></a> ·
@@ -26,9 +30,9 @@
   <img src="https://img.shields.io/badge/rust-1.77+-orange?logo=rust" alt="Rust">
 </p>
 
-**GeoD** is a free and open-source desktop tool for browsing and downloading geospatial data from OpenStreetMap, XYZ tile services and other user-authorized sources. It exports GeoTIFF and other local formats on Windows, macOS and Linux.
+**GeoD** is a free and open-source desktop tool for browsing OpenStreetMap layers, downloading OSM vector features through Overpass, and exporting data from user-authorized XYZ tile services. It runs on Windows, macOS and Linux.
 
-GeoD 是一款免费开源的跨平台地理空间数据下载工具，支持浏览和下载 OpenStreetMap、XYZ 瓦片服务及其他由用户合法授权的数据源，并导出 GeoTIFF 等本地格式。
+GeoD 是一款免费开源的跨平台地理空间数据工具，支持浏览 OpenStreetMap 底图、通过 Overpass 下载 OSM 矢量要素，以及从用户合法授权的 XYZ 瓦片服务导出 GeoTIFF 等本地格式。
 
 > **使用提示**：本工具是基于开源协议发布的桌面客户端，**不内置任何地图数据**。所有数据来自使用者自行配置的第三方服务，**请自行获取合法授权并遵守相关条款与法规**。下载所得数据版权归原数据方所有。详见 [使用条款与免责声明](https://geodownloader.pages.dev/disclaimer.html)。
 
@@ -55,12 +59,14 @@ GeoD 是一款免费开源的跨平台地理空间数据下载工具，支持浏
 ## 功能总览
 
 ### 影像瓦片下载
-- 内置 OpenStreetMap（OSM）、ArcGIS 卫星/地形/街道、天地图、Carto、Google、高德、OpenTopoMap 等数十个图源
+- 内置 OpenStreetMap（OSM）标准底图用于交互预览，并提供 ArcGIS、天地图、Carto、高德等图源配置
 - 支持自定义任意 `{z}/{x}/{y}` 模板，可配置 Subdomains、Referer、API Key
 - 多任务并行 + 可调并发（10–100），实时进度
 - 缩放级别区间下载，自动按图源最大级别约束
 - 导出 GeoTIFF（带地理坐标，可选 LZW / Deflate 压缩）/ PNG / JPEG
 - 按多边形边界裁剪（透明背景）
+
+> OpenStreetMap 标准瓦片服务器不允许批量抓取、预取或离线下载。此类任务请使用自建服务，或选择明确允许下载和离线使用的服务商。详见 [OSMF Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/)；使用 OSM 数据时还须遵守 [ODbL 与署名要求](https://www.openstreetmap.org/copyright)。
 
 ### 矢量瓦片
 - MapboxVector / Mapbox GL Style 数据源

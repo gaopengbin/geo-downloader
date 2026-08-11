@@ -1,0 +1,80 @@
+<!--
+Draft source for https://wiki.openstreetmap.org/wiki/GeoDownloader
+Prepared from the current GeoD repository metadata. Publish only after reviewing
+the rendered preview on the OpenStreetMap Wiki.
+-->
+{{Software
+| name         = GeoD (GeoDownloader)
+| author       = gaopengbin and contributors
+| license      = MIT
+| price        = gratis
+| platform     = Windows;MacOS;Linux
+| status       = active
+| version      = 3.6.7
+| date         = 2026-08-10
+| languages    = zh-hans
+| web          = https://geodownloader.pages.dev/
+| repo         = https://github.com/gaopengbin/geo-downloader
+| code         = Rust;TypeScript
+| framework    = Tauri;React
+| description  = Free and open-source desktop application for viewing map layers, exporting selected OpenStreetMap features through Overpass, and processing user-authorized raster and vector tile sources for GIS workflows.
+| genre        = display;converter
+| coverage     = Worldwide
+| map          = yes
+| mapData      = raster;vector
+| datasource   = online;cache
+| rotateMap    = no
+| 3D           = yes
+| routing      = no
+| navigating   = no
+| tracking     = no
+| monitoring   = no
+| addPOI       = no
+| editPOI      = no
+| addWay       = no
+| editGeom     = no
+| editTags     = no
+| editRelations = no
+| viewNotes    = no
+| createNotes  = no
+| editNotes    = no
+| uploadOSMData = no
+| rendererOutputFormats = GeoTIFF;PNG;JPEG;GeoJSON
+}}
+
+'''GeoD''', whose technical package name is '''GeoDownloader''', is a free and open-source desktop application for Windows, macOS and Linux. It is designed for selecting geographic areas, viewing map layers, exporting geospatial data, and managing resumable download tasks.
+
+== OpenStreetMap support ==
+
+GeoD uses OpenStreetMap in two separate workflows:
+
+* It displays OpenStreetMap Standard raster tiles as an interactive basemap.
+* It queries selected roads, buildings, points of interest, land-use features and waterways through an [[Overpass API]] endpoint, then converts the response to GeoJSON.
+
+GeoD is not an OpenStreetMap editor and does not upload changes to the OpenStreetMap database.
+
+The public OpenStreetMap Standard tile service must not be used for bulk downloading, prefetching or creating offline tile archives. Users who need offline raster data must use a self-hosted service or a provider whose terms explicitly permit that use. See the [[Tile usage policy]] and [https://www.openstreetmap.org/copyright OpenStreetMap copyright and licence] pages.
+
+== Other features ==
+
+* Area selection by map drawing, place search, administrative region, GeoJSON, Shapefile, KML or KMZ
+* User-defined XYZ raster tile sources and Mapbox Vector Tile sources
+* GeoTIFF, PNG and JPEG raster export with optional polygon clipping
+* Esri Wayback imagery browsing
+* DEM and 3D Tiles workflows
+* Persistent task history, pause/resume support and a movable local tile cache
+
+== Development ==
+
+The application is built with Rust, Tauri, React and TypeScript. Source code, issue tracking and release packages are available from the [https://github.com/gaopengbin/geo-downloader GitHub repository].
+
+GeoD is an independent community project and is not affiliated with or endorsed by the OpenStreetMap Foundation.
+
+== See also ==
+
+* [[Downloading data]]
+* [[Overpass API]]
+* [[Tile usage policy]]
+
+[[Category:Software]]
+[[Category:GIS software]]
