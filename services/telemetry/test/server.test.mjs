@@ -229,7 +229,7 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      origin: 'https://gaopengbin.github.io',
+      origin: 'https://chat.laogao.xyz',
     },
     body: JSON.stringify({
       schema_version: 1,
@@ -241,7 +241,21 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   assert.deepEqual(await productResponse.json(), { accepted: 3, inserted: 3 })
   assert.equal(
     productResponse.headers.get('access-control-allow-origin'),
-    'https://gaopengbin.github.io',
+    'https://chat.laogao.xyz',
+  )
+
+  const productPreflight = await fetch(`${baseUrl}/v1/product-events`, {
+    method: 'OPTIONS',
+    headers: {
+      origin: 'https://chat.laogao.xyz',
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'content-type',
+    },
+  })
+  assert.equal(productPreflight.status, 204)
+  assert.equal(
+    productPreflight.headers.get('access-control-allow-origin'),
+    'https://chat.laogao.xyz',
   )
 
   const rejectedOrigin = await fetch(`${baseUrl}/v1/product-events`, {
