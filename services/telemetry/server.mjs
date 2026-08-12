@@ -36,6 +36,7 @@ const PRODUCT_EVENT_ORIGINS = new Set([
   'https://gaopengbin.github.io',
   'https://chat.laogao.xyz',
   'https://geodownloader.pages.dev',
+  'https://wallpaper.gpb.cc',
 ])
 const COUNT_BUCKETS = new Set(['0', '1', '2-10', '11-100', '100+'])
 const SELECTION_METHODS = new Set([
