@@ -1,5 +1,6 @@
 import type { Feature } from 'geojson'
 import type { Bounds, Polygon } from '@/types/api'
+import { extractAreaGeometry, outerRingsFromAreaGeometry } from '@/lib/geo-area'
 
 /** 清理文件名（移除 Windows/Mac/Linux 禁用字符） */
 export function sanitizeFilename(name: unknown, fallbackIndex: number): string {
@@ -44,10 +45,10 @@ export function collectPropertyKeys(features: Feature[]): string[] {
   return keys
 }
 
-/** 计算 Feature 的 bbox（仅支持 Polygon / MultiPolygon） */
+/** 计算 Feature 中所有面几何的 bbox。 */
 export function featureBbox(feature: Feature): Bounds | null {
   const coords: number[][] = []
-  const geom = feature.geometry
+  const geom = extractAreaGeometry(feature.geometry)
   if (!geom) return null
   if (geom.type === 'Polygon') {
     geom.coordinates.forEach((ring) => ring.forEach((c) => coords.push(c)))
@@ -77,16 +78,9 @@ export function bboxAreaKm2(b: Bounds): number {
 
 /** 提取 Feature 的多边形坐标（用于 crop_to_shape） */
 export function extractFeaturePolygon(feature: Feature): Polygon | null {
-  const rings: number[][][] = []
-  const geom = feature.geometry
+  const geom = extractAreaGeometry(feature.geometry)
   if (!geom) return null
-  if (geom.type === 'Polygon') {
-    rings.push(geom.coordinates[0])
-  } else if (geom.type === 'MultiPolygon') {
-    for (const poly of geom.coordinates) rings.push(poly[0])
-  } else {
-    return null
-  }
+  const rings = outerRingsFromAreaGeometry(geom)
   if (rings.length === 0) return null
   return rings.map((ring) => ring.map((c) => ({ lat: c[1], lng: c[0] })))
 }

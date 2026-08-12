@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, MapPin, Search, Upload, X } from 'lucide-react'
 import { toast } from 'sonner'
-import type { Feature, FeatureCollection, GeoJsonObject } from 'geojson'
+import type { Feature, GeoJsonObject } from 'geojson'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,6 +21,11 @@ import {
   REGION_FILE_ACCEPT_ATTR,
   UnsupportedRegionFileError,
 } from '@/lib/geo-import'
+import {
+  extractAreaFeatures,
+  outerRingsFromAreaGeometry,
+  regionAreaErrorMessage,
+} from '@/lib/geo-area'
 import { RegionImportDialog } from './region-import-dialog'
 import {
   geocodeSearch,
@@ -35,26 +40,11 @@ import { useAppStore } from '@/store/app-store'
 import { getSettings } from '@/features/settings/settings-api'
 
 function ringsFromGeoJSON(geojson: GeoJsonObject): LatLngRing[] {
-  const rings: LatLngRing[] = []
-  const handle = (geom: Feature['geometry'] | null | undefined) => {
-    if (!geom) return
-    if (geom.type === 'Polygon') {
-      rings.push(geom.coordinates[0].map((c) => ({ lat: c[1], lng: c[0] })))
-    } else if (geom.type === 'MultiPolygon') {
-      for (const poly of geom.coordinates) {
-        rings.push(poly[0].map((c) => ({ lat: c[1], lng: c[0] })))
-      }
-    }
-  }
-  const obj = geojson as FeatureCollection | Feature | GeoJsonObject
-  if ((obj as FeatureCollection).type === 'FeatureCollection') {
-    for (const f of (obj as FeatureCollection).features) handle(f.geometry)
-  } else if ((obj as Feature).type === 'Feature') {
-    handle((obj as Feature).geometry)
-  } else {
-    handle(geojson as Feature['geometry'])
-  }
-  return rings
+  return extractAreaFeatures(geojson).flatMap((feature) =>
+    outerRingsFromAreaGeometry(feature.geometry).map((ring) =>
+      ring.map((coordinate) => ({ lat: coordinate[1], lng: coordinate[0] })),
+    ),
+  )
 }
 
 function boundsFromRings(rings: LatLngRing[]): MapBounds | null {
@@ -255,26 +245,16 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         }
         throw e
       }
-      const rings = ringsFromGeoJSON(geojson)
-      if (rings.length === 0) {
-        toast.error('文件中未发现 Polygon / MultiPolygon')
+      const areaFeatures = extractAreaFeatures(geojson)
+      if (areaFeatures.length === 0) {
+        toast.error(regionAreaErrorMessage(geojson))
         return
       }
-
-      // 收集可选要素：仅保留 Polygon / MultiPolygon 类型
-      const fc = geojson as FeatureCollection
-      const allFeatures: Feature[] =
-        fc.type === 'FeatureCollection'
-          ? (fc.features ?? []).filter(
-              (f) =>
-                f.geometry?.type === 'Polygon' ||
-                f.geometry?.type === 'MultiPolygon',
-            )
-          : []
+      const rings = ringsFromGeoJSON(geojson)
 
       // 多要素 → 弹出选择对话框（仅选范围，不触发下载）
-      if (allFeatures.length > 1) {
-        setImportDialog({ features: allFeatures, filename: file.name })
+      if (areaFeatures.length > 1) {
+        setImportDialog({ features: areaFeatures, filename: file.name })
         return
       }
 
@@ -436,7 +416,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
           variant="outline"
           size="sm"
           onClick={() => fileRef.current?.click()}
-          title="上传 GeoJSON / Shapefile / KML・KMZ"
+          title="上传 GeoJSON / Shapefile / KML / KMZ"
         >
           <Upload className="mr-1 size-3.5" />
           上传

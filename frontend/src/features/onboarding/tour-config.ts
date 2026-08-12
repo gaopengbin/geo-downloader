@@ -61,7 +61,7 @@ export const MAIN_TOUR_STEPS: DriveStep[] = [
     popover: {
       title: '④ 地图选区',
       description:
-        '在地图上拖拽矩形或绘制多边形圈定下载范围；也可以从「批量下载」导入 Shapefile / GeoJSON。',
+        '在地图上拖拽矩形或绘制多边形圈定下载范围；也可以导入 GeoJSON、Shapefile、KML 或 KMZ 边界。',
       side: 'left',
       align: 'center',
     },
@@ -110,7 +110,7 @@ export const IMAGERY_TOUR_STEPS: DriveStep[] = [
     element: '[data-tour="map-canvas"]',
     popover: {
       title: '① 在地图上选区',
-      description: '使用矩形或多边形工具圈定下载范围；也可以从「批量下载」导入 Shapefile / GeoJSON。',
+      description: '使用矩形或多边形工具圈定下载范围；也可以导入 GeoJSON、Shapefile、KML 或 KMZ 边界。',
       side: 'left',
       align: 'center',
     },
