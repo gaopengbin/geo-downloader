@@ -169,8 +169,8 @@ export function VectorPanel() {
   }
 
   return (
-    <PanelSection icon={Download} title="矢量数据" description="OSM / 边界 / 本地导入">
-      <div className="space-y-1.5">
+    <PanelSection icon={Download} title="矢量数据" description="OSM / 边界 / 本地导入" dataTour="osm-panel">
+      <div className="space-y-1.5" data-tour="osm-feature-type">
         <Label className="text-xs uppercase tracking-wider text-muted-foreground">OSM 要素类型</Label>
         <Select value={featureType} onValueChange={(v) => setFeatureType(v as FeatureType)}>
           <SelectTrigger>
@@ -198,7 +198,7 @@ export function VectorPanel() {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-2" data-tour="osm-download-actions">
         <Button
           size="sm"
           variant="outline"

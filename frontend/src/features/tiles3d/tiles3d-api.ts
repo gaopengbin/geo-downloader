@@ -1,4 +1,5 @@
 import { invokeCommand } from '@/lib/tauri'
+import { telemetryCountBucket, trackTelemetry } from '@/features/telemetry/telemetry-client'
 import type {
   CreateTaskResult,
   Nullable,
@@ -25,7 +26,15 @@ export function estimate3dTiles(
 }
 
 export function create3dTilesTask(request: Tiles3dTaskRequest, taskName: string) {
-  return invokeCommand<CreateTaskResult>('create_3dtiles_task', { request, taskName })
+  return invokeCommand<CreateTaskResult>('create_3dtiles_task', { request, taskName }).then((result) => {
+    void trackTelemetry('download_task_created', {
+      workflow: 'tiles3d',
+      output_format: 'unknown',
+      zoom_count: telemetryCountBucket(0),
+      selection: request.polygon?.length ? 'polygon' : 'bounds',
+    })
+    return result
+  })
 }
 
 export function startTileProxy(

@@ -1,4 +1,5 @@
 import { invokeCommand } from '@/lib/tauri'
+import { telemetryCountBucket, trackTelemetry } from '@/features/telemetry/telemetry-client'
 import type { Bounds, CreateTaskResult, Nullable, PolygonCoord } from '@/types/api'
 
 export function createOsmDownloadTask(
@@ -16,6 +17,14 @@ export function createOsmDownloadTask(
     proxy: proxy || null,
     polygon: polygon || null,
     taskName,
+  }).then((result) => {
+    void trackTelemetry('download_task_created', {
+      workflow: 'osm',
+      output_format: 'unknown',
+      zoom_count: telemetryCountBucket(0),
+      selection: polygon?.length ? 'polygon' : 'bounds',
+    })
+    return result
   })
 }
 

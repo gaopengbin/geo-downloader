@@ -5,7 +5,7 @@ import { createSafeJSONStorage } from '@/store/persist-storage'
 
 export type TelemetryConsent = 'pending' | 'enabled' | 'disabled'
 
-export const TELEMETRY_NOTICE_VERSION = 1
+export const TELEMETRY_NOTICE_VERSION = 2
 
 interface TelemetryState {
   consent: TelemetryConsent

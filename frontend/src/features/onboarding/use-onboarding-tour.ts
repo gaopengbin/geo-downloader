@@ -3,6 +3,7 @@ import { driver, type Driver, type DriveStep } from 'driver.js'
 import 'driver.js/dist/driver.css'
 
 import { MAIN_TOUR_STEPS, TOUR_STORAGE_KEY, TOUR_VERSION } from './tour-config'
+import { trackTelemetry, type TelemetryTour } from '@/features/telemetry/telemetry-client'
 
 type SeenMap = Record<string, number>
 
@@ -47,6 +48,7 @@ export function useOnboardingTour(options: UseOnboardingTourOptions) {
   const { id, steps = MAIN_TOUR_STEPS, autoStartOnFirstVisit = true, autoStartDelayMs = 600 } = options
   const driverRef = useRef<Driver | null>(null)
   const startedRef = useRef(false)
+  const telemetryTour = id.replace(/-v\d+$/, '').replaceAll('-', '_') as TelemetryTour
 
   const buildDriver = useCallback((): Driver => {
     // 过滤掉指向不存在元素的步骤（条件跳过），避免出现"指向虚空"的居中弹窗
@@ -74,6 +76,10 @@ export function useOnboardingTour(options: UseOnboardingTourOptions) {
       prevBtnText: '上一步',
       doneBtnText: '完成',
       onDestroyStarted: () => {
+        void trackTelemetry('onboarding_event', {
+          tour: telemetryTour,
+          action: d.hasNextStep() ? 'dismissed' : 'completed',
+        })
         const seen = readSeen()
         seen[id] = TOUR_VERSION
         writeSeen(seen)
@@ -87,7 +93,7 @@ export function useOnboardingTour(options: UseOnboardingTourOptions) {
     })
     driverRef.current = d
     return d
-  }, [id, steps])
+  }, [id, steps, telemetryTour])
 
   const start = useCallback(() => {
     // 每次启动重建实例，确保步骤过滤反映当前 DOM 状态
@@ -96,8 +102,9 @@ export function useOnboardingTour(options: UseOnboardingTourOptions) {
       driverRef.current = null
     }
     const d = buildDriver()
+    void trackTelemetry('onboarding_event', { tour: telemetryTour, action: 'started' })
     d.drive()
-  }, [buildDriver])
+  }, [buildDriver, telemetryTour])
 
   const reset = useCallback(() => {
     const seen = readSeen()

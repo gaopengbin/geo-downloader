@@ -44,8 +44,9 @@ export function TelemetryConsentDialog({
             </div>
             <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
               <li>随机生成的匿名安装标识、应用版本和操作系统类型。</li>
-              <li>应用启动以及 GeoTIFF、DEM、Wayback 等功能入口的使用情况。</li>
-              <li>经纬网等功能是否启用，不包含具体地图内容。</li>
+              <li>应用启动、功能模式、下载任务创建和任务操作的使用情况。</li>
+              <li>范围选择方式、导入结果、书签、量测和新手引导等功能事件。</li>
+              <li>数量仅按区间统计，不上传具体地图内容或业务数据。</li>
             </ul>
           </section>
 

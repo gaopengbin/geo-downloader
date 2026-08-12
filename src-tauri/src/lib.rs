@@ -24,6 +24,7 @@ pub mod tile_pack;
 pub mod cache_migration;
 pub mod source_analyzer;
 pub mod assistant;
+pub mod region_bookmarks;
 
 // Tauri commands
 mod commands;
@@ -118,6 +119,11 @@ pub fn run() {
             commands::get_districts,
             commands::get_admin_boundary,
             commands::geocode_search,
+            // 下载范围书签
+            commands::list_region_bookmarks,
+            commands::create_region_bookmark,
+            commands::rename_region_bookmark,
+            commands::delete_region_bookmark,
             // 历史记录
             commands::get_download_history,
             commands::add_download_record,

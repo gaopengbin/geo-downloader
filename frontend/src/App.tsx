@@ -13,7 +13,11 @@ import { useTelemetryStore } from '@/features/telemetry/telemetry-store'
 import { HelpButton } from '@/features/onboarding/help-button'
 import { useOnboardingTour } from '@/features/onboarding/use-onboarding-tour'
 import {
+  DOWNLOAD_CENTER_TOUR_STEPS,
   IMAGERY_TOUR_STEPS,
+  MVT_TOUR_STEPS,
+  OSM_TOUR_STEPS,
+  REGION_TOUR_STEPS,
   TILES3D_TOUR_STEPS,
   WAYBACK_TOUR_STEPS,
 } from '@/features/onboarding/tour-config'
@@ -173,35 +177,57 @@ function App() {
 
   // 首次打开主界面的新手引导
   const mainTour = useOnboardingTour({
-    id: 'main-v1',
+    id: 'main-v2',
     autoStartOnFirstVisit: telemetryConsent !== 'pending',
   })
-  // 三个模式的详细引导（手动启动，不自动弹出）
+  // 专项引导手动启动，不自动打扰用户。
+  const regionTour = useOnboardingTour({
+    id: 'region-v2',
+    steps: REGION_TOUR_STEPS,
+    autoStartOnFirstVisit: false,
+  })
+  const downloadCenterTour = useOnboardingTour({
+    id: 'download-center-v2',
+    steps: DOWNLOAD_CENTER_TOUR_STEPS,
+    autoStartOnFirstVisit: false,
+  })
   const imageryTour = useOnboardingTour({
-    id: 'imagery-v1',
+    id: 'imagery-v2',
     steps: IMAGERY_TOUR_STEPS,
     autoStartOnFirstVisit: false,
   })
+  const mvtTour = useOnboardingTour({
+    id: 'mvt-v2',
+    steps: MVT_TOUR_STEPS,
+    autoStartOnFirstVisit: false,
+  })
+  const osmTour = useOnboardingTour({
+    id: 'osm-v2',
+    steps: OSM_TOUR_STEPS,
+    autoStartOnFirstVisit: false,
+  })
   const tiles3dTour = useOnboardingTour({
-    id: 'tiles3d-v1',
+    id: 'tiles3d-v2',
     steps: TILES3D_TOUR_STEPS,
     autoStartOnFirstVisit: false,
   })
   const waybackTour = useOnboardingTour({
-    id: 'wayback-v1',
+    id: 'wayback-v2',
     steps: WAYBACK_TOUR_STEPS,
     autoStartOnFirstVisit: false,
   })
 
-  // 切换模式后等待 DOM 挂载再启动对应引导
-  const startTourForMode = (target: AppMode, runner: () => void) => {
-    if (mode !== target) {
-      setMode(target)
-      // 错开一个 tick，让面板完成重渲染
-      window.setTimeout(runner, 200)
-    } else {
-      runner()
-    }
+  // 先切到目标上下文，再启动引导，避免 driver.js 指向仍挂载但被隐藏的面板。
+  const startTourInContext = (
+    runner: () => void,
+    context: { mode?: AppMode; tab?: SidebarTab },
+  ) => {
+    const needsModeChange = context.mode !== undefined && mode !== context.mode
+    const needsTabChange = context.tab !== undefined && tab !== context.tab
+    if (needsModeChange && context.mode) setMode(context.mode)
+    if (needsTabChange && context.tab) setTab(context.tab)
+    if (needsModeChange || needsTabChange) window.setTimeout(runner, 250)
+    else runner()
   }
 
   const currentMode = MODES.find((m) => m.value === mode) ?? MODES[0]
@@ -241,9 +267,27 @@ function App() {
           <AssistantButton />
           <HelpButton
             onStartMain={mainTour.start}
-            onStartImagery={() => startTourForMode('imagery', imageryTour.start)}
-            onStartTiles3d={() => startTourForMode('tiles3d', tiles3dTour.start)}
-            onStartWayback={() => startTourForMode('wayback', waybackTour.start)}
+            onStartRegion={() =>
+              startTourInContext(regionTour.start, { mode: 'imagery', tab: 'download' })
+            }
+            onStartDownloadCenter={() =>
+              startTourInContext(downloadCenterTour.start, { tab: 'history' })
+            }
+            onStartImagery={() =>
+              startTourInContext(imageryTour.start, { mode: 'imagery', tab: 'download' })
+            }
+            onStartMvt={() =>
+              startTourInContext(mvtTour.start, { mode: 'mvt', tab: 'download' })
+            }
+            onStartOsm={() =>
+              startTourInContext(osmTour.start, { mode: 'vector', tab: 'download' })
+            }
+            onStartTiles3d={() =>
+              startTourInContext(tiles3dTour.start, { mode: 'tiles3d', tab: 'download' })
+            }
+            onStartWayback={() =>
+              startTourInContext(waybackTour.start, { mode: 'wayback', tab: 'download' })
+            }
           />
         </>
       }
@@ -268,7 +312,13 @@ function App() {
                   key={t.value}
                   type="button"
                   onClick={() => setTab(t.value)}
-                  data-tour={t.value === 'settings' ? 'settings-tab' : undefined}
+                  data-tour={
+                    t.value === 'settings'
+                      ? 'settings-tab'
+                      : t.value === 'history'
+                        ? 'history-tab'
+                        : undefined
+                  }
                   className={cn(
                     'relative flex flex-1 items-center justify-center gap-1.5 px-2 py-2.5 text-xs font-medium transition-colors',
                     active
@@ -308,11 +358,12 @@ function App() {
             <div
               className={tab === 'history' ? 'space-y-3 p-3' : 'hidden'}
               data-agent-target="download-center"
+              data-tour="download-center"
             >
-              <PanelSection icon={ClipboardList} title="任务" description="进行中 / 暂停 / 可恢复">
+              <PanelSection icon={ClipboardList} title="任务" description="进行中 / 暂停 / 可恢复" dataTour="active-tasks-section">
                 <TasksPanel />
               </PanelSection>
-              <PanelSection icon={HistoryIcon} title="历史记录" description="已完成 / 失败 / 已删除">
+              <PanelSection icon={HistoryIcon} title="历史记录" description="已完成 / 失败 / 已删除" dataTour="history-section">
                 <HistoryPanel />
               </PanelSection>
             </div>

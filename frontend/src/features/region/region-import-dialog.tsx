@@ -25,6 +25,11 @@ import {
   featureBbox,
   recommendNameField,
 } from '@/features/batch/batch-utils'
+import {
+  telemetryCountBucket,
+  telemetryImportFormat,
+  trackTelemetry,
+} from '@/features/telemetry/telemetry-client'
 
 const INDEX_FIELD = '__index__'
 
@@ -134,6 +139,16 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
       bounds: { north: n, south: s, east: e, west: w },
       polygon: allRings,
       features: importedFeatures.length > 1 ? importedFeatures : null,
+    })
+    void trackTelemetry('region_imported', {
+      format: telemetryImportFormat(filename),
+      outcome: 'success',
+      feature_count: telemetryCountBucket(importedFeatures.length),
+    })
+    void trackTelemetry('selection_changed', {
+      method: 'import',
+      geometry: 'polygon',
+      complexity: telemetryCountBucket(allRings.reduce((total, ring) => total + ring.length, 0)),
     })
     onClose()
   }

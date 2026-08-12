@@ -11,6 +11,9 @@ use crate::streaming_raster;
 use crate::pyramid;
 use crate::admin::{self, AdminRegion, GeocodeResult};
 use crate::history::{DownloadRecord, DownloadStatus, HistoryPage, HistoryStore};
+use crate::region_bookmarks::{
+    BookmarkBounds, BookmarkPolygon, RegionBookmark, RegionBookmarkStore,
+};
 use crate::settings::{AppSettings, SettingsManager};
 use crate::task::{TaskManager, TaskInfo, TaskLog, TaskStatus, PersistedTask, PauseControl};
 use crate::tiles3d;
@@ -31,6 +34,19 @@ where
     })
     .await
     .map_err(|error| format!("历史数据库线程异常: {error}"))?
+}
+
+async fn region_bookmark_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&RegionBookmarkStore) -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let store = RegionBookmarkStore::global()?;
+        operation(store)
+    })
+    .await
+    .map_err(|error| format!("范围书签数据库线程异常: {error}"))?
 }
 
 async fn remove_history_logs(
@@ -2501,6 +2517,35 @@ pub async fn geocode_search(
     tianditu_token: Option<String>,
 ) -> Result<Vec<GeocodeResult>, String> {
     admin::geocode_search(&query, tianditu_token.as_deref()).await
+}
+
+// ============ 下载范围书签 ============
+
+#[tauri::command]
+pub async fn list_region_bookmarks() -> Result<Vec<RegionBookmark>, String> {
+    region_bookmark_blocking(|store| store.list()).await
+}
+
+#[tauri::command]
+pub async fn create_region_bookmark(
+    name: String,
+    bounds: BookmarkBounds,
+    polygon: Option<BookmarkPolygon>,
+) -> Result<RegionBookmark, String> {
+    region_bookmark_blocking(move |store| store.create(name, bounds, polygon)).await
+}
+
+#[tauri::command]
+pub async fn rename_region_bookmark(
+    id: String,
+    name: String,
+) -> Result<RegionBookmark, String> {
+    region_bookmark_blocking(move |store| store.rename(&id, name)).await
+}
+
+#[tauri::command]
+pub async fn delete_region_bookmark(id: String) -> Result<(), String> {
+    region_bookmark_blocking(move |store| store.delete(&id)).await
 }
 
 // ============ 历史记录相关命令 ============

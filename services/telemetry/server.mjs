@@ -21,6 +21,13 @@ const EVENT_NAMES = new Set([
   'mode_changed',
   'sidebar_tab_changed',
   'graticule_changed',
+  'selection_changed',
+  'region_imported',
+  'bookmark_action',
+  'download_task_created',
+  'task_action',
+  'measurement_used',
+  'onboarding_event',
 ])
 const PLATFORMS = new Set(['windows', 'macos', 'linux', 'web', 'unknown'])
 const MODES = new Set(['imagery', 'dem', 'wayback', 'tiles3d', 'vector', 'mvt'])
@@ -30,6 +37,26 @@ const PRODUCT_EVENT_ORIGINS = new Set([
   'https://chat.laogao.xyz',
   'https://geodownloader.pages.dev',
 ])
+const COUNT_BUCKETS = new Set(['0', '1', '2-10', '11-100', '100+'])
+const SELECTION_METHODS = new Set([
+  'draw_rectangle', 'draw_polygon', 'admin', 'search', 'import', 'bookmark',
+])
+const GEOMETRIES = new Set(['bounds', 'polygon'])
+const IMPORT_FORMATS = new Set(['geojson', 'shapefile', 'kml', 'kmz', 'unknown'])
+const IMPORT_OUTCOMES = new Set(['success', 'no_area', 'error'])
+const BOOKMARK_ACTIONS = new Set(['created', 'restored', 'renamed', 'deleted'])
+const DOWNLOAD_WORKFLOWS = new Set(['raster', 'wayback', 'osm', 'tiles3d'])
+const OUTPUT_FORMATS = new Set([
+  'geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf', 'unknown',
+])
+const TASK_ACTIONS = new Set([
+  'pause_toggle', 'cancel', 'delete', 'resume', 'discard', 'export_partial',
+])
+const MEASUREMENT_ACTIONS = new Set(['distance', 'area', 'clear'])
+const ONBOARDING_TOURS = new Set([
+  'main', 'region', 'download_center', 'imagery', 'mvt', 'osm', 'tiles3d', 'wayback',
+])
+const ONBOARDING_ACTIONS = new Set(['started', 'completed', 'dismissed'])
 
 function envInteger(value, fallback, minimum, maximum) {
   const parsed = Number.parseInt(value ?? '', 10)
@@ -88,7 +115,73 @@ function validateProperties(eventName, properties) {
     return { tab: properties.tab }
   }
 
-  if (
+  if (eventName === 'selection_changed') {
+    if (
+      !exactKeys(properties, ['complexity', 'geometry', 'method']) ||
+      !SELECTION_METHODS.has(properties.method) ||
+      !GEOMETRIES.has(properties.geometry) ||
+      !COUNT_BUCKETS.has(properties.complexity)
+    ) throw invalid('selection_changed properties are invalid')
+    return { method: properties.method, geometry: properties.geometry, complexity: properties.complexity }
+  }
+
+  if (eventName === 'region_imported') {
+    if (
+      !exactKeys(properties, ['feature_count', 'format', 'outcome']) ||
+      !IMPORT_FORMATS.has(properties.format) ||
+      !IMPORT_OUTCOMES.has(properties.outcome) ||
+      !COUNT_BUCKETS.has(properties.feature_count)
+    ) throw invalid('region_imported properties are invalid')
+    return { format: properties.format, outcome: properties.outcome, feature_count: properties.feature_count }
+  }
+
+  if (eventName === 'bookmark_action') {
+    if (!exactKeys(properties, ['action']) || !BOOKMARK_ACTIONS.has(properties.action)) {
+      throw invalid('bookmark_action properties are invalid')
+    }
+    return { action: properties.action }
+  }
+
+  if (eventName === 'download_task_created') {
+    if (
+      !exactKeys(properties, ['output_format', 'selection', 'workflow', 'zoom_count']) ||
+      !DOWNLOAD_WORKFLOWS.has(properties.workflow) ||
+      !OUTPUT_FORMATS.has(properties.output_format) ||
+      !COUNT_BUCKETS.has(properties.zoom_count) ||
+      !GEOMETRIES.has(properties.selection)
+    ) throw invalid('download_task_created properties are invalid')
+    return {
+      workflow: properties.workflow,
+      output_format: properties.output_format,
+      zoom_count: properties.zoom_count,
+      selection: properties.selection,
+    }
+  }
+
+  if (eventName === 'task_action') {
+    if (!exactKeys(properties, ['action']) || !TASK_ACTIONS.has(properties.action)) {
+      throw invalid('task_action properties are invalid')
+    }
+    return { action: properties.action }
+  }
+
+  if (eventName === 'measurement_used') {
+    if (!exactKeys(properties, ['action']) || !MEASUREMENT_ACTIONS.has(properties.action)) {
+      throw invalid('measurement_used properties are invalid')
+    }
+    return { action: properties.action }
+  }
+
+  if (eventName === 'onboarding_event') {
+    if (
+      !exactKeys(properties, ['action', 'tour']) ||
+      !ONBOARDING_TOURS.has(properties.tour) ||
+      !ONBOARDING_ACTIONS.has(properties.action)
+    ) throw invalid('onboarding_event properties are invalid')
+    return { tour: properties.tour, action: properties.action }
+  }
+
+  if (eventName !== 'graticule_changed' ||
     !exactKeys(properties, ['enabled', 'interval', 'interval_mode']) ||
     typeof properties.enabled !== 'boolean' ||
     !['auto', 'fixed'].includes(properties.interval_mode) ||
@@ -233,6 +326,18 @@ function queryRows(database, sql, parameters = []) {
   } finally {
     statement.free()
   }
+}
+
+function propertyDistribution(database, eventName, propertyName) {
+  if (!/^[a-z_]+$/.test(propertyName)) throw new Error('invalid telemetry property name')
+  return queryRows(
+    database,
+    `SELECT json_extract(properties_json, '$.${propertyName}') AS value, COUNT(*) AS count
+     FROM events
+     WHERE event_name = ?
+     GROUP BY value ORDER BY count DESC`,
+    [eventName],
+  )
 }
 
 async function createDatabase(databasePath) {
@@ -422,6 +527,21 @@ async function createDatabase(databasePath) {
              WHERE event_name = 'graticule_changed'
              GROUP BY value ORDER BY count DESC LIMIT 12`,
           ),
+          selection_methods: propertyDistribution(database, 'selection_changed', 'method'),
+          selection_geometries: propertyDistribution(database, 'selection_changed', 'geometry'),
+          selection_complexities: propertyDistribution(database, 'selection_changed', 'complexity'),
+          import_formats: propertyDistribution(database, 'region_imported', 'format'),
+          import_outcomes: propertyDistribution(database, 'region_imported', 'outcome'),
+          import_feature_counts: propertyDistribution(database, 'region_imported', 'feature_count'),
+          bookmark_actions: propertyDistribution(database, 'bookmark_action', 'action'),
+          task_workflows: propertyDistribution(database, 'download_task_created', 'workflow'),
+          task_output_formats: propertyDistribution(database, 'download_task_created', 'output_format'),
+          task_zoom_counts: propertyDistribution(database, 'download_task_created', 'zoom_count'),
+          task_selections: propertyDistribution(database, 'download_task_created', 'selection'),
+          task_actions: propertyDistribution(database, 'task_action', 'action'),
+          measurement_actions: propertyDistribution(database, 'measurement_used', 'action'),
+          onboarding_tours: propertyDistribution(database, 'onboarding_event', 'tour'),
+          onboarding_actions: propertyDistribution(database, 'onboarding_event', 'action'),
         },
         devices: queryRows(
           database,
@@ -566,11 +686,22 @@ function trendChart(rows){
  return '<div class="chart-wrap"><svg viewBox="0 0 '+width+' '+height+'" role="img" aria-label="近 30 天活跃设备与事件趋势">'+grid+bars+'<polygon points="'+area+'" fill="#eff6ff"/><polyline points="'+points+'" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>'+dots+labels+'</svg></div>'
 }
 const platformLabels={windows:'Windows',macos:'macOS',linux:'Linux',web:'Web',unknown:'未知'}
-const eventLabels={app_started:'应用启动',mode_changed:'功能模式切换',sidebar_tab_changed:'侧栏切换',graticule_changed:'经纬网设置'}
+const eventLabels={app_started:'应用启动',mode_changed:'功能模式切换',sidebar_tab_changed:'侧栏切换',graticule_changed:'经纬网设置',selection_changed:'下载范围选择',region_imported:'范围文件导入',bookmark_action:'范围书签操作',download_task_created:'创建下载任务',task_action:'下载任务操作',measurement_used:'地图量测',onboarding_event:'新手引导'}
 const modeLabels={imagery:'GeoTIFF',dem:'DEM',wayback:'Wayback',tiles3d:'3D',vector:'OSM',mvt:'MVT'}
 const sidebarLabels={download:'资源下载',history:'下载中心',settings:'设置'}
 const graticuleEnabledLabels={'1':'启用','0':'关闭'}
 const graticuleModeLabels={auto:'自动间隔',fixed:'固定间隔'}
+const selectionMethodLabels={draw_rectangle:'绘制矩形',draw_polygon:'绘制多边形',admin:'行政区划',search:'地名搜索',import:'导入文件',bookmark:'范围书签'}
+const geometryLabels={bounds:'矩形范围',polygon:'多边形范围'}
+const importFormatLabels={geojson:'GeoJSON',shapefile:'Shapefile',kml:'KML',kmz:'KMZ',unknown:'其他'}
+const importOutcomeLabels={success:'成功',no_area:'未识别到面',error:'失败'}
+const bookmarkActionLabels={created:'保存',restored:'恢复',renamed:'重命名',deleted:'删除'}
+const workflowLabels={raster:'影像 / DEM / MVT',wayback:'Wayback',osm:'OSM',tiles3d:'3D Tiles'}
+const outputFormatLabels={geotiff:'GeoTIFF',png:'PNG',jpeg:'JPEG',tiles:'瓦片目录',mbtiles:'MBTiles',gpkg:'GeoPackage',pbf:'PBF',unknown:'不适用 / 其他'}
+const taskActionLabels={pause_toggle:'暂停 / 继续',cancel:'取消',delete:'删除',resume:'恢复中断任务',discard:'丢弃记录',export_partial:'按现状导出'}
+const measurementActionLabels={distance:'距离',area:'面积',clear:'清除结果'}
+const onboardingTourLabels={main:'主界面',region:'区域与地图',download_center:'下载中心',imagery:'影像 / DEM',mvt:'MVT',osm:'OSM',tiles3d:'3D Tiles',wayback:'Wayback'}
+const onboardingActionLabels={started:'开始',completed:'完成',dismissed:'中途关闭'}
 function distribution(rows,labelKey,valueKey,color,labelMap){
  if(!rows.length)return '<div class="empty">暂无数据</div>'
  const max=Math.max(1,...rows.map(row=>number(row[valueKey])))
@@ -585,6 +716,13 @@ function eventDetail(event,details){
  if(event==='mode_changed')return detailList('功能模式',details.modes,modeLabels)
  if(event==='sidebar_tab_changed')return detailList('侧栏页面',details.sidebar_tabs,sidebarLabels)
  if(event==='graticule_changed')return detailList('显示状态',details.graticule_enabled,graticuleEnabledLabels)+detailList('间隔方式',details.graticule_modes,graticuleModeLabels)+detailList('固定间隔',details.graticule_intervals,null,'°')
+ if(event==='selection_changed')return detailList('选择方式',details.selection_methods,selectionMethodLabels)+detailList('范围类型',details.selection_geometries,geometryLabels)+detailList('坐标点数量区间',details.selection_complexities)
+ if(event==='region_imported')return detailList('文件格式',details.import_formats,importFormatLabels)+detailList('结果',details.import_outcomes,importOutcomeLabels)+detailList('面要素数量区间',details.import_feature_counts)
+ if(event==='bookmark_action')return detailList('操作',details.bookmark_actions,bookmarkActionLabels)
+ if(event==='download_task_created')return detailList('下载类型',details.task_workflows,workflowLabels)+detailList('输出格式',details.task_output_formats,outputFormatLabels)+detailList('缩放级别数量区间',details.task_zoom_counts)+detailList('范围类型',details.task_selections,geometryLabels)
+ if(event==='task_action')return detailList('操作',details.task_actions,taskActionLabels)
+ if(event==='measurement_used')return detailList('工具',details.measurement_actions,measurementActionLabels)
+ if(event==='onboarding_event')return detailList('引导',details.onboarding_tours,onboardingTourLabels)+detailList('结果',details.onboarding_actions,onboardingActionLabels)
  return ''
 }
 function eventDistribution(rows,details){

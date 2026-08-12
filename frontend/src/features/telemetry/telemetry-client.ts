@@ -11,7 +11,57 @@ interface TelemetryEventMap {
     interval_mode: 'auto' | 'fixed'
     interval: number
   }
+  selection_changed: {
+    method: 'draw_rectangle' | 'draw_polygon' | 'admin' | 'search' | 'import' | 'bookmark'
+    geometry: 'bounds' | 'polygon'
+    complexity: TelemetryCountBucket
+  }
+  region_imported: {
+    format: TelemetryImportFormat
+    outcome: 'success' | 'no_area' | 'error'
+    feature_count: TelemetryCountBucket
+  }
+  bookmark_action: {
+    action: 'created' | 'restored' | 'renamed' | 'deleted'
+  }
+  download_task_created: {
+    workflow: 'raster' | 'wayback' | 'osm' | 'tiles3d'
+    output_format: TelemetryOutputFormat
+    zoom_count: TelemetryCountBucket
+    selection: 'bounds' | 'polygon'
+  }
+  task_action: {
+    action: 'pause_toggle' | 'cancel' | 'delete' | 'resume' | 'discard' | 'export_partial'
+  }
+  measurement_used: {
+    action: 'distance' | 'area' | 'clear'
+  }
+  onboarding_event: {
+    tour: TelemetryTour
+    action: 'started' | 'completed' | 'dismissed'
+  }
 }
+
+export type TelemetryCountBucket = '0' | '1' | '2-10' | '11-100' | '100+'
+export type TelemetryImportFormat = 'geojson' | 'shapefile' | 'kml' | 'kmz' | 'unknown'
+type TelemetryOutputFormat =
+  | 'geotiff'
+  | 'png'
+  | 'jpeg'
+  | 'tiles'
+  | 'mbtiles'
+  | 'gpkg'
+  | 'pbf'
+  | 'unknown'
+export type TelemetryTour =
+  | 'main'
+  | 'region'
+  | 'download_center'
+  | 'imagery'
+  | 'mvt'
+  | 'osm'
+  | 'tiles3d'
+  | 'wayback'
 
 type TelemetryEventName = keyof TelemetryEventMap
 
@@ -32,6 +82,32 @@ const sessionId = createEventId()
 let flushTimer: number | null = null
 let flushPromise: Promise<void> | null = null
 let versionPromise: Promise<string> | null = null
+
+export function telemetryCountBucket(value: number): TelemetryCountBucket {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value === 1) return '1'
+  if (value <= 10) return '2-10'
+  if (value <= 100) return '11-100'
+  return '100+'
+}
+
+export function telemetryImportFormat(filename: string): TelemetryImportFormat {
+  const extension = filename.trim().toLowerCase().split('.').pop()
+  if (extension === 'json' || extension === 'geojson') return 'geojson'
+  if (extension === 'zip' || extension === 'shp') return 'shapefile'
+  if (extension === 'kml' || extension === 'kmz') return extension
+  return 'unknown'
+}
+
+export function telemetryOutputFormat(format: string): TelemetryOutputFormat {
+  const normalized = format.trim().toLowerCase()
+  const allowed: TelemetryOutputFormat[] = [
+    'geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf',
+  ]
+  return allowed.includes(normalized as TelemetryOutputFormat)
+    ? (normalized as TelemetryOutputFormat)
+    : 'unknown'
+}
 
 function createEventId() {
   return crypto.randomUUID()
@@ -96,6 +172,27 @@ function sanitizeProperties<TName extends TelemetryEventName>(
         interval_mode: value.interval_mode === 'fixed' ? 'fixed' : 'auto',
         interval: Number.isFinite(value.interval) ? value.interval : 1,
       }
+    }
+    case 'selection_changed': {
+      const value = properties as TelemetryEventMap['selection_changed']
+      return { ...value }
+    }
+    case 'region_imported': {
+      const value = properties as TelemetryEventMap['region_imported']
+      return { ...value }
+    }
+    case 'download_task_created': {
+      const value = properties as TelemetryEventMap['download_task_created']
+      return { ...value }
+    }
+    case 'bookmark_action':
+    case 'task_action':
+    case 'measurement_used': {
+      return { action: (properties as { action: string }).action }
+    }
+    case 'onboarding_event': {
+      const value = properties as TelemetryEventMap['onboarding_event']
+      return { ...value }
     }
   }
 }

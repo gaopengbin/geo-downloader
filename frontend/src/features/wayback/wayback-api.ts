@@ -1,4 +1,5 @@
 import { invokeCommand } from '@/lib/tauri'
+import { telemetryCountBucket, telemetryOutputFormat, trackTelemetry } from '@/features/telemetry/telemetry-client'
 import type {
   CreateTaskResult,
   DownloadRequest,
@@ -48,6 +49,16 @@ export function createWaybackTask(
     versionId,
     versionDate,
     taskName,
+  }).then((result) => {
+    const zoomCount = request.zoom_levels?.length ??
+      (request.zoom_max == null ? 1 : Math.max(1, request.zoom_max - request.zoom + 1))
+    void trackTelemetry('download_task_created', {
+      workflow: 'wayback',
+      output_format: telemetryOutputFormat(request.format),
+      zoom_count: telemetryCountBucket(zoomCount),
+      selection: request.polygon?.length ? 'polygon' : 'bounds',
+    })
+    return result
   })
 }
 

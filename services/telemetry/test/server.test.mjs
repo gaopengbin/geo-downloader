@@ -88,6 +88,33 @@ test('validates product events without accepting content fields', () => {
   )
 })
 
+test('accepts expanded product events and rejects sensitive extra fields', () => {
+  const examples = [
+    event({ event: 'selection_changed', properties: { method: 'import', geometry: 'polygon', complexity: '11-100' } }),
+    event({ event: 'region_imported', properties: { format: 'kml', outcome: 'success', feature_count: '2-10' } }),
+    event({ event: 'bookmark_action', properties: { action: 'created' } }),
+    event({ event: 'download_task_created', properties: { workflow: 'raster', output_format: 'geotiff', zoom_count: '2-10', selection: 'polygon' } }),
+    event({ event: 'task_action', properties: { action: 'pause_toggle' } }),
+    event({ event: 'measurement_used', properties: { action: 'distance' } }),
+    event({ event: 'onboarding_event', properties: { tour: 'region', action: 'completed' } }),
+  ]
+  assert.equal(validateEnvelope({ schema_version: 1, events: examples }).length, examples.length)
+
+  assert.throws(
+    () => validateEnvelope({
+      schema_version: 1,
+      events: [event({
+        event: 'download_task_created',
+        properties: {
+          workflow: 'raster', output_format: 'geotiff', zoom_count: '1', selection: 'bounds',
+          save_path: 'C:/private/data',
+        },
+      })],
+    }),
+    /properties are invalid/,
+  )
+})
+
 test('ingests, deduplicates, and reports aggregate statistics', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'geod-telemetry-'))
   const tokenPath = path.join(directory, 'admin-token.txt')
@@ -149,11 +176,23 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
           app_version: '3.6.7',
           properties: { mode: 'imagery' },
         }),
+        event({
+          event: 'download_task_created',
+          occurred_at: lastActive,
+          install_id: installId,
+          app_version: '3.6.7',
+          properties: {
+            workflow: 'raster',
+            output_format: 'geotiff',
+            zoom_count: '2-10',
+            selection: 'polygon',
+          },
+        }),
       ],
     }),
   })
   assert.equal(activity.status, 202)
-  assert.deepEqual(await activity.json(), { accepted: 1, inserted: 1 })
+  assert.deepEqual(await activity.json(), { accepted: 2, inserted: 2 })
 
   const unauthorized = await fetch(`${baseUrl}/admin/stats`)
   assert.equal(unauthorized.status, 401)
@@ -165,11 +204,13 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   const stats = await statsResponse.json()
   assert.equal(stats.totals.installs, 1)
   assert.equal(stats.totals.wau, 1)
-  assert.equal(stats.totals.event_count, 2)
+  assert.equal(stats.totals.event_count, 3)
   assert.deepEqual(stats.platforms, [{ platform: 'windows', installs: 1 }])
   assert.deepEqual(stats.event_details.modes, [{ value: 'imagery', count: 1 }])
   assert.deepEqual(stats.event_details.sidebar_tabs, [])
   assert.deepEqual(stats.event_details.graticule_enabled, [])
+  assert.deepEqual(stats.event_details.task_workflows, [{ value: 'raster', count: 1 }])
+  assert.deepEqual(stats.event_details.task_output_formats, [{ value: 'geotiff', count: 1 }])
   assert.equal(
     stats.daily.reduce((total, row) => total + row.new_installs, 0),
     1,
@@ -179,8 +220,8 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
       install_key: installId.slice(0, 8),
       first_seen: firstSeen,
       last_active: lastActive,
-      event_count: 2,
-      session_count: 2,
+      event_count: 3,
+      session_count: 3,
       active_days: 1,
       launch_count: 1,
       current_version: '3.6.7',

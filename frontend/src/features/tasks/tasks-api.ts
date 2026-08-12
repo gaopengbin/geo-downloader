@@ -1,4 +1,5 @@
 import { invokeCommand } from '@/lib/tauri'
+import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import type { CreateTaskResult, PersistedTask, TaskInfo, TaskLog } from '@/types/api'
 
 export function getActiveTasks() {
@@ -6,15 +7,24 @@ export function getActiveTasks() {
 }
 
 export function cancelTask(taskId: string) {
-  return invokeCommand<boolean>('cancel_task', { taskId })
+  return invokeCommand<boolean>('cancel_task', { taskId }).then((result) => {
+    if (result) void trackTelemetry('task_action', { action: 'cancel' })
+    return result
+  })
 }
 
 export function togglePauseTask(taskId: string) {
-  return invokeCommand<boolean>('toggle_pause_task', { taskId })
+  return invokeCommand<boolean>('toggle_pause_task', { taskId }).then((result) => {
+    if (result) void trackTelemetry('task_action', { action: 'pause_toggle' })
+    return result
+  })
 }
 
 export function removeTask(taskId: string) {
-  return invokeCommand<void>('remove_task', { taskId })
+  return invokeCommand<void>('remove_task', { taskId }).then((result) => {
+    void trackTelemetry('task_action', { action: 'delete' })
+    return result
+  })
 }
 
 export function getTaskLogs(taskId: string) {
@@ -34,11 +44,17 @@ export function getResumableTasks() {
 }
 
 export function resumeTask(taskId: string) {
-  return invokeCommand<CreateTaskResult>('resume_task', { taskId })
+  return invokeCommand<CreateTaskResult>('resume_task', { taskId }).then((result) => {
+    void trackTelemetry('task_action', { action: 'resume' })
+    return result
+  })
 }
 
 export function discardResumableTask(taskId: string, deleteCache = true) {
-  return invokeCommand<void>('discard_resumable_task', { taskId, deleteCache })
+  return invokeCommand<void>('discard_resumable_task', { taskId, deleteCache }).then((result) => {
+    void trackTelemetry('task_action', { action: 'discard' })
+    return result
+  })
 }
 
 /**
@@ -47,5 +63,8 @@ export function discardResumableTask(taskId: string, deleteCache = true) {
  * 表现为白底（PNG/GeoTIFF）或 NoData（DEM）。完成后任务标 CompletedWithGaps。
  */
 export function exportPartialTask(taskId: string) {
-  return invokeCommand<void>('export_partial_task', { taskId })
+  return invokeCommand<void>('export_partial_task', { taskId }).then((result) => {
+    void trackTelemetry('task_action', { action: 'export_partial' })
+    return result
+  })
 }

@@ -592,6 +592,7 @@ export function MapCanvas() {
       options: { position: 'topleft' as L.ControlPosition },
       onAdd: () => {
         const container = L.DomUtil.create('div', 'leaflet-bar geod-measure-toolbar')
+        container.dataset.tour = 'measure-tools'
         L.DomEvent.disableClickPropagation(container)
         L.DomEvent.disableScrollPropagation(container)
         setMeasureControlContainer(container)
@@ -681,6 +682,11 @@ export function MapCanvas() {
           },
           polygon: null,
         })
+        void trackTelemetry('selection_changed', {
+          method: 'draw_rectangle',
+          geometry: 'bounds',
+          complexity: '0',
+        })
       } else if (e.layerType === 'polygon') {
         const latlngs = (e.layer.getLatLngs()[0] as L.LatLng[]).map((ll) => ({
           lat: ll.lat,
@@ -688,6 +694,11 @@ export function MapCanvas() {
         }))
         const rings = [latlngs]
         setSelection({ bounds: boundsFromRings(rings), polygon: rings })
+        void trackTelemetry('selection_changed', {
+          method: 'draw_polygon',
+          geometry: 'polygon',
+          complexity: latlngs.length <= 10 ? '2-10' : latlngs.length <= 100 ? '11-100' : '100+',
+        })
       }
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1452,7 +1463,10 @@ export function MapCanvas() {
               title="测量距离"
               aria-label="测量距离"
               aria-pressed={measureMode === 'distance'}
-              onClick={() => measureActionsRef.current?.toggle('distance')}
+              onClick={() => {
+                void trackTelemetry('measurement_used', { action: 'distance' })
+                measureActionsRef.current?.toggle('distance')
+              }}
             >
               <Ruler size={16} strokeWidth={2} aria-hidden />
             </button>
@@ -1462,7 +1476,10 @@ export function MapCanvas() {
               title="测量面积"
               aria-label="测量面积"
               aria-pressed={measureMode === 'area'}
-              onClick={() => measureActionsRef.current?.toggle('area')}
+              onClick={() => {
+                void trackTelemetry('measurement_used', { action: 'area' })
+                measureActionsRef.current?.toggle('area')
+              }}
             >
               <Pentagon size={16} strokeWidth={2} aria-hidden />
             </button>
@@ -1470,7 +1487,10 @@ export function MapCanvas() {
               type="button"
               title="清除量测"
               aria-label="清除量测"
-              onClick={() => measureActionsRef.current?.clear()}
+              onClick={() => {
+                void trackTelemetry('measurement_used', { action: 'clear' })
+                measureActionsRef.current?.clear()
+              }}
             >
               <Trash2 size={16} strokeWidth={2} aria-hidden />
             </button>
@@ -1491,7 +1511,7 @@ export function MapCanvas() {
           </div>
         </div>
       )}
-      <div className="pointer-events-auto absolute right-3 top-3 z-10 rounded-md border bg-background/95 p-2 text-xs shadow-sm backdrop-blur">
+      <div data-tour="graticule-control" className="pointer-events-auto absolute right-3 top-3 z-10 rounded-md border bg-background/95 p-2 text-xs shadow-sm backdrop-blur">
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 whitespace-nowrap text-foreground">
             <input

@@ -27,6 +27,8 @@ import {
   regionAreaErrorMessage,
 } from '@/lib/geo-area'
 import { RegionImportDialog } from './region-import-dialog'
+import { RegionBookmarksDialog } from './region-bookmarks-dialog'
+import type { RegionBookmark } from './region-bookmarks-api'
 import {
   geocodeSearch,
   getAdminBoundary,
@@ -38,6 +40,11 @@ import {
 import { useSelectionStore, type LatLngRing, type MapBounds } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
 import { getSettings } from '@/features/settings/settings-api'
+import {
+  telemetryCountBucket,
+  telemetryImportFormat,
+  trackTelemetry,
+} from '@/features/telemetry/telemetry-client'
 
 function ringsFromGeoJSON(geojson: GeoJsonObject): LatLngRing[] {
   return extractAreaFeatures(geojson).flatMap((feature) =>
@@ -132,7 +139,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
 
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const loadByCode = async (code: string, label: string) => {
+  const loadByCode = async (code: string, label: string, method: 'admin' | 'search' = 'admin') => {
     if (!code) return
     setLoadingBoundary(true)
     try {
@@ -143,6 +150,11 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         return
       }
       setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings })
+      void trackTelemetry('selection_changed', {
+        method,
+        geometry: 'polygon',
+        complexity: telemetryCountBucket(rings.reduce((total, ring) => total + ring.length, 0)),
+      })
       setCurrentAdminCode(code)
       toast.success(`已加载 ${label}`)
     } catch (e) {
@@ -178,6 +190,25 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
     setDistrictCode('')
   }
 
+  const onRestoreBookmark = (bookmark: RegionBookmark) => {
+    setExternalSelection({
+      bounds: bookmark.bounds,
+      polygon: bookmark.polygon,
+    })
+    setProvinceCode('')
+    setCityCode('')
+    setDistrictCode('')
+    void trackTelemetry('bookmark_action', { action: 'restored' })
+    void trackTelemetry('selection_changed', {
+      method: 'bookmark',
+      geometry: bookmark.polygon?.length ? 'polygon' : 'bounds',
+      complexity: telemetryCountBucket(
+        bookmark.polygon?.reduce((total, ring) => total + ring.length, 0) ?? 0,
+      ),
+    })
+    toast.success(`已恢复范围：${bookmark.name}`)
+  }
+
   const onSearch = async () => {
     const q = query.trim()
     if (!q) return
@@ -197,7 +228,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
 
   const onPickResult = (r: GeocodeResult) => {
     if (r.kind === 'admin' && r.admin_code) {
-      void loadByCode(r.admin_code, r.name)
+      void loadByCode(r.admin_code, r.name, 'search')
       setSearchResults([])
       return
     }
@@ -205,6 +236,11 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       setExternalSelection({
         bounds: r.bounds,
         polygon: null,
+      })
+      void trackTelemetry('selection_changed', {
+        method: 'search',
+        geometry: 'bounds',
+        complexity: '0',
       })
       toast.success(`已定位 ${r.name}`)
       setSearchResults([])
@@ -221,6 +257,11 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       },
       polygon: null,
     })
+    void trackTelemetry('selection_changed', {
+      method: 'search',
+      geometry: 'bounds',
+      complexity: '0',
+    })
     setSearchResults([])
   }
 
@@ -233,13 +274,15 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
   const onPickFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     importedFilesRef.current = Array.from(files)
+    const file = files[0]
+    const format = telemetryImportFormat(file.name)
     try {
-      const file = files[0]
       let geojson: GeoJsonObject
       try {
         geojson = await parseRegionFile(file)
       } catch (e) {
         if (e instanceof UnsupportedRegionFileError) {
+          void trackTelemetry('region_imported', { format, outcome: 'error', feature_count: '0' })
           toast.error(e.message)
           return
         }
@@ -247,6 +290,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       }
       const areaFeatures = extractAreaFeatures(geojson)
       if (areaFeatures.length === 0) {
+        void trackTelemetry('region_imported', { format, outcome: 'no_area', feature_count: '0' })
         toast.error(regionAreaErrorMessage(geojson))
         return
       }
@@ -260,8 +304,19 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
 
       // 单要素 / FeatureCollection 仅 1 项 / 裸 Geometry
       setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings })
+      void trackTelemetry('region_imported', {
+        format,
+        outcome: 'success',
+        feature_count: telemetryCountBucket(areaFeatures.length),
+      })
+      void trackTelemetry('selection_changed', {
+        method: 'import',
+        geometry: 'polygon',
+        complexity: telemetryCountBucket(rings.reduce((total, ring) => total + ring.length, 0)),
+      })
       toast.success('边界已导入')
     } catch (e) {
+      void trackTelemetry('region_imported', { format, outcome: 'error', feature_count: '0' })
       const msg = e instanceof Error ? e.message : String(e)
       toast.error(`导入失败：${msg}`)
     } finally {
@@ -276,7 +331,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
 
   if (!inTauri) {
     return (
-      <PanelSection icon={MapPin} title="区域选择" description="手动四至">
+      <PanelSection icon={MapPin} title="区域选择" description="手动四至" dataTour="region-selector">
         <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
           非 Tauri 环境，行政区划与地名搜索不可用
         </div>
@@ -286,7 +341,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
   }
 
   return (
-    <PanelSection icon={MapPin} title="区域选择" description="地名 / 行政区划 / 上传边界 / 手动四至">
+    <PanelSection icon={MapPin} title="区域选择" description="地名 / 行政区划 / 上传边界 / 手动四至" dataTour="region-selector">
       {/* 地名搜索 */}
       <div className="space-y-1.5">
         <div className="flex gap-1.5">
@@ -421,6 +476,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
           <Upload className="mr-1 size-3.5" />
           上传
         </Button>
+        <RegionBookmarksDialog onRestore={onRestoreBookmark} />
         <Button
           type="button"
           variant="outline"
