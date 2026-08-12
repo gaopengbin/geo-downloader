@@ -271,6 +271,16 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   assert.equal(wechat.funnel[0].visitors, 1)
   assert.equal(wechat.funnel[2].event, 'image_exported')
   assert.equal(wechat.funnel[2].conversion_rate, 1)
+  assert.deepEqual(wechat.acquisition, [{
+    channel: 'google',
+    visitors: 1,
+    stages: [
+      { event: 'page_view', visitors: 1 },
+      { event: 'dialog_created', visitors: 1 },
+      { event: 'image_exported', visitors: 1 },
+    ],
+    conversion_rate: 1,
+  }])
 
   const publicStatsResponse = await fetch(`${baseUrl}/geod-telemetry/public/product-stats`)
   assert.equal(publicStatsResponse.status, 200)

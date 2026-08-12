@@ -172,6 +172,90 @@ function queryRows(database, sql, parameters = []) {
   }
 }
 
+const CHANNEL_ORDER = [
+  'google',
+  'bing',
+  'github',
+  'wechat',
+  'xiaohongshu',
+  'bilibili',
+  'juejin',
+  'campaign',
+  'direct',
+  'other',
+]
+
+function acquisitionChannel(properties) {
+  const source = String(properties.source || '').toLowerCase()
+  const referrer = String(properties.referrer_host || '').toLowerCase()
+  const value = `${source} ${referrer}`
+
+  if (value.includes('google')) return 'google'
+  if (value.includes('bing')) return 'bing'
+  if (value.includes('github')) return 'github'
+  if (/(weixin|wechat|mp\.weixin|weixin\.qq)/.test(value)) return 'wechat'
+  if (/(xiaohongshu|xhslink|rednote)/.test(value)) return 'xiaohongshu'
+  if (value.includes('bilibili')) return 'bilibili'
+  if (value.includes('juejin')) return 'juejin'
+  if (source) return 'campaign'
+  if (!referrer || referrer === 'gaopengbin.github.io' || referrer === 'geodownloader.pages.dev') {
+    return 'direct'
+  }
+  return 'other'
+}
+
+function acquisitionStats(database, product, funnel) {
+  const rows = queryRows(
+    database,
+    `SELECT event_name, visitor_id, occurred_at, properties_json
+     FROM product_events
+     WHERE product = ?
+     ORDER BY occurred_at`,
+    [product],
+  )
+  const firstPageByVisitor = new Map()
+  const eventVisitors = new Map(funnel.map((event) => [event, new Set()]))
+
+  for (const row of rows) {
+    if (eventVisitors.has(row.event_name)) {
+      eventVisitors.get(row.event_name).add(row.visitor_id)
+    }
+    if (row.event_name !== 'page_view' || firstPageByVisitor.has(row.visitor_id)) continue
+    let properties = {}
+    try {
+      properties = JSON.parse(row.properties_json)
+    } catch {
+      properties = {}
+    }
+    firstPageByVisitor.set(row.visitor_id, acquisitionChannel(properties))
+  }
+
+  const channels = new Map()
+  for (const [visitor, channel] of firstPageByVisitor) {
+    if (!channels.has(channel)) channels.set(channel, new Set())
+    channels.get(channel).add(visitor)
+  }
+
+  return [...channels.entries()]
+    .map(([channel, visitors]) => {
+      const stages = funnel.map((event) => ({
+        event,
+        visitors: [...visitors].filter((visitor) => eventVisitors.get(event).has(visitor)).length,
+      }))
+      const finalVisitors = stages.at(-1)?.visitors || 0
+      return {
+        channel,
+        visitors: visitors.size,
+        stages,
+        conversion_rate: visitors.size ? finalVisitors / visitors.size : 0,
+      }
+    })
+    .sort((left, right) => (
+      right.visitors - left.visitors ||
+      CHANNEL_ORDER.indexOf(left.channel) - CHANNEL_ORDER.indexOf(right.channel)
+    ))
+}
+
 export function initializeProductEvents(database) {
   database.run(`
     CREATE TABLE IF NOT EXISTS product_events (
@@ -277,6 +361,7 @@ export function productStats(database) {
          GROUP BY event_day ORDER BY event_day`,
         [product],
       ),
+      acquisition: acquisitionStats(database, product, definition.funnel),
     }
   })
   return { generated_at: new Date().toISOString(), products }
