@@ -10,6 +10,10 @@ const PRODUCT_DEFINITIONS = {
     events: new Set(['page_view', 'download_clicked']),
     funnel: ['page_view', 'download_clicked'],
   },
+  'wallpaper-web': {
+    events: new Set(['page_view', 'wallpaper_viewed', 'wallpaper_downloaded']),
+    funnel: ['page_view', 'wallpaper_viewed', 'wallpaper_downloaded'],
+  },
 }
 
 const COMMON_PROPERTIES = new Set([
@@ -25,6 +29,8 @@ const EVENT_PROPERTIES = {
   dialog_created: new Set(['message_count_bucket', 'participant_count_bucket']),
   image_exported: new Set(['capture_mode', 'message_count_bucket']),
   download_clicked: new Set(['platform', 'version', 'channel']),
+  wallpaper_viewed: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
+  wallpaper_downloaded: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
 }
 
 function invalid(message) {
@@ -106,6 +112,24 @@ function validateProperties(eventName, properties) {
       32,
       /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/,
     )
+  }
+
+  if (eventName === 'wallpaper_viewed' || eventName === 'wallpaper_downloaded') {
+    normalized.wallpaper_id = optionalString(
+      properties.wallpaper_id,
+      'wallpaper_id',
+      64,
+      /^[0-9A-Za-z_-]{1,64}$/,
+    )
+    if (!normalized.wallpaper_id) throw invalid('wallpaper_id is invalid')
+    if (!['desktop', 'mobile'].includes(properties.wallpaper_kind)) {
+      throw invalid('wallpaper_kind is invalid')
+    }
+    if (!['image', 'video'].includes(properties.media_type)) {
+      throw invalid('media_type is invalid')
+    }
+    normalized.wallpaper_kind = properties.wallpaper_kind
+    normalized.media_type = properties.media_type
   }
 
   return normalized

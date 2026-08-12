@@ -88,6 +88,50 @@ test('validates product events without accepting content fields', () => {
   )
 })
 
+test('validates wallpaper events without collecting search text', () => {
+  const visitorId = crypto.randomUUID()
+  const sessionId = crypto.randomUUID()
+  const [normalized] = validateProductEnvelope({
+    schema_version: 1,
+    product: 'wallpaper-web',
+    events: [{
+      event_id: crypto.randomUUID(),
+      event: 'wallpaper_viewed',
+      occurred_at: new Date().toISOString(),
+      visitor_id: visitorId,
+      session_id: sessionId,
+      properties: {
+        path: '/detail/12345',
+        wallpaper_id: '12345',
+        wallpaper_kind: 'desktop',
+        media_type: 'image',
+      },
+    }],
+  })
+  assert.equal(normalized.product, 'wallpaper-web')
+  assert.equal(normalized.properties.wallpaper_id, '12345')
+  assert.throws(
+    () => validateProductEnvelope({
+      schema_version: 1,
+      product: 'wallpaper-web',
+      events: [{
+        event_id: crypto.randomUUID(),
+        event: 'wallpaper_viewed',
+        occurred_at: new Date().toISOString(),
+        visitor_id: visitorId,
+        session_id: sessionId,
+        properties: {
+          wallpaper_id: '12345',
+          wallpaper_kind: 'desktop',
+          media_type: 'image',
+          search_query: 'private input',
+        },
+      }],
+    }),
+    /properties are invalid/,
+  )
+})
+
 test('accepts expanded product events and rejects sensitive extra fields', () => {
   const examples = [
     event({ event: 'selection_changed', properties: { method: 'import', geometry: 'polygon', complexity: '11-100' } }),
@@ -285,6 +329,41 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
     'https://chat.laogao.xyz',
   )
 
+  const wallpaperVisitorId = crypto.randomUUID()
+  const wallpaperSessionId = crypto.randomUUID()
+  const wallpaperResponse = await fetch(`${baseUrl}/v1/product-events`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: 'https://wallpaper.gpb.cc',
+    },
+    body: JSON.stringify({
+      schema_version: 1,
+      product: 'wallpaper-web',
+      events: ['page_view', 'wallpaper_viewed', 'wallpaper_downloaded'].map((event) => ({
+        event_id: crypto.randomUUID(),
+        event,
+        occurred_at: new Date().toISOString(),
+        visitor_id: wallpaperVisitorId,
+        session_id: wallpaperSessionId,
+        properties: event === 'page_view'
+          ? { path: '/' }
+          : {
+              path: '/detail/12345',
+              wallpaper_id: '12345',
+              wallpaper_kind: 'desktop',
+              media_type: 'image',
+            },
+      })),
+    }),
+  })
+  assert.equal(wallpaperResponse.status, 202)
+  assert.deepEqual(await wallpaperResponse.json(), { accepted: 3, inserted: 3 })
+  assert.equal(
+    wallpaperResponse.headers.get('access-control-allow-origin'),
+    'https://wallpaper.gpb.cc',
+  )
+
   const productPreflight = await fetch(`${baseUrl}/v1/product-events`, {
     method: 'OPTIONS',
     headers: {
@@ -336,6 +415,10 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
     ],
     conversion_rate: 1,
   }])
+  const wallpaper = productStats.products.find((item) => item.product === 'wallpaper-web')
+  assert.equal(wallpaper.visitors, 1)
+  assert.equal(wallpaper.funnel[2].event, 'wallpaper_downloaded')
+  assert.equal(wallpaper.funnel[2].conversion_rate, 1)
 
   const publicStatsResponse = await fetch(`${baseUrl}/geod-telemetry/public/product-stats`)
   assert.equal(publicStatsResponse.status, 200)
