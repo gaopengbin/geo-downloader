@@ -27,6 +27,7 @@ const MODES = new Set(['imagery', 'dem', 'wayback', 'tiles3d', 'vector', 'mvt'])
 const SIDEBAR_TABS = new Set(['download', 'history', 'settings'])
 const PRODUCT_EVENT_ORIGINS = new Set([
   'https://gaopengbin.github.io',
+  'https://chat.laogao.xyz',
   'https://geodownloader.pages.dev',
 ])
 
