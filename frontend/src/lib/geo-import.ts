@@ -2,6 +2,7 @@ import type { GeoJsonObject } from 'geojson'
 import shp, { combine, parseShp } from 'shpjs'
 import JSZip from 'jszip'
 import { kml as kmlToGeoJson } from '@tmcw/togeojson'
+import { normalizeClosedKmlBoundaries } from './kml-region-normalizer'
 
 const SUPPORTED_EXTENSIONS = ['.geojson', '.json', '.shp', '.zip', '.kml', '.kmz'] as const
 
@@ -55,7 +56,8 @@ function parseKmlText(text: string): GeoJsonObject {
   if (errNode) {
     throw new Error('KML XML 解析失败')
   }
-  return kmlToGeoJson(doc) as unknown as GeoJsonObject
+  const geojson = kmlToGeoJson(doc) as unknown as GeoJsonObject
+  return normalizeClosedKmlBoundaries(geojson)
 }
 
 async function parseKmzBuffer(buf: ArrayBuffer): Promise<GeoJsonObject> {
