@@ -68,9 +68,40 @@ if ($nodeVersion -lt [version]'20.12.0') {
   throw "Telemetry requires Node.js 20.12 or newer; found $nodeVersion."
 }
 Write-Host "Using Node.js $nodeVersion from $node"
-Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine -like '*geod-telemetry*server.mjs*' } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+$listeners = @(
+  Get-NetTCPConnection `
+    -LocalAddress '127.0.0.1' `
+    -LocalPort 9091 `
+    -State Listen `
+    -ErrorAction SilentlyContinue
+)
+foreach ($listener in $listeners) {
+  $listenerProcess = Get-CimInstance `
+    -ClassName Win32_Process `
+    -Filter "ProcessId = $($listener.OwningProcess)" `
+    -ErrorAction SilentlyContinue
+  Write-Host (
+    "Stopping telemetry listener PID {0}: {1}" -f `
+      $listener.OwningProcess, `
+      $listenerProcess.CommandLine
+  )
+  Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop
+}
+
+for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+  $activeListener = Get-NetTCPConnection `
+    -LocalAddress '127.0.0.1' `
+    -LocalPort 9091 `
+    -State Listen `
+    -ErrorAction SilentlyContinue
+  if (-not $activeListener) {
+    break
+  }
+  Start-Sleep -Milliseconds 250
+}
+if ($activeListener) {
+  throw 'The previous telemetry listener did not release port 9091.'
+}
 
 $legacyWatchdogMarker = 'services\geod-telemetry\server.mjs'
 $stdoutPath = Join-Path $serviceRoot 'stdout.log'
