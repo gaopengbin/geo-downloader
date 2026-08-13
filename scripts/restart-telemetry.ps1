@@ -14,7 +14,6 @@ $tokenFile = Join-Path $nginxRoot 'geod-telemetry-admin-token.txt'
 $databasePath = Join-Path $nginxRoot 'data\geod-telemetry.sqlite'
 $nginxConf = Join-Path $nginxRoot 'conf\nginx.conf'
 $nginxExe = Join-Path $nginxRoot 'nginx.exe'
-$watchdogScript = Join-Path $serviceRoot 'geod-telemetry-watchdog.ps1'
 
 $adminToken = [System.Text.Encoding]::UTF8.GetString(
   [System.Convert]::FromBase64String($AdminTokenBase64)
@@ -73,72 +72,20 @@ Get-CimInstance Win32_Process |
   Where-Object { $_.CommandLine -like '*geod-telemetry*server.mjs*' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
-$taskName = 'GeoDTelemetryManaged'
 $legacyWatchdogMarker = 'services\geod-telemetry\server.mjs'
-$action = New-ScheduledTaskAction `
-  -Execute $node `
-  -Argument "`"$script`" `"$legacyWatchdogMarker`"" `
-  -WorkingDirectory $serviceRoot
-$trigger = New-ScheduledTaskTrigger -AtStartup
-$runnerPrincipal = New-ScheduledTaskPrincipal `
-  -UserId 'S-1-5-20' `
-  -LogonType ServiceAccount `
-  -RunLevel Limited
-$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if ($existingTask) {
-  Set-ScheduledTask `
-    -InputObject $existingTask `
-    -Action $action `
-    -Trigger $trigger | Out-Null
-} else {
-  Register-ScheduledTask `
-    -TaskName $taskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Principal $runnerPrincipal `
-    -Force | Out-Null
+$runnerTrackingId = $env:RUNNER_TRACKING_ID
+try {
+  $env:RUNNER_TRACKING_ID = "geod-telemetry-$([guid]::NewGuid().ToString('N'))"
+  $process = Start-Process `
+    -FilePath $node `
+    -ArgumentList @("`"$script`"", "`"$legacyWatchdogMarker`"") `
+    -WorkingDirectory $serviceRoot `
+    -WindowStyle Hidden `
+    -PassThru
+  Write-Host "Started managed telemetry process $($process.Id)."
+} finally {
+  $env:RUNNER_TRACKING_ID = $runnerTrackingId
 }
-
-$watchdogContent = @"
-`$ErrorActionPreference = 'Stop'
-`$process = Get-CimInstance Win32_Process |
-  Where-Object { `$_.CommandLine -like '*$script*' } |
-  Select-Object -First 1
-if (-not `$process) {
-  Start-ScheduledTask -TaskName '$taskName'
-}
-"@
-Set-Content -LiteralPath $watchdogScript -Value $watchdogContent -Encoding UTF8
-$watchdogAction = New-ScheduledTaskAction `
-  -Execute 'powershell.exe' `
-  -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$watchdogScript`""
-$watchdogTriggers = @(
-  (New-ScheduledTaskTrigger -AtStartup),
-  (New-ScheduledTaskTrigger `
-    -Once `
-    -At (Get-Date).AddMinutes(1) `
-    -RepetitionInterval (New-TimeSpan -Minutes 5) `
-    -RepetitionDuration (New-TimeSpan -Days 3650))
-)
-$watchdogTaskName = 'GeoDTelemetryManagedWatchdog'
-$existingWatchdog = Get-ScheduledTask `
-  -TaskName $watchdogTaskName `
-  -ErrorAction SilentlyContinue
-if ($existingWatchdog) {
-  Set-ScheduledTask `
-    -InputObject $existingWatchdog `
-    -Action $watchdogAction `
-    -Trigger $watchdogTriggers | Out-Null
-} else {
-  Register-ScheduledTask `
-    -TaskName $watchdogTaskName `
-    -Action $watchdogAction `
-    -Trigger $watchdogTriggers `
-    -Principal $runnerPrincipal `
-    -Force | Out-Null
-}
-
-Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 3
 $health = Invoke-RestMethod -Uri 'http://127.0.0.1:9091/health' -TimeoutSec 10
 if ($health.status -ne 'ok') {
