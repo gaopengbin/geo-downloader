@@ -73,7 +73,11 @@ Get-CimInstance Win32_Process |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
 $legacyWatchdogMarker = 'services\geod-telemetry\server.mjs'
-$commandLine = "`"$node`" `"$script`" `"$legacyWatchdogMarker`""
+$stdoutPath = Join-Path $serviceRoot 'stdout.log'
+$stderrPath = Join-Path $serviceRoot 'stderr.log'
+$commandLine = `
+  "cmd.exe /d /s /c `"`"$node`" `"$script`" `"$legacyWatchdogMarker`" " +
+  "1>`"$stdoutPath`" 2>`"$stderrPath`"`""
 $createdProcess = Invoke-CimMethod `
   -ClassName Win32_Process `
   -MethodName Create `
@@ -91,6 +95,12 @@ if (
   $health.status -ne 'ok' -or
   $health.product_schema_version -ne 1
 ) {
+  if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) {
+    Write-Warning "Telemetry stdout:`n$(Get-Content -LiteralPath $stdoutPath -Raw)"
+  }
+  if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+    Write-Warning "Telemetry stderr:`n$(Get-Content -LiteralPath $stderrPath -Raw)"
+  }
   throw 'Telemetry health check failed'
 }
 
