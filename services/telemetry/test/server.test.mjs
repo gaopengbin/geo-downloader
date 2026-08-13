@@ -132,6 +132,49 @@ test('validates wallpaper events without collecting search text', () => {
   )
 })
 
+test('validates product hub clicks without accepting destination URLs', () => {
+  const visitorId = crypto.randomUUID()
+  const sessionId = crypto.randomUUID()
+  const [normalized] = validateProductEnvelope({
+    schema_version: 1,
+    product: 'laogao-home',
+    events: [{
+      event_id: crypto.randomUUID(),
+      event: 'product_clicked',
+      occurred_at: new Date().toISOString(),
+      visitor_id: visitorId,
+      session_id: sessionId,
+      properties: {
+        path: '/',
+        product_id: 'wechat-dialog',
+        placement: 'featured',
+      },
+    }],
+  })
+  assert.equal(normalized.product, 'laogao-home')
+  assert.equal(normalized.properties.product_id, 'wechat-dialog')
+  assert.equal(normalized.properties.placement, 'featured')
+  assert.throws(
+    () => validateProductEnvelope({
+      schema_version: 1,
+      product: 'laogao-home',
+      events: [{
+        event_id: crypto.randomUUID(),
+        event: 'product_clicked',
+        occurred_at: new Date().toISOString(),
+        visitor_id: visitorId,
+        session_id: sessionId,
+        properties: {
+          product_id: 'wechat-dialog',
+          placement: 'featured',
+          destination_url: 'https://example.com/private',
+        },
+      }],
+    }),
+    /properties are invalid/,
+  )
+})
+
 test('accepts expanded product events and rejects sensitive extra fields', () => {
   const examples = [
     event({ event: 'selection_changed', properties: { method: 'import', geometry: 'polygon', complexity: '11-100' } }),
@@ -364,6 +407,33 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
     'https://wallpaper.gpb.cc',
   )
 
+  const homeVisitorId = crypto.randomUUID()
+  const homeSessionId = crypto.randomUUID()
+  const homeResponse = await fetch(`${baseUrl}/v1/product-events`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: 'https://laogao.xyz',
+    },
+    body: JSON.stringify({
+      schema_version: 1,
+      product: 'laogao-home',
+      events: ['page_view', 'product_clicked'].map((event) => ({
+        event_id: crypto.randomUUID(),
+        event,
+        occurred_at: new Date().toISOString(),
+        visitor_id: homeVisitorId,
+        session_id: homeSessionId,
+        properties: event === 'page_view'
+          ? { path: '/' }
+          : { path: '/', product_id: 'geod', placement: 'featured' },
+      })),
+    }),
+  })
+  assert.equal(homeResponse.status, 202)
+  assert.deepEqual(await homeResponse.json(), { accepted: 2, inserted: 2 })
+  assert.equal(homeResponse.headers.get('access-control-allow-origin'), 'https://laogao.xyz')
+
   const productPreflight = await fetch(`${baseUrl}/v1/product-events`, {
     method: 'OPTIONS',
     headers: {
@@ -419,6 +489,10 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   assert.equal(wallpaper.visitors, 1)
   assert.equal(wallpaper.funnel[2].event, 'wallpaper_downloaded')
   assert.equal(wallpaper.funnel[2].conversion_rate, 1)
+  const home = productStats.products.find((item) => item.product === 'laogao-home')
+  assert.equal(home.visitors, 1)
+  assert.equal(home.funnel[1].event, 'product_clicked')
+  assert.equal(home.funnel[1].conversion_rate, 1)
 
   const publicStatsResponse = await fetch(`${baseUrl}/geod-telemetry/public/product-stats`)
   assert.equal(publicStatsResponse.status, 200)

@@ -14,6 +14,10 @@ const PRODUCT_DEFINITIONS = {
     events: new Set(['page_view', 'wallpaper_viewed', 'wallpaper_downloaded']),
     funnel: ['page_view', 'wallpaper_viewed', 'wallpaper_downloaded'],
   },
+  'laogao-home': {
+    events: new Set(['page_view', 'product_clicked']),
+    funnel: ['page_view', 'product_clicked'],
+  },
 }
 
 const COMMON_PROPERTIES = new Set([
@@ -31,6 +35,7 @@ const EVENT_PROPERTIES = {
   download_clicked: new Set(['platform', 'version', 'channel']),
   wallpaper_viewed: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
   wallpaper_downloaded: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
+  product_clicked: new Set(['product_id', 'placement']),
 }
 
 function invalid(message) {
@@ -130,6 +135,20 @@ function validateProperties(eventName, properties) {
     }
     normalized.wallpaper_kind = properties.wallpaper_kind
     normalized.media_type = properties.media_type
+  }
+
+  if (eventName === 'product_clicked') {
+    normalized.product_id = optionalString(
+      properties.product_id,
+      'product_id',
+      64,
+      /^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/,
+    )
+    if (!normalized.product_id) throw invalid('product_id is invalid')
+    if (!['featured', 'side-project', 'open-source', 'control-room', 'footer'].includes(properties.placement)) {
+      throw invalid('placement is invalid')
+    }
+    normalized.placement = properties.placement
   }
 
   return normalized
