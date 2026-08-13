@@ -299,6 +299,59 @@ function acquisitionStats(database, product, funnel) {
     ))
 }
 
+function landingPageStats(database, product, funnel) {
+  const rows = queryRows(
+    database,
+    `SELECT event_name, visitor_id, occurred_at, properties_json
+     FROM product_events
+     WHERE product = ?
+     ORDER BY occurred_at`,
+    [product],
+  )
+  const firstPathByVisitor = new Map()
+  const eventVisitors = new Map(funnel.map((event) => [event, new Set()]))
+
+  for (const row of rows) {
+    if (eventVisitors.has(row.event_name)) {
+      eventVisitors.get(row.event_name).add(row.visitor_id)
+    }
+    if (row.event_name !== 'page_view' || firstPathByVisitor.has(row.visitor_id)) continue
+    let properties = {}
+    try {
+      properties = JSON.parse(row.properties_json)
+    } catch {
+      properties = {}
+    }
+    const path = typeof properties.path === 'string' && properties.path.startsWith('/')
+      ? properties.path
+      : '/'
+    firstPathByVisitor.set(row.visitor_id, path)
+  }
+
+  const paths = new Map()
+  for (const [visitor, path] of firstPathByVisitor) {
+    if (!paths.has(path)) paths.set(path, new Set())
+    paths.get(path).add(visitor)
+  }
+
+  return [...paths.entries()]
+    .map(([path, visitors]) => {
+      const stages = funnel.map((event) => ({
+        event,
+        visitors: [...visitors].filter((visitor) => eventVisitors.get(event).has(visitor)).length,
+      }))
+      const finalVisitors = stages.at(-1)?.visitors || 0
+      return {
+        path,
+        visitors: visitors.size,
+        stages,
+        conversion_rate: visitors.size ? finalVisitors / visitors.size : 0,
+      }
+    })
+    .sort((left, right) => right.visitors - left.visitors || left.path.localeCompare(right.path))
+    .slice(0, 20)
+}
+
 export function initializeProductEvents(database) {
   database.run(`
     CREATE TABLE IF NOT EXISTS product_events (
@@ -405,6 +458,7 @@ export function productStats(database) {
         [product],
       ),
       acquisition: acquisitionStats(database, product, definition.funnel),
+      landing_pages: landingPageStats(database, product, definition.funnel),
     }
   })
   return { generated_at: new Date().toISOString(), products }

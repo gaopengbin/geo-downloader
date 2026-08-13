@@ -485,6 +485,16 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
     ],
     conversion_rate: 1,
   }])
+  assert.deepEqual(wechat.landing_pages, [{
+    path: '/',
+    visitors: 1,
+    stages: [
+      { event: 'page_view', visitors: 1 },
+      { event: 'dialog_created', visitors: 1 },
+      { event: 'image_exported', visitors: 1 },
+    ],
+    conversion_rate: 1,
+  }])
   const wallpaper = productStats.products.find((item) => item.product === 'wallpaper-web')
   assert.equal(wallpaper.visitors, 1)
   assert.equal(wallpaper.funnel[2].event, 'wallpaper_downloaded')
