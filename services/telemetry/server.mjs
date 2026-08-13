@@ -778,7 +778,11 @@ export async function createTelemetryServer(options = {}) {
       request.method === 'GET' &&
       ['/health', '/geod-telemetry/health'].includes(url.pathname)
     ) {
-      sendJson(response, 200, { status: 'ok', schema_version: 1 })
+      sendJson(response, 200, {
+        status: 'ok',
+        schema_version: 1,
+        product_schema_version: 1,
+      })
       return
     }
 
