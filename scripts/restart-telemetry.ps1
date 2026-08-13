@@ -14,7 +14,7 @@ $tokenFile = Join-Path $nginxRoot 'geod-telemetry-admin-token.txt'
 $databasePath = Join-Path $nginxRoot 'data\geod-telemetry.sqlite'
 $nginxConf = Join-Path $nginxRoot 'conf\nginx.conf'
 $nginxExe = Join-Path $nginxRoot 'nginx.exe'
-$watchdogScript = Join-Path $nginxRoot 'tools\geod-telemetry-watchdog.ps1'
+$watchdogScript = Join-Path $serviceRoot 'geod-telemetry-watchdog.ps1'
 
 $adminToken = [System.Text.Encoding]::UTF8.GetString(
   [System.Convert]::FromBase64String($AdminTokenBase64)
@@ -25,7 +25,9 @@ if ([string]::IsNullOrWhiteSpace($adminToken)) {
 
 New-Item -ItemType Directory -Force -Path $serviceRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path $databasePath) | Out-Null
-Set-Content -LiteralPath $tokenFile -Value $adminToken -NoNewline -Encoding UTF8
+if (-not (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
+  Set-Content -LiteralPath $tokenFile -Value $adminToken -NoNewline -Encoding UTF8
+}
 
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 Push-Location $serviceRoot
@@ -96,15 +98,9 @@ $location = @'
         }
 '@
 $locationReplacement = $location.Replace('$', '$$')
-$updated = $false
+$needsNginxUpdate = $false
 if ($conf -match '(?s)\s*location\s+/geod-telemetry/\s*\{.*?\}\s*') {
-  $conf = [regex]::Replace(
-    $conf,
-    '(?s)\s*location\s+/geod-telemetry/\s*\{.*?\}\s*',
-    "`r`n$locationReplacement`r`n",
-    1
-  )
-  $updated = $true
+  Write-Host 'The GeoD telemetry nginx route is already configured.'
 } elseif ($conf -match '(?s)(server\s*\{.*?server_name\s+[^;]*laogao\.xyz[^;]*;.*?)(\s*location\s+/packages/)') {
   $conf = [regex]::Replace(
     $conf,
@@ -112,40 +108,41 @@ if ($conf -match '(?s)\s*location\s+/geod-telemetry/\s*\{.*?\}\s*') {
     "`$1`r`n$locationReplacement`r`n`$2",
     1
   )
-  $updated = $true
-}
-if (-not $updated) {
+  $needsNginxUpdate = $true
+} else {
   throw 'Could not locate the laogao.xyz HTTPS server block in nginx.conf'
 }
 
-$backup = "$nginxConf.bak-telemetry-$(Get-Date -Format 'yyyyMMddHHmmss')"
-Copy-Item -LiteralPath $nginxConf -Destination $backup -Force
-$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText($nginxConf, $conf, $utf8NoBom)
+if ($needsNginxUpdate) {
+  $backup = "$nginxConf.bak-telemetry-$(Get-Date -Format 'yyyyMMddHHmmss')"
+  Copy-Item -LiteralPath $nginxConf -Destination $backup -Force
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($nginxConf, $conf, $utf8NoBom)
 
-& $nginxExe -t -p $nginxRoot -c conf/nginx.conf
-if ($LASTEXITCODE -ne 0) {
-  Copy-Item -LiteralPath $backup -Destination $nginxConf -Force
-  throw 'nginx config test failed; the previous configuration was restored'
+  & $nginxExe -t -p $nginxRoot -c conf/nginx.conf
+  if ($LASTEXITCODE -ne 0) {
+    Copy-Item -LiteralPath $backup -Destination $nginxConf -Force
+    throw 'nginx config test failed; the previous configuration was restored'
+  }
+
+  Get-CimInstance Win32_Process |
+    Where-Object { $_.ExecutablePath -eq $nginxExe } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+
+  $nginxTaskName = 'GeoDNginx'
+  $nginxAction = New-ScheduledTaskAction `
+    -Execute $nginxExe `
+    -Argument "-p `"$nginxRoot`" -c conf/nginx.conf" `
+    -WorkingDirectory $nginxRoot
+  $nginxTrigger = New-ScheduledTaskTrigger -AtStartup
+  Register-ScheduledTask `
+    -TaskName $nginxTaskName `
+    -Action $nginxAction `
+    -Trigger $nginxTrigger `
+    -Force | Out-Null
+  Start-ScheduledTask -TaskName $nginxTaskName
+  Start-Sleep -Seconds 2
 }
-
-Get-CimInstance Win32_Process |
-  Where-Object { $_.ExecutablePath -eq $nginxExe } |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-
-$nginxTaskName = 'GeoDNginx'
-$nginxAction = New-ScheduledTaskAction `
-  -Execute $nginxExe `
-  -Argument "-p `"$nginxRoot`" -c conf/nginx.conf" `
-  -WorkingDirectory $nginxRoot
-$nginxTrigger = New-ScheduledTaskTrigger -AtStartup
-Register-ScheduledTask `
-  -TaskName $nginxTaskName `
-  -Action $nginxAction `
-  -Trigger $nginxTrigger `
-  -Force | Out-Null
-Start-ScheduledTask -TaskName $nginxTaskName
-Start-Sleep -Seconds 2
 
 $publicHealth = Invoke-RestMethod `
   -Uri 'https://laogao.xyz/geod-telemetry/health' `
