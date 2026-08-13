@@ -76,7 +76,19 @@ Get-CimInstance Win32_Process |
 $taskName = 'GeoDTelemetry'
 $action = New-ScheduledTaskAction -Execute $node -Argument "`"$script`"" -WorkingDirectory $serviceRoot
 $trigger = New-ScheduledTaskTrigger -AtStartup
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force | Out-Null
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if ($existingTask) {
+  Set-ScheduledTask `
+    -InputObject $existingTask `
+    -Action $action `
+    -Trigger $trigger | Out-Null
+} else {
+  Register-ScheduledTask `
+    -TaskName $taskName `
+    -Action $action `
+    -Trigger $trigger `
+    -Force | Out-Null
+}
 
 $watchdogContent = @"
 `$ErrorActionPreference = 'Stop'
@@ -99,11 +111,22 @@ $watchdogTriggers = @(
     -RepetitionInterval (New-TimeSpan -Minutes 5) `
     -RepetitionDuration (New-TimeSpan -Days 3650))
 )
-Register-ScheduledTask `
-  -TaskName 'GeoDTelemetryWatchdog' `
-  -Action $watchdogAction `
-  -Trigger $watchdogTriggers `
-  -Force | Out-Null
+$watchdogTaskName = 'GeoDTelemetryWatchdog'
+$existingWatchdog = Get-ScheduledTask `
+  -TaskName $watchdogTaskName `
+  -ErrorAction SilentlyContinue
+if ($existingWatchdog) {
+  Set-ScheduledTask `
+    -InputObject $existingWatchdog `
+    -Action $watchdogAction `
+    -Trigger $watchdogTriggers | Out-Null
+} else {
+  Register-ScheduledTask `
+    -TaskName $watchdogTaskName `
+    -Action $watchdogAction `
+    -Trigger $watchdogTriggers `
+    -Force | Out-Null
+}
 
 Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 3
