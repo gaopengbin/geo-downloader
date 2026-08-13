@@ -206,9 +206,9 @@ Copyright © 2025–2026 gaopengbin
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡。
 
 <p align="center">
-  <img src="https://laogao.xyz/packages/qr-assets/wx.jpg" alt="微信赞赏" width="220">
+  <img src="static/images/wx.jpg" alt="微信赞赏" width="220">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://laogao.xyz/packages/qr-assets/zfb.jpg" alt="支付宝赞赏" width="220">
+  <img src="static/images/zfb.jpg" alt="支付宝赞赏" width="220">
 </p>
 
 ### 感谢支持
