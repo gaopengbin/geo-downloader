@@ -25,6 +25,7 @@ pub mod cache_migration;
 pub mod source_analyzer;
 pub mod assistant;
 pub mod region_bookmarks;
+pub mod geotiff_sidecar;
 
 // Tauri commands
 mod commands;

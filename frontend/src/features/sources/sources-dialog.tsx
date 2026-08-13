@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -28,6 +29,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAssistantStore } from '@/features/assistant/assistant-store'
 import { getSettings, saveSettings } from '@/features/settings/settings-api'
@@ -72,7 +80,7 @@ function SourceForm({ value, onChange, disableId }: SourceFormProps) {
           id={`url-${value.id}`}
           value={value.url}
           onChange={(e) => onChange({ ...value, url: e.target.value })}
-          placeholder="https://example.com/{z}/{x}/{y}.png  支持 {s}/{x}/{y}/{z}"
+          placeholder="https://example.com/{z}/{x}/{y}.png  支持 {s}/{x}/{y}/{z}/{q}"
           className="font-mono text-xs"
         />
       </div>
@@ -84,6 +92,23 @@ function SourceForm({ value, onChange, disableId }: SourceFormProps) {
           onChange={(e) => onChange({ ...value, subdomains: e.target.value })}
           placeholder="a,b,c 可空"
         />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`scheme-${value.id}`}>坐标方案</Label>
+        <Select
+          value={value.scheme ?? 'xyz'}
+          onValueChange={(scheme) =>
+            onChange({ ...value, scheme: scheme as CustomTileSource['scheme'] })
+          }
+        >
+          <SelectTrigger id={`scheme-${value.id}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="xyz">XYZ（常用）</SelectItem>
+            <SelectItem value="tms">TMS（Y 轴翻转）</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor={`zoom-${value.id}`}>最大缩放级别</Label>
@@ -111,8 +136,10 @@ function SourceForm({ value, onChange, disableId }: SourceFormProps) {
 function validateSource(s: CustomTileSource): string | null {
   if (!s.name.trim()) return '名称不能为空'
   if (!s.url.trim()) return 'URL 模板不能为空'
-  if (!/\{x\}/.test(s.url) || !/\{y\}/.test(s.url) || !/\{z\}/.test(s.url)) {
-    return 'URL 模板必须包含 {x} {y} {z} 占位符'
+  const hasXyz = /\{x\}/.test(s.url) && /\{y\}/.test(s.url) && /\{z\}/.test(s.url)
+  const hasQuadKey = /\{q\}/.test(s.url)
+  if (!hasXyz && !hasQuadKey) {
+    return 'URL 模板必须包含 {x} {y} {z}，或使用 {q} QuadKey 占位符'
   }
   if (typeof s.max_zoom !== 'number' || s.max_zoom < 0 || s.max_zoom > 22) {
     return '最大缩放级别需在 0-22'
@@ -294,6 +321,9 @@ function CustomPanel({
                   <Badge variant="secondary" className="text-xs">
                     z≤{s.max_zoom}
                   </Badge>
+                  {(s.scheme ?? 'xyz') === 'tms' && (
+                    <Badge variant="outline" className="text-xs">TMS</Badge>
+                  )}
                 </div>
                 <code className="mt-1 block truncate font-mono text-xs text-muted-foreground">
                   {s.url}
@@ -553,6 +583,7 @@ function DefaultSourcePanel({
 }
 
 export function SourcesDialog() {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const assistantOpen = useAssistantStore((state) => state.open)
   const queryClient = useQueryClient()
@@ -633,7 +664,7 @@ export function SourcesDialog() {
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" className="gap-2">
           <Database className="size-4" />
-          图源管理
+          {t('common.sourceManagement')}
         </Button>
       </DialogTrigger>
       <DialogContent

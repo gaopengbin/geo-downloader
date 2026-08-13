@@ -1,5 +1,6 @@
 import type { MouseEvent, PropsWithChildren, ReactNode } from 'react'
 import { Minus, Square, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { ThemeSwitcher } from '@/components/theme/theme-switcher'
@@ -49,6 +50,7 @@ interface AppShellProps extends PropsWithChildren {
 }
 
 export function AppShell({ children, modeSlot, headerExtras }: AppShellProps) {
+  const { t } = useTranslation()
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div
@@ -84,14 +86,14 @@ export function AppShell({ children, modeSlot, headerExtras }: AppShellProps) {
           {headerExtras}
           <ResumableTasksButton />
           <ThemeSwitcher />
-          <Button aria-label="最小化" size="icon" variant="ghost" onClick={() => void withCurrentWindow('minimize')}>
+          <Button aria-label={t('app.window.minimize')} size="icon" variant="ghost" onClick={() => void withCurrentWindow('minimize')}>
             <Minus className="size-4" />
           </Button>
-          <Button aria-label="最大化" size="icon" variant="ghost" onClick={() => void withCurrentWindow('toggleMaximize')}>
+          <Button aria-label={t('app.window.maximize')} size="icon" variant="ghost" onClick={() => void withCurrentWindow('toggleMaximize')}>
             <Square className="size-3.5" />
           </Button>
           <Button
-            aria-label="关闭"
+            aria-label={t('app.window.close')}
             size="icon"
             variant="ghost"
             className="hover:bg-destructive hover:text-destructive-foreground"

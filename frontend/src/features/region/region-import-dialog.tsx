@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Feature } from 'geojson'
+import { useTranslation } from 'react-i18next'
 
 import {
   Dialog,
@@ -40,44 +41,56 @@ interface Props {
 }
 
 export function RegionImportDialog({ features, filename, onClose }: Props) {
+  if (!features) return null
+
+  return (
+    <RegionImportDialogContent
+      features={features}
+      filename={filename}
+      onClose={onClose}
+    />
+  )
+}
+
+function RegionImportDialogContent({
+  features,
+  filename,
+  onClose,
+}: {
+  features: Feature[]
+  filename: string
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
   const setExternalSelection = useSelectionStore((s) => s.setExternalSelection)
-  const open = features != null
 
   const propertyKeys = useMemo(
-    () => (features ? collectPropertyKeys(features) : []),
+    () => collectPropertyKeys(features),
     [features],
   )
-  const [nameField, setNameField] = useState<string>(INDEX_FIELD)
-  const [selected, setSelected] = useState<Set<number>>(new Set())
-
-  useEffect(() => {
-    if (!features) {
-      setSelected(new Set())
-      return
-    }
-    setNameField(recommendNameField(propertyKeys) ?? INDEX_FIELD)
-    setSelected(new Set(features.map((_, i) => i)))
-  }, [features, propertyKeys])
+  const [nameField, setNameField] = useState<string>(
+    () => recommendNameField(propertyKeys) ?? INDEX_FIELD,
+  )
+  const [selected, setSelected] = useState<Set<number>>(
+    () => new Set(features.map((_, i) => i)),
+  )
 
   const totalArea = useMemo(
     () =>
-      features
-        ? features.reduce((acc, f) => {
-            const bb = featureBbox(f)
-            return acc + (bb ? bboxAreaKm2(bb) : 0)
-          }, 0)
-        : 0,
+      features.reduce((acc, f) => {
+        const bb = featureBbox(f)
+        return acc + (bb ? bboxAreaKm2(bb) : 0)
+      }, 0),
     [features],
   )
 
-  if (!open || !features) return null
-
   const total = features.length
   const featureName = (i: number): string => {
-    if (nameField === INDEX_FIELD) return `要素 ${String(i + 1).padStart(3, '0')}`
+    const fallback = t('regionImport.featureName', { index: String(i + 1).padStart(3, '0') })
+    if (nameField === INDEX_FIELD) return fallback
     const f = features[i]
     const v = f.properties?.[nameField]
-    if (v == null || v === '') return `要素 ${String(i + 1).padStart(3, '0')}`
+    if (v == null || v === '') return fallback
     return String(v)
   }
 
@@ -158,13 +171,16 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
       <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col">
         <DialogHeader>
           <DialogTitle>
-            导入区域 — {filename || '上传文件'}（{total} 个要素）
+            {t('regionImport.title', {
+              filename: filename || t('regionImport.uploadedFile'),
+              count: total,
+            })}
           </DialogTitle>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label className="text-xs">显示名称字段</Label>
+            <Label className="text-xs">{t('regionImport.nameField')}</Label>
             <Select value={nameField} onValueChange={setNameField}>
               <SelectTrigger className="h-8 text-xs">
                 <SelectValue />
@@ -172,30 +188,34 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
               <SelectContent>
                 {propertyKeys.map((k) => (
                   <SelectItem key={k} value={k}>
-                    {k === '__source_file' ? '来源文件名' : k}
+                    {k === '__source_file' ? t('regionImport.sourceFilename') : k}
                   </SelectItem>
                 ))}
-                <SelectItem value={INDEX_FIELD}>序号 (001, 002, ...)</SelectItem>
+                <SelectItem value={INDEX_FIELD}>{t('regionImport.sequence')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="flex items-end gap-1">
             <Button size="sm" variant="outline" onClick={selectAll} type="button">
-              全选
+              {t('regionImport.selectAll')}
             </Button>
             <Button size="sm" variant="outline" onClick={selectNone} type="button">
-              清空
+              {t('regionImport.clear')}
             </Button>
             <Button size="sm" variant="outline" onClick={invert} type="button">
-              反选
+              {t('regionImport.invert')}
             </Button>
           </div>
         </div>
 
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
-            已选 {selected.size} / {total} · {selectedArea.toFixed(2)} /{' '}
-            {totalArea.toFixed(2)} km²
+            {t('regionImport.selected', {
+              selected: selected.size,
+              total,
+              selectedArea: selectedArea.toFixed(2),
+              totalArea: totalArea.toFixed(2),
+            })}
           </span>
         </div>
 
@@ -203,10 +223,10 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-muted/50">
               <tr>
-                <th className="w-10 px-2 py-1.5 text-left">选</th>
+                <th className="w-10 px-2 py-1.5 text-left">{t('regionImport.columns.selected')}</th>
                 <th className="w-12 px-2 py-1.5 text-left">#</th>
-                <th className="px-2 py-1.5 text-left">名称</th>
-                <th className="w-24 px-2 py-1.5 text-right">面积 km²</th>
+                <th className="px-2 py-1.5 text-left">{t('regionImport.columns.name')}</th>
+                <th className="w-24 px-2 py-1.5 text-right">{t('regionImport.columns.area')}</th>
               </tr>
             </thead>
             <tbody>
@@ -244,10 +264,10 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} type="button">
-            取消
+            {t('regionImport.cancel')}
           </Button>
           <Button onClick={onConfirm} disabled={selected.size === 0} type="button">
-            导入选中的 {selected.size} 个要素
+            {t('regionImport.confirm', { count: selected.size })}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Download, ExternalLink } from 'lucide-react'
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -34,6 +35,7 @@ async function openExternal(url: string) {
 }
 
 export function UpdateDialog() {
+  const { t } = useTranslation()
   const open = useUpdateStore((s) => s.open)
   const info = useUpdateStore((s) => s.info)
   const downloading = useUpdateStore((s) => s.downloading)
@@ -96,7 +98,7 @@ export function UpdateDialog() {
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      toast.error('下载更新失败：' + message)
+      toast.error(t('update.failed', { message }))
       setDownloading(false)
       setProgress(0)
     }
@@ -106,9 +108,12 @@ export function UpdateDialog() {
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>发现新版本</DialogTitle>
+          <DialogTitle>{t('update.title')}</DialogTitle>
           <DialogDescription>
-            当前版本 v{info.currentVersion}，最新版本 v{info.latestVersion}。
+            {t('update.versions', {
+              current: info.currentVersion,
+              latest: info.latestVersion,
+            })}
           </DialogDescription>
         </DialogHeader>
 
@@ -130,7 +135,7 @@ export function UpdateDialog() {
         {downloading && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">正在下载安装包…</span>
+              <span className="text-muted-foreground">{t('update.downloading')}</span>
               <span className="tabular-nums font-medium">{progress}%</span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -145,16 +150,16 @@ export function UpdateDialog() {
         <DialogFooter>
           <Button variant="outline" onClick={() => openExternal(info.releaseUrl)}>
             <ExternalLink className="size-4" />
-            发布页
+            {t('update.releasePage')}
           </Button>
           {!downloading && (
             <>
               <Button variant="ghost" onClick={() => closeDialog()}>
-                稍后再说
+                {t('update.later')}
               </Button>
               <Button onClick={handleUpdateNow}>
                 <Download className="size-4" />
-                {info.downloadUrl?.endsWith('.exe') ? '立即更新' : '前往下载'}
+                {t(info.downloadUrl?.endsWith('.exe') ? 'update.now' : 'update.download')}
               </Button>
             </>
           )}

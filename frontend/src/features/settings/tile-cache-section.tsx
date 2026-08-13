@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ask as askDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { FolderSync, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -48,6 +49,7 @@ export function TileCacheSection({
   onMaxSizeMbChange,
   onDirChange,
 }: TileCacheSectionProps) {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [maxGbDraft, setMaxGbDraft] = useState<string | null>(null)
   const [migrationOpen, setMigrationOpen] = useState(false)
@@ -73,14 +75,14 @@ export function TileCacheSection({
     onSuccess: (freed, source) => {
       toast.success(
         source
-          ? `已清理 ${source}（释放 ${formatBytes(freed)}）`
-          : `已清空全部缓存（释放 ${formatBytes(freed)}）`,
+          ? t('cache.clearedSource', { source, size: formatBytes(freed) })
+          : t('cache.clearedAll', { size: formatBytes(freed) }),
       )
       queryClient.invalidateQueries({ queryKey: ['tile-cache-stats'] })
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e)
-      toast.error(`清理失败：${msg}`)
+      toast.error(t('cache.clearError', { message: msg }))
     },
   })
 
@@ -100,7 +102,7 @@ export function TileCacheSection({
         setMigrationOpen(true)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
-        toast.error(`迁移预检失败：${msg}`)
+        toast.error(t('cache.migratePreflightError', { message: msg }))
       } finally {
         setCheckingMigration(false)
       }
@@ -108,8 +110,8 @@ export function TileCacheSection({
   }
 
   const handleClearAll = async () => {
-    const ok = await askDialog('确定要清空所有瓦片缓存吗？该操作不可恢复。', {
-      title: '清空瓦片缓存',
+    const ok = await askDialog(t('cache.clearConfirm'), {
+      title: t('cache.clearTitle'),
       kind: 'warning',
     })
     if (ok) clearMutation.mutate(undefined)
@@ -154,16 +156,16 @@ export function TileCacheSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between rounded-md border p-2.5">
         <div className="min-w-0 pr-2">
-          <Label className="text-sm">启用瓦片缓存</Label>
+          <Label className="text-sm">{t('cache.enable')}</Label>
           <p className="text-xs text-muted-foreground">
-            浏览过的瓦片自动落盘，下次免重复请求
+            {t('cache.enableHint')}
           </p>
         </div>
         <Switch checked={enabled} onCheckedChange={onEnabledChange} />
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="tile_cache_max_gb">容量上限 GB（0 = 不限）</Label>
+        <Label htmlFor="tile_cache_max_gb">{t('cache.limit')}</Label>
         <Input
           id="tile_cache_max_gb"
           type="number"
@@ -177,7 +179,7 @@ export function TileCacheSection({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="tile_cache_dir">当前缓存目录</Label>
+        <Label htmlFor="tile_cache_dir">{t('cache.directory')}</Label>
         <div className="flex gap-2">
           <Input
             id="tile_cache_dir"
@@ -196,11 +198,11 @@ export function TileCacheSection({
             ) : (
               <FolderSync className="size-3.5" />
             )}
-            迁移
+            {t('cache.migrate')}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          迁移会复制并校验全部缓存，成功后才切换目录，旧缓存默认保留。
+          {t('cache.migrateHint')}
         </p>
       </div>
 
@@ -212,25 +214,25 @@ export function TileCacheSection({
             <div className="min-w-0">
               <div className="font-medium">
                 {recordedMigration.status === 'completed'
-                  ? '上次缓存迁移已完成'
-                  : '有未完成的缓存迁移'}
+                  ? t('cache.previousCompleted')
+                  : t('cache.previousIncomplete')}
               </div>
               <div className="truncate text-xs text-muted-foreground">
                 {recordedMigration.message}
               </div>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={handleOpenRecordedMigration}>
-              处理
+              {t('cache.handle')}
             </Button>
           </div>
         )}
 
       <div className="rounded-md border p-2.5">
         <div className="mb-1.5 flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">已用容量</span>
+          <span className="text-muted-foreground">{t('cache.used')}</span>
           <span className="font-medium">
             {formatBytes(usedBytes)}
-            {maxBytes > 0 ? ` / ${formatBytes(maxBytes)}` : ' / 不限'}
+            {maxBytes > 0 ? ` / ${formatBytes(maxBytes)}` : ` / ${t('cache.unlimited')}`}
           </span>
         </div>
         {maxBytes > 0 && (
@@ -245,7 +247,7 @@ export function TileCacheSection({
 
       <div className="rounded-md border">
         <div className="flex items-center justify-between border-b px-2.5 py-2">
-          <span className="text-xs font-medium">分图源占用</span>
+          <span className="text-xs font-medium">{t('cache.bySource')}</span>
           <Button
             type="button"
             variant="ghost"
@@ -263,7 +265,7 @@ export function TileCacheSection({
         {statsQuery.isLoading ? (
           <div className="flex items-center justify-center py-4 text-xs text-muted-foreground">
             <Loader2 className="mr-1 size-3.5 animate-spin" />
-            加载中...
+            {t('common.loading')}
           </div>
         ) : stats && stats.sources.length > 0 ? (
           <ul className="max-h-48 divide-y overflow-auto text-xs">
@@ -277,7 +279,7 @@ export function TileCacheSection({
                     {s.displayName || s.source}
                   </div>
                   <div className="text-muted-foreground">
-                    {s.tileCount} 块 · {formatBytes(s.sizeBytes)}
+                    {t('cache.tiles', { count: s.tileCount })} · {formatBytes(s.sizeBytes)}
                     {s.maxZoom != null ? ` · z≤${s.maxZoom}` : ''}
                   </div>
                 </div>
@@ -295,7 +297,7 @@ export function TileCacheSection({
             ))}
           </ul>
         ) : (
-          <div className="px-2.5 py-3 text-xs text-muted-foreground">暂无缓存</div>
+          <div className="px-2.5 py-3 text-xs text-muted-foreground">{t('cache.empty')}</div>
         )}
       </div>
 
@@ -308,7 +310,7 @@ export function TileCacheSection({
         disabled={clearMutation.isPending || (stats?.sources.length ?? 0) === 0}
       >
         <Trash2 className="mr-1 size-3.5" />
-        清空全部缓存
+        {t('cache.clearAll')}
       </Button>
 
       {migrationOpen && (

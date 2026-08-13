@@ -3,7 +3,9 @@ import maplibregl, { type StyleSpecification } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { VectorTile } from '@mapbox/vector-tile'
 import Pbf from 'pbf'
+import { useTranslation } from 'react-i18next'
 
+import { i18n } from '@/i18n'
 import { useSelectionStore } from '@/store/selection-store'
 
 const PALETTE = [
@@ -116,7 +118,7 @@ async function discoverLayersViaProbe(
     .replace('{y}', String(y))
     .replace(/\{s\}/, 'a')
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`HTTP ${res.status} 抓取首块瓦片失败`)
+  if (!res.ok) throw new Error(i18n.t('mvt.firstTileFailed', { status: res.status }))
   let buf = await res.arrayBuffer()
   const u8 = new Uint8Array(buf)
   if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
@@ -195,35 +197,34 @@ type BasemapId = 'gaode' | 'gaode-sat' | 'osm' | 'esri' | 'none'
 
 interface BasemapDef {
   id: BasemapId
-  label: string
   tiles: string[]
   attribution: string
+  attributionKey?: string
   maxzoom?: number
 }
 
 const BASEMAPS: BasemapDef[] = [
   {
     id: 'gaode',
-    label: '高德地图',
     tiles: [1, 2, 3, 4].map(
       (s) =>
         `https://webrd0${s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}`,
     ),
-    attribution: '© 高德地图',
+    attribution: '',
+    attributionKey: 'mvt.attribution.gaode',
     maxzoom: 18,
   },
   {
     id: 'gaode-sat',
-    label: '高德影像',
     tiles: [1, 2, 3, 4].map(
       (s) => `https://webst0${s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}`,
     ),
-    attribution: '© 高德影像',
+    attribution: '',
+    attributionKey: 'mvt.attribution.gaodeSatellite',
     maxzoom: 18,
   },
   {
     id: 'esri',
-    label: 'Esri 影像',
     tiles: [
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     ],
@@ -232,7 +233,6 @@ const BASEMAPS: BasemapDef[] = [
   },
   {
     id: 'osm',
-    label: 'OpenStreetMap',
     tiles: [
       'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
       'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -241,8 +241,20 @@ const BASEMAPS: BasemapDef[] = [
     attribution: '© OpenStreetMap',
     maxzoom: 19,
   },
-  { id: 'none', label: '无底图', tiles: [], attribution: '' },
+  { id: 'none', tiles: [], attribution: '' },
 ]
+
+const BASEMAP_LABEL_KEYS: Record<BasemapId, string> = {
+  gaode: 'mvt.basemap.gaode',
+  'gaode-sat': 'mvt.basemap.gaodeSatellite',
+  esri: 'mvt.basemap.esri',
+  osm: 'mvt.basemap.osm',
+  none: 'mvt.basemap.none',
+}
+
+function getBasemapAttribution(def: BasemapDef): string {
+  return def.attributionKey ? i18n.t(def.attributionKey) : def.attribution
+}
 
 function buildStyle(
   urlTemplate: string,
@@ -269,7 +281,7 @@ function buildStyle(
       type: 'raster',
       tiles: basemap.tiles,
       tileSize: 256,
-      attribution: basemap.attribution,
+      attribution: getBasemapAttribution(basemap),
       maxzoom: basemap.maxzoom ?? 19,
     }
     style.layers.push({
@@ -316,6 +328,7 @@ export interface MvtPreviewProps {
 }
 
 export function MvtPreview({ urlTemplate, maxZoom = 14 }: MvtPreviewProps) {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -380,7 +393,7 @@ export function MvtPreview({ urlTemplate, maxZoom = 14 }: MvtPreviewProps) {
         })
         map.on('error', (e) => {
           if (!cancelled) {
-            const msg = (e.error as Error | undefined)?.message ?? '未知错误'
+            const msg = (e.error as Error | undefined)?.message ?? i18n.t('mvt.unknownError')
             console.warn('[MvtPreview]', msg)
           }
         })
@@ -436,7 +449,7 @@ export function MvtPreview({ urlTemplate, maxZoom = 14 }: MvtPreviewProps) {
         type: 'raster',
         tiles: def.tiles,
         tileSize: 256,
-        attribution: def.attribution,
+        attribution: getBasemapAttribution(def),
         maxzoom: def.maxzoom ?? 19,
       })
       // 插到所有矢量图层下面
@@ -468,28 +481,28 @@ export function MvtPreview({ urlTemplate, maxZoom = 14 }: MvtPreviewProps) {
                 : 'text-muted-foreground hover:bg-muted'
             }`}
           >
-            {b.label}
+            {t(BASEMAP_LABEL_KEYS[b.id])}
           </button>
         ))}
       </div>
       {status === 'idle' && (
         <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-          请选择 MVT 图源以预览
+          {t('mvt.chooseSource')}
         </div>
       )}
       {status === 'loading' && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/60 text-xs text-muted-foreground">
-          正在加载首块瓦片以发现图层…
+          {t('mvt.discovering')}
         </div>
       )}
       {status === 'error' && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80 px-4 text-center text-xs text-destructive">
-          预览失败：{errorMsg}
+          {t('mvt.previewFailed', { message: errorMsg })}
         </div>
       )}
       {status === 'ready' && (
         <div className="pointer-events-none absolute left-2 top-2 rounded bg-background/80 px-2 py-1 text-[11px] text-muted-foreground">
-          已识别 {layerCount} 个矢量图层（每层随机配色）
+          {t('mvt.discoveredLayers', { count: layerCount })}
         </div>
       )}
     </div>

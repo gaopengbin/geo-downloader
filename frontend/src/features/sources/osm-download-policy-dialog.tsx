@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ExternalLink } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -19,6 +20,7 @@ import {
 } from './osm-download-policy'
 
 export function OsmDownloadPolicyDialog() {
+  const { t } = useTranslation()
   const [request, setRequest] = useState<OsmDownloadPolicyRequest | null>(null)
   const switchButtonRef = useRef<HTMLButtonElement>(null)
 
@@ -53,9 +55,9 @@ export function OsmDownloadPolicyDialog() {
               <AlertTriangle className="size-5" />
             </div>
             <div className="space-y-1.5">
-              <DialogTitle>OpenStreetMap Standard 下载提示</DialogTitle>
+              <DialogTitle>{t('osmPolicy.title')}</DialogTitle>
               <DialogDescription className="leading-6">
-                OpenStreetMap 公共标准瓦片服务主要用于交互式浏览，其使用政策不允许批量下载、预取或制作离线瓦片包。
+                {t('osmPolicy.description')}
               </DialogDescription>
             </div>
           </div>
@@ -63,11 +65,10 @@ export function OsmDownloadPolicyDialog() {
 
         <div className="space-y-3 text-sm leading-6">
           <div className="rounded-md border bg-muted/35 p-3">
-            建议切换到自建瓦片服务，或使用明确允许下载和离线使用的服务商。通过 Overpass
-            下载 OSM 矢量要素不属于此标准瓦片服务。
+            {t('osmPolicy.recommendation')}
           </div>
           <p className="text-muted-foreground">
-            选择“仍然继续”表示你已了解服务政策和访问风险。本次应用运行期间不再重复提示，重新启动后会再次确认。
+            {t('osmPolicy.acknowledgement')}
           </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             <a
@@ -84,20 +85,20 @@ export function OsmDownloadPolicyDialog() {
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-primary hover:underline"
             >
-              版权与署名要求 <ExternalLink className="size-3" />
+              {t('osmPolicy.copyright')} <ExternalLink className="size-3" />
             </a>
           </div>
         </div>
 
         <DialogFooter className="gap-2 sm:space-x-0">
           <Button variant="ghost" onClick={() => finish('cancel')}>
-            取消
+            {t('common.cancel')}
           </Button>
           <Button variant="outline" onClick={() => finish('continue')}>
-            仍然继续
+            {t('osmPolicy.continue')}
           </Button>
           <Button ref={switchButtonRef} onClick={() => finish('switch')}>
-            切换图源
+            {t('osmPolicy.switch')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -19,9 +19,13 @@ pub struct CustomTileSource {
     /// 最大缩放级别
     #[serde(default = "default_max_zoom")]
     pub max_zoom: u8,
+    /// Tile coordinate scheme used by the remote service.
+    #[serde(default = "default_tile_scheme")]
+    pub scheme: String,
 }
 
 fn default_max_zoom() -> u8 { 18 }
+fn default_tile_scheme() -> String { "xyz".to_string() }
 
 /// 应用设置
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +252,16 @@ mod tests {
         assert_eq!(settings.ai_base_url, "https://api.deepseek.com/v1");
         assert_eq!(settings.ai_model, "deepseek-v4-flash");
         assert!(settings.deepseek_api_key.is_none());
+    }
+
+    #[test]
+    fn legacy_custom_sources_default_to_xyz() {
+        let source: super::CustomTileSource = serde_json::from_str(
+            r#"{"id":"custom_1","name":"Legacy","url":"https://tiles/{z}/{x}/{y}.png","max_zoom":18}"#,
+        )
+        .unwrap();
+
+        assert_eq!(source.scheme, "xyz");
     }
 
     #[test]

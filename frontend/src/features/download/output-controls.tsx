@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -9,14 +11,12 @@ import {
 import { cn } from '@/lib/utils'
 import type { Bounds, Polygon } from '@/types/api'
 
-import { selectionCropLabel } from './crop-utils'
-
 export type TiffCompression = 'none' | 'lzw' | 'deflate'
 
-export const TIFF_COMPRESSION_OPTIONS: { value: TiffCompression; label: string }[] = [
-  { value: 'none', label: '无压缩 (最快导出)' },
-  { value: 'lzw', label: 'LZW (通用兼容)' },
-  { value: 'deflate', label: 'Deflate (体积最小)' },
+const TIFF_COMPRESSION_OPTIONS: { value: TiffCompression; labelKey: string }[] = [
+  { value: 'none', labelKey: 'download.compression.none' },
+  { value: 'lzw', labelKey: 'download.compression.lzw' },
+  { value: 'deflate', labelKey: 'download.compression.deflate' },
 ]
 
 export function TiffCompressionSelect({
@@ -28,9 +28,11 @@ export function TiffCompressionSelect({
   onChange: (value: TiffCompression) => void
   triggerClassName?: string
 }) {
+  const { t } = useTranslation()
+
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">TIFF 压缩</Label>
+      <Label className="text-xs">{t('download.compression.title')}</Label>
       <Select value={value} onValueChange={(v) => onChange(v as TiffCompression)}>
         <SelectTrigger className={triggerClassName}>
           <SelectValue />
@@ -38,7 +40,7 @@ export function TiffCompressionSelect({
         <SelectContent>
           {TIFF_COMPRESSION_OPTIONS.map((opt) => (
             <SelectItem key={opt.value} value={opt.value}>
-              {opt.label}
+              {t(opt.labelKey)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -56,6 +58,8 @@ export function BuildPyramidToggle({
   onChange: (checked: boolean) => void
   className?: string
 }) {
+  const { t } = useTranslation()
+
   return (
     <label className={cn('flex items-center gap-2 text-xs', className)}>
       <input
@@ -64,7 +68,7 @@ export function BuildPyramidToggle({
         onChange={(e) => onChange(e.target.checked)}
         className="size-3.5"
       />
-      构建影像金字塔（加速 GIS 浏览）
+      {t('download.pyramid')}
     </label>
   )
 }
@@ -82,6 +86,8 @@ export function SelectionCropToggle({
   onChange: (checked: boolean) => void
   className?: string
 }) {
+  const { t } = useTranslation()
+
   if (!bounds) return null
 
   return (
@@ -98,8 +104,35 @@ export function SelectionCropToggle({
         className="size-3.5 accent-primary"
       />
       <span>
-        {selectionCropLabel(polygon)}
-        <span className="ml-1 text-muted-foreground">默认开启，框外透明</span>
+        {t(polygon && polygon.length > 0 ? 'download.crop.polygon' : 'download.crop.bounds')}
+        <span className="ml-1 text-muted-foreground">{t('download.crop.hint')}</span>
+      </span>
+    </label>
+  )
+}
+
+export function GeoTiffSidecarToggle({
+  checked,
+  onChange,
+  className,
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  className?: string
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <label className={cn('flex items-start gap-2 text-xs', className)}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 size-3.5"
+      />
+      <span>
+        {t('download.sidecars')}
+        <span className="ml-1 text-muted-foreground">{t('download.sidecarsHint')}</span>
       </span>
     </label>
   )

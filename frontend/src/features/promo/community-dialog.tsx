@@ -1,4 +1,5 @@
 import { Users } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -13,6 +14,7 @@ import { fallbackToLocal } from '@/lib/qr-assets'
 import { useCachedImage } from '@/lib/use-cached-image'
 
 export function CommunityDialog() {
+  const { t } = useTranslation()
   const gzhSrc = useCachedImage('gzh')
   const wxqSrc = useCachedImage('wxq')
   return (
@@ -20,7 +22,7 @@ export function CommunityDialog() {
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs">
           <Users className="size-3.5" />
-          加群
+          {t('app.header.community')}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">

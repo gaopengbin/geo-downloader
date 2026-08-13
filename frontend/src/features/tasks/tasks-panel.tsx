@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { ask as askDialog } from '@tauri-apps/plugin-dialog'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
   ChevronRight,
@@ -29,6 +30,7 @@ import {
   resumeTask,
   togglePauseTask,
 } from '@/features/tasks/tasks-api'
+import { getTaskStatusKey } from '@/features/tasks/task-copy'
 import type { PersistedTask, TaskInfo, TaskLog, TaskStatus } from '@/types/api'
 
 const ACTIVE_STATES: TaskStatus[] = [
@@ -59,25 +61,6 @@ function statusVariant(s: string): 'default' | 'secondary' | 'destructive' | 'ou
   if (s === 'failed' || s === 'cancelled') return 'destructive'
   if (s === 'paused' || s === 'pending_decision' || s === 'completed_with_gaps') return 'outline'
   return 'secondary'
-}
-
-const STATUS_TEXT: Record<string, string> = {
-  pending: '等待中',
-  downloading: '下载中',
-  paused: '已暂停',
-  pending_decision: '待决策',
-  merging: '拼接中',
-  processing: '处理中',
-  exporting: '导出中',
-  building_pyramid: '构建金字塔',
-  completed: '已完成',
-  completed_with_gaps: '部分完成',
-  failed: '失败',
-  cancelled: '已取消',
-}
-
-function statusLabel(s: string): string {
-  return STATUS_TEXT[s] ?? s
 }
 
 /**
@@ -143,6 +126,7 @@ function getStartTime(taskId: string): number {
 }
 
 function TaskLogPanel({ taskId }: { taskId: string }) {
+  const { t } = useTranslation()
   const [logs, setLogs] = useState<TaskLog[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const inTauri = isTauriRuntime()
@@ -195,16 +179,18 @@ function TaskLogPanel({ taskId }: { taskId: string }) {
       .join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      toast.success('日志已复制')
+      toast.success(t('tasks.logs.copied'))
     } catch {
-      toast.error('复制失败')
+      toast.error(t('tasks.logs.copyError'))
     }
-  }, [logs])
+  }, [logs, t])
 
   return (
     <div className="mt-2 rounded-md border bg-muted/30">
       <div className="flex items-center justify-between border-b px-2 py-1">
-        <span className="text-xs text-muted-foreground">日志 ({logs.length})</span>
+        <span className="text-xs text-muted-foreground">
+          {t('tasks.logs.title')} ({logs.length})
+        </span>
         <Button
           size="sm"
           variant="ghost"
@@ -213,7 +199,7 @@ function TaskLogPanel({ taskId }: { taskId: string }) {
           disabled={logs.length === 0}
         >
           <ClipboardCopy className="size-3" />
-          复制
+          {t('tasks.logs.copy')}
         </Button>
       </div>
       <div
@@ -221,7 +207,7 @@ function TaskLogPanel({ taskId }: { taskId: string }) {
         className="max-h-48 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed"
       >
         {logs.length === 0 ? (
-          <p className="text-muted-foreground">暂无日志</p>
+          <p className="text-muted-foreground">{t('tasks.logs.empty')}</p>
         ) : (
           logs.map((l, i) => {
             const cls =
@@ -253,6 +239,7 @@ function TaskRow({
   onSelectedChange: (checked: boolean) => void
   selectionDisabled?: boolean
 }) {
+  const { t, i18n } = useTranslation()
   const qc = useQueryClient()
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['active-tasks'] })
@@ -262,6 +249,8 @@ function TaskRow({
   const [elapsed, setElapsed] = useState<number>(0)
   const inTauri = isTauriRuntime()
   const status = String(task.status)
+  const statusKey = getTaskStatusKey(status)
+  const locale = i18n.resolvedLanguage ?? i18n.language
 
   // 计时器：活动状态时滚动；暂停 / 结束后冻结当前时长
   useEffect(() => {
@@ -302,13 +291,13 @@ function TaskRow({
   const pauseMutation = useMutation({
     mutationFn: () => togglePauseTask(task.id),
     onSuccess: refresh,
-    onError: (e) => toast.error(`操作失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.operationError', { message: String(e) })),
   })
   const deleteMutation = useMutation({
     mutationFn: async () => {
       const ok = await askDialog(
-        '确定删除此任务？\n\n下载会停止，任务临时缓存会被清理；已经输出到保存目录的文件不会删除。',
-        { title: '删除任务', kind: 'warning' },
+        t('tasks.confirm.deleteTask'),
+        { title: t('tasks.confirm.deleteTitle'), kind: 'warning' },
       )
       if (!ok) return false
 
@@ -325,28 +314,28 @@ function TaskRow({
     onSuccess: (changed) => {
       if (!changed) return
       taskStartTimes.delete(task.id)
-      toast.success('任务已删除')
+      toast.success(t('tasks.toast.deleted'))
       refresh()
     },
-    onError: (e) => toast.error(`删除失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.deleteError', { message: String(e) })),
   })
   // Issue #31：强制按现状导出（paused 待决策时使用）
   const exportPartialMutation = useMutation({
     mutationFn: () => exportPartialTask(task.id),
     onSuccess: () => {
-      toast.success('开始强制按现状导出，请等待完成')
+      toast.success(t('tasks.toast.partialStarted'))
       refresh()
     },
-    onError: (e) => toast.error(`强制导出失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.partialError', { message: String(e) })),
   })
   // Issue #31：补漏重导（completed_with_gaps 时使用，复用 resumeTask 触发增量补下载）
   const resumeMutation = useMutation({
     mutationFn: () => resumeTask(task.id),
     onSuccess: () => {
-      toast.success('开始补漏重试，将仅下载缺失瓦片')
+      toast.success(t('tasks.toast.retryStarted'))
       refresh()
     },
-    onError: (e) => toast.error(`补漏失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.retryError', { message: String(e) })),
   })
 
   const progress = typeof task.progress === 'number' ? task.progress : 0
@@ -365,7 +354,7 @@ function TaskRow({
           checked={selected}
           onChange={(e) => onSelectedChange(e.currentTarget.checked)}
           disabled={selectionDisabled}
-          aria-label={`选择 ${task.name}`}
+          aria-label={t('tasks.labels.select', { name: task.name })}
           className="mt-1 size-4 rounded border-border accent-primary"
         />
         <div className="min-w-0 flex-1">
@@ -374,15 +363,17 @@ function TaskRow({
               {task.name}
             </span>
             <Badge variant={statusVariant(status)} className="text-xs">
-              {statusLabel(status)}
+              {statusKey ? t(statusKey) : status}
             </Badge>
             {showGapBadge && (
               <Badge
                 variant="outline"
                 className={`text-xs ${gapBadgeClasses(gapsRatio)}`}
-                title={`缺块 ${failedCount} / ${total}`}
+                title={t('tasks.labels.gaps', { failed: failedCount, total })}
               >
-                缺块 {(gapsRatio * 100).toFixed(gapsRatio < 0.01 ? 2 : 1)}%
+                {t('tasks.labels.gapsPercent', {
+                  percent: (gapsRatio * 100).toFixed(gapsRatio < 0.01 ? 2 : 1),
+                })}
               </Badge>
             )}
             {task.source_name && (
@@ -395,7 +386,7 @@ function TaskRow({
                 z{task.zoom}
               </Badge>
             )}
-            <span className="text-xs text-muted-foreground" title="耗时">
+            <span className="text-xs text-muted-foreground" title={t('tasks.labels.elapsed')}>
               {formatElapsed(elapsed)}
             </span>
           </div>
@@ -406,7 +397,7 @@ function TaskRow({
             variant="ghost"
             onClick={() => setShowLogs((v) => !v)}
             className="size-7"
-            title={showLogs ? '收起日志' : '查看日志'}
+            title={showLogs ? t('tasks.actions.hideLogs') : t('tasks.actions.viewLogs')}
           >
             {showLogs ? (
               <ChevronDown className="size-3.5" />
@@ -423,7 +414,7 @@ function TaskRow({
                   onClick={() => pauseMutation.mutate()}
                   disabled={pauseMutation.isPending}
                   className="size-7"
-                  title={status === 'paused' ? '恢复' : '暂停'}
+                  title={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
                 >
                   {status === 'paused' ? (
                     <Play className="size-3.5" />
@@ -440,7 +431,7 @@ function TaskRow({
                   onClick={() => resumeMutation.mutate()}
                   disabled={resumeMutation.isPending}
                   className="size-7"
-                  title="补漏重试（仅下载缺失瓦片）"
+                  title={t('tasks.actions.retryMissing')}
                 >
                   <RefreshCw className="size-3.5" />
                 </Button>
@@ -453,7 +444,7 @@ function TaskRow({
                   onClick={() => exportPartialMutation.mutate()}
                   disabled={exportPartialMutation.isPending}
                   className="size-7"
-                  title="强制按现状导出（缺块部分留白 / NoData）"
+                  title={t('tasks.actions.exportPartial')}
                 >
                   <Download className="size-3.5" />
                 </Button>
@@ -469,7 +460,7 @@ function TaskRow({
                 onClick={() => resumeMutation.mutate()}
                 disabled={resumeMutation.isPending}
                 className="size-7"
-                title="补漏重导（仅下载缺失瓦片，完成后覆盖原 TIF）"
+                title={t('tasks.actions.retryAndReplace')}
               >
                 <RefreshCw className="size-3.5" />
               </Button>
@@ -482,7 +473,7 @@ function TaskRow({
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
               className="size-7 text-muted-foreground hover:text-destructive"
-              title="删除任务"
+              title={t('tasks.actions.deleteTask')}
             >
               <Trash2 className="size-3.5" />
             </Button>
@@ -495,10 +486,12 @@ function TaskRow({
         <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
           <span>{progress.toFixed(1)}%</span>
           <span>
-            {completed.toLocaleString()} / {total.toLocaleString()}
+            {completed.toLocaleString(locale)} / {total.toLocaleString(locale)}
           </span>
           {typeof task.failed_count === 'number' && task.failed_count > 0 && (
-            <span className="text-destructive">失败 {task.failed_count}</span>
+            <span className="text-destructive">
+              {t('tasks.labels.failed', { count: task.failed_count })}
+            </span>
           )}
           {task.file_size != null && task.file_size > 0 && (
             <span>{formatBytes(task.file_size)}</span>
@@ -532,30 +525,31 @@ function ResumableRow({
   onSelectedChange: (checked: boolean) => void
   selectionDisabled?: boolean
 }) {
+  const { t, i18n } = useTranslation()
   const qc = useQueryClient()
 
   const resumeMutation = useMutation({
     mutationFn: () => resumeTask(task.task_id),
     onSuccess: (res) => {
-      toast.success(`已恢复任务（${res.task_id.slice(0, 8)}）`)
+      toast.success(t('tasks.toast.restored', { id: res.task_id.slice(0, 8) }))
       qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
     },
-    onError: (e) => toast.error(`恢复失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.restoreError', { message: String(e) })),
   })
 
   const discardMutation = useMutation({
     mutationFn: async () => {
-      const ok = await askDialog('确定从列表中移除此任务？', {
-        title: '丢弃任务',
+      const ok = await askDialog(t('tasks.confirm.discardTask'), {
+        title: t('tasks.confirm.discardTitle'),
         kind: 'warning',
       })
       if (!ok) return false
       // 第二步：是否同时删除已下载的瓦片缓存
       const deleteCache = await askDialog(
-        '是否同时删除已下载的瓦片缓存？\n\n选"否"将保留缓存，下次重新创建相同任务时可复用，能少下不下。',
+        t('tasks.confirm.cleanCache'),
         {
-          title: '清理缓存',
+          title: t('tasks.confirm.cleanCacheTitle'),
           kind: 'warning',
         },
       )
@@ -565,7 +559,7 @@ function ResumableRow({
     onSuccess: (changed) => {
       if (changed) qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
     },
-    onError: (e) => toast.error(`丢弃失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.discardError', { message: String(e) })),
   })
 
   return (
@@ -576,7 +570,7 @@ function ResumableRow({
           checked={selected}
           onChange={(e) => onSelectedChange(e.currentTarget.checked)}
           disabled={selectionDisabled}
-          aria-label={`选择 ${task.task_name}`}
+          aria-label={t('tasks.labels.select', { name: task.task_name })}
           className="mt-1 size-4 rounded border-border accent-primary"
         />
         <div className="min-w-0 flex-1">
@@ -588,7 +582,7 @@ function ResumableRow({
               variant="outline"
               className="border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
             >
-              已中断
+              {t('tasks.labels.interrupted')}
             </Badge>
             {task.source_name && (
               <Badge variant="outline" className="text-xs font-normal">
@@ -602,7 +596,11 @@ function ResumableRow({
             )}
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-            <span>{task.tile_count.toLocaleString()} 瓦片</span>
+            <span>
+              {t('tasks.labels.tiles', {
+                count: task.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language),
+              })}
+            </span>
             {task.created_at && <span>{task.created_at}</span>}
           </div>
         </div>
@@ -613,7 +611,7 @@ function ResumableRow({
             onClick={() => resumeMutation.mutate()}
             disabled={resumeMutation.isPending}
             className="size-7"
-            title="继续下载"
+            title={t('tasks.actions.continue')}
           >
             <Play className="size-3.5" />
           </Button>
@@ -623,7 +621,7 @@ function ResumableRow({
             onClick={() => discardMutation.mutate()}
             disabled={discardMutation.isPending}
             className="size-7 text-muted-foreground hover:text-destructive"
-            title="删除任务"
+            title={t('tasks.actions.deleteTask')}
           >
             <Trash2 className="size-3.5" />
           </Button>
@@ -634,6 +632,7 @@ function ResumableRow({
 }
 
 export function TasksPanel() {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const inTauri = isTauriRuntime()
 
@@ -772,12 +771,12 @@ export function TasksPanel() {
       return success
     },
     onSuccess: (count) => {
-      toast.success(`已暂停 ${count} 个任务`)
+      toast.success(t('tasks.toast.pausedSelected', { count }))
       clearTaskSelection()
       refreshTaskLists()
     },
     onError: (e) => {
-      toast.error(`批量暂停失败：${String(e)}`)
+      toast.error(t('tasks.toast.pauseSelectedError', { message: String(e) }))
       refreshTaskLists()
     },
   })
@@ -802,20 +801,20 @@ export function TasksPanel() {
       return success
     },
     onSuccess: (count) => {
-      toast.success(`已继续 ${count} 个任务`)
+      toast.success(t('tasks.toast.continuedSelected', { count }))
       clearTaskSelection()
       refreshTaskLists()
     },
     onError: (e) => {
-      toast.error(`批量继续失败：${String(e)}`)
+      toast.error(t('tasks.toast.continueSelectedError', { message: String(e) }))
       refreshTaskLists()
     },
   })
 
   const deleteSelectedMutation = useMutation({
     mutationFn: async () => {
-      const ok = await askDialog(`确定删除选中的 ${selectedTaskCount} 个任务？`, {
-        title: '批量删除任务',
+      const ok = await askDialog(t('tasks.confirm.deleteSelected', { count: selectedTaskCount }), {
+        title: t('tasks.confirm.deleteSelectedTitle'),
         kind: 'warning',
       })
       if (!ok) return 0
@@ -823,8 +822,8 @@ export function TasksPanel() {
       const deleteCache =
         selectedResumable.length === 0 ||
         (await askDialog(
-          '是否同时删除中断任务已下载的瓦片缓存？\n\n选"否"将保留缓存，下次重新创建相同任务时仍可复用。',
-          { title: '清理缓存', kind: 'warning' },
+          t('tasks.confirm.cleanInterruptedCache'),
+          { title: t('tasks.confirm.cleanCacheTitle'), kind: 'warning' },
         ))
 
       let success = 0
@@ -849,13 +848,13 @@ export function TasksPanel() {
     },
     onSuccess: (count) => {
       if (count > 0) {
-        toast.success(`已删除 ${count} 个任务`)
+        toast.success(t('tasks.toast.deletedSelected', { count }))
         clearTaskSelection()
         refreshTaskLists()
       }
     },
     onError: (e) => {
-      toast.error(`批量删除失败：${String(e)}`)
+      toast.error(t('tasks.toast.deleteSelectedError', { message: String(e) }))
       refreshTaskLists()
     },
   })
@@ -868,7 +867,7 @@ export function TasksPanel() {
   if (!inTauri) {
     return (
       <div className="rounded-md border border-dashed bg-muted/30 p-6 text-center text-xs text-muted-foreground">
-        非 Tauri 环境，任务面板不可用
+        {t('tasks.unavailable')}
       </div>
     )
   }
@@ -876,25 +875,28 @@ export function TasksPanel() {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          任务 <span className="font-semibold text-foreground">{allTaskIds.length}</span> · 进行中{' '}
-          <span className="font-semibold text-foreground">{runningCount}</span>
+        <span className="flex flex-wrap items-center gap-x-1">
+          <span>{t('tasks.summary.total', { total: allTaskIds.length })}</span>
+          <span>·</span>
+          <span>{t('tasks.summary.running', { count: runningCount })}</span>
           {pausedCount > 0 && (
             <>
-              {' · '}暂停 <span className="font-semibold text-foreground">{pausedCount}</span>
+              <span>·</span>
+              <span>{t('tasks.summary.paused', { count: pausedCount })}</span>
             </>
           )}
           {resumable.length > 0 && (
             <>
-              {' · '}中断{' '}
+              <span>·</span>
               <span className="font-semibold text-amber-600 dark:text-amber-400">
-                {resumable.length}
+                {t('tasks.summary.interrupted', { count: resumable.length })}
               </span>
             </>
           )}
           {finishedCount > 0 && (
             <>
-              {' · '}历史 <span className="font-semibold text-foreground">{finishedCount}</span>
+              <span>·</span>
+              <span>{t('tasks.summary.history', { count: finishedCount })}</span>
             </>
           )}
         </span>
@@ -907,7 +909,7 @@ export function TasksPanel() {
           }}
           disabled={tasksQuery.isFetching}
           className="size-7"
-          title="刷新"
+          title={t('tasks.actions.refresh')}
         >
           <RefreshCw className={`size-3.5 ${tasksQuery.isFetching ? 'animate-spin' : ''}`} />
         </Button>
@@ -917,7 +919,10 @@ export function TasksPanel() {
         {allTaskIds.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-medium text-muted-foreground">
-              任务列表 · 已选 {selectedTaskCount} / {allTaskIds.length}
+              {t('tasks.summary.selection', {
+                selected: selectedTaskCount,
+                total: allTaskIds.length,
+              })}
             </div>
             <div className="flex flex-wrap items-center gap-1">
               <Button
@@ -927,7 +932,7 @@ export function TasksPanel() {
                 disabled={isBatching}
                 className="h-7 px-2 text-xs"
               >
-                {allTasksSelected ? '取消全选' : '全选'}
+                {allTasksSelected ? t('tasks.selection.clearAll') : t('tasks.selection.selectAll')}
               </Button>
               <Button
                 size="sm"
@@ -936,7 +941,7 @@ export function TasksPanel() {
                 disabled={isBatching}
                 className="h-7 px-2 text-xs"
               >
-                反选
+                {t('tasks.selection.invert')}
               </Button>
               <Button
                 size="sm"
@@ -946,7 +951,7 @@ export function TasksPanel() {
                 className="h-7 text-xs"
               >
                 <Pause className="mr-1 size-3" />
-                暂停
+                {t('tasks.actions.pause')}
               </Button>
               <Button
                 size="sm"
@@ -956,7 +961,7 @@ export function TasksPanel() {
                 className="h-7 text-xs"
               >
                 <Play className="mr-1 size-3" />
-                继续
+                {t('tasks.actions.continue')}
               </Button>
               <Button
                 size="sm"
@@ -966,18 +971,18 @@ export function TasksPanel() {
                 className="h-7 text-xs text-muted-foreground hover:text-destructive"
               >
                 <Trash2 className="mr-1 size-3" />
-                删除
+                {t('tasks.actions.delete')}
               </Button>
             </div>
           </div>
         )}
-        {tasksQuery.isLoading && <p className="text-xs text-muted-foreground">加载中...</p>}
+        {tasksQuery.isLoading && <p className="text-xs text-muted-foreground">{t('tasks.loading')}</p>}
         {!tasksQuery.isLoading && !resumableQuery.isLoading && allTaskIds.length === 0 && (
           <div className="flex flex-col items-center gap-2 py-8 text-xs text-muted-foreground">
             <Inbox className="size-7 opacity-50" />
-            <p>暂无下载任务</p>
+            <p>{t('tasks.empty')}</p>
             {finishedCount > 0 && (
-              <p>已完成 {finishedCount} 项已转入历史记录</p>
+              <p>{t('tasks.movedToHistory', { count: finishedCount })}</p>
             )}
           </div>
         )}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import {
   Inbox,
   ListChecks,
@@ -30,6 +31,7 @@ import {
   removeTask,
   togglePauseTask,
 } from '@/features/tasks/tasks-api'
+import { getTaskStatusKey } from '@/features/tasks/task-copy'
 import type { TaskInfo, TaskStatus } from '@/types/api'
 
 const ACTIVE_STATES: TaskStatus[] = [
@@ -54,33 +56,6 @@ function statusVariant(s: string): 'default' | 'secondary' | 'destructive' | 'ou
   if (s === 'failed' || s === 'cancelled') return 'destructive'
   if (s === 'paused' || s === 'pending_decision') return 'outline'
   return 'secondary'
-}
-
-function statusLabel(s: string): string {
-  switch (s) {
-    case 'pending':
-      return '排队中'
-    case 'downloading':
-      return '下载中'
-    case 'paused':
-      return '已暂停'
-    case 'pending_decision':
-      return '待决策'
-    case 'merging':
-      return '合并中'
-    case 'processing':
-      return '处理中'
-    case 'exporting':
-      return '导出中'
-    case 'completed':
-      return '已完成'
-    case 'failed':
-      return '失败'
-    case 'cancelled':
-      return '已取消'
-    default:
-      return s
-  }
 }
 
 function formatBytes(n?: number): string {
@@ -108,29 +83,32 @@ function ProgressBar({ value }: { value: number }) {
 }
 
 function TaskRow({ task }: { task: TaskInfo }) {
+  const { t, i18n } = useTranslation()
   const qc = useQueryClient()
   const refresh = () => qc.invalidateQueries({ queryKey: ['active-tasks'] })
 
   const pauseMutation = useMutation({
     mutationFn: () => togglePauseTask(task.id),
     onSuccess: refresh,
-    onError: (e) => toast.error(`操作失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.operationError', { message: String(e) })),
   })
   const cancelMutation = useMutation({
     mutationFn: () => cancelTask(task.id),
     onSuccess: () => {
-      toast.success('任务已取消')
+      toast.success(t('tasks.toast.cancelled'))
       refresh()
     },
-    onError: (e) => toast.error(`取消失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.cancelError', { message: String(e) })),
   })
   const removeMutation = useMutation({
     mutationFn: () => removeTask(task.id),
     onSuccess: refresh,
-    onError: (e) => toast.error(`删除失败：${String(e)}`),
+    onError: (e) => toast.error(t('tasks.toast.deleteError', { message: String(e) })),
   })
 
   const status = String(task.status)
+  const statusKey = getTaskStatusKey(status)
+  const locale = i18n.resolvedLanguage ?? i18n.language
   const progress = typeof task.progress === 'number' ? task.progress : 0
   const total = task.total ?? 0
   const completed = task.completed ?? 0
@@ -141,7 +119,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
         <span className="truncate font-medium" title={task.name}>
           {task.name}
         </span>
-        <Badge variant={statusVariant(status)}>{statusLabel(status)}</Badge>
+        <Badge variant={statusVariant(status)}>{statusKey ? t(statusKey) : status}</Badge>
         {task.source_name && (
           <Badge variant="outline" className="font-normal">
             {task.source_name}
@@ -161,7 +139,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
                   variant="ghost"
                   onClick={() => pauseMutation.mutate()}
                   disabled={pauseMutation.isPending}
-                  title={status === 'paused' ? '恢复' : '暂停'}
+                  title={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
                 >
                   {status === 'paused' ? (
                     <Play className="size-4" />
@@ -175,7 +153,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
                 variant="ghost"
                 onClick={() => cancelMutation.mutate()}
                 disabled={cancelMutation.isPending}
-                title="取消"
+                title={t('tasks.actions.cancel')}
               >
                 <X className="size-4" />
               </Button>
@@ -187,7 +165,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
               variant="ghost"
               onClick={() => removeMutation.mutate()}
               disabled={removeMutation.isPending}
-              title="移除"
+              title={t('tasks.actions.remove')}
             >
               <Trash2 className="size-4" />
             </Button>
@@ -200,13 +178,17 @@ function TaskRow({ task }: { task: TaskInfo }) {
         <div className="flex flex-wrap gap-x-4 text-xs text-muted-foreground">
           <span>{progress.toFixed(1)}%</span>
           <span>
-            {completed.toLocaleString()} / {total.toLocaleString()} 瓦片
+            {t('tasks.labels.tiles', {
+              count: `${completed.toLocaleString(locale)} / ${total.toLocaleString(locale)}`,
+            })}
           </span>
           {typeof task.failed_count === 'number' && task.failed_count > 0 && (
-            <span className="text-destructive">失败 {task.failed_count}</span>
+            <span className="text-destructive">
+              {t('tasks.labels.failed', { count: task.failed_count })}
+            </span>
           )}
           {task.file_size != null && task.file_size > 0 && (
-            <span>大小 {formatBytes(task.file_size)}</span>
+            <span>{t('tasks.labels.size', { size: formatBytes(task.file_size) })}</span>
           )}
         </div>
         {task.message && (
@@ -225,6 +207,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
 }
 
 export function TasksDialog() {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const qc = useQueryClient()
   const inTauri = isTauriRuntime()
@@ -272,7 +255,7 @@ export function TasksDialog() {
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" className="relative" disabled={!inTauri}>
           <ListChecks className="mr-1.5 size-4" />
-          任务
+          {t('tasks.dialog.trigger')}
           {activeCount > 0 && (
             <Badge
               variant="default"
@@ -286,7 +269,7 @@ export function TasksDialog() {
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            任务面板
+            {t('tasks.dialog.title')}
             <Button
               variant="ghost"
               size="sm"
@@ -297,18 +280,22 @@ export function TasksDialog() {
             </Button>
           </DialogTitle>
           <DialogDescription>
-            活动 {activeCount} · 已结束 {finishedCount} · 总计 {tasks.length}
+            {t('tasks.summary.dialog', {
+              active: activeCount,
+              finished: finishedCount,
+              total: tasks.length,
+            })}
           </DialogDescription>
         </DialogHeader>
         <Separator />
         <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
           {tasksQuery.isLoading && (
-            <p className="text-sm text-muted-foreground">加载中...</p>
+            <p className="text-sm text-muted-foreground">{t('tasks.loading')}</p>
           )}
           {!tasksQuery.isLoading && tasks.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-10 text-sm text-muted-foreground">
               <Inbox className="size-8 opacity-50" />
-              <p>暂无任务</p>
+              <p>{t('tasks.dialog.empty')}</p>
             </div>
           )}
           {tasks.map((t) => (

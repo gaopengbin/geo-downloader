@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Loader2, MapPin, Search, Upload, X } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Feature, GeoJsonObject } from 'geojson'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,7 +25,7 @@ import {
 import {
   extractAreaFeatures,
   outerRingsFromAreaGeometry,
-  regionAreaErrorMessage,
+  regionAreaErrorReason,
 } from '@/lib/geo-area'
 import { RegionImportDialog } from './region-import-dialog'
 import { RegionBookmarksDialog } from './region-bookmarks-dialog'
@@ -90,6 +91,7 @@ function splitAdminCode(code: string | null): {
 }
 
 export function RegionSelector({ extras }: { extras?: import('react').ReactNode } = {}) {
+  const { t } = useTranslation()
   const inTauri = isTauriRuntime()
   const setExternalSelection = useSelectionStore((s) => s.setExternalSelection)
   const setCurrentAdminCode = useAppStore((s) => s.setCurrentAdminCode)
@@ -146,7 +148,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       const geojson = (await getAdminBoundary(code, true)) as GeoJsonObject
       const rings = ringsFromGeoJSON(geojson)
       if (rings.length === 0) {
-        toast.error('未能从行政边界中提取多边形')
+        toast.error(t('region.toast.noPolygon'))
         return
       }
       setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings })
@@ -156,10 +158,10 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         complexity: telemetryCountBucket(rings.reduce((total, ring) => total + ring.length, 0)),
       })
       setCurrentAdminCode(code)
-      toast.success(`已加载 ${label}`)
+      toast.success(t('region.toast.loaded', { label }))
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      toast.error(`加载边界失败：${msg}`)
+      toast.error(t('region.toast.loadError', { message: msg }))
     } finally {
       setLoadingBoundary(false)
     }
@@ -169,7 +171,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
     const code = districtCode || cityCode || provinceCode
     if (!code) {
       // 三级都为空 → 加载全国边界
-      void loadByCode('100000', '全国')
+      void loadByCode('100000', t('region.nationwide'))
       return
     }
     const label =
@@ -206,7 +208,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         bookmark.polygon?.reduce((total, ring) => total + ring.length, 0) ?? 0,
       ),
     })
-    toast.success(`已恢复范围：${bookmark.name}`)
+    toast.success(t('region.toast.restored', { name: bookmark.name }))
   }
 
   const onSearch = async () => {
@@ -217,10 +219,10 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       const token = settingsQuery.data?.tianditu_token ?? null
       const results = await geocodeSearch(q, token)
       setSearchResults(results)
-      if (results.length === 0) toast.info('未找到结果')
+      if (results.length === 0) toast.info(t('region.toast.noSearchResults'))
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      toast.error(`搜索失败：${msg}`)
+      toast.error(t('region.toast.searchError', { message: msg }))
     } finally {
       setSearching(false)
     }
@@ -242,7 +244,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         geometry: 'bounds',
         complexity: '0',
       })
-      toast.success(`已定位 ${r.name}`)
+      toast.success(t('region.toast.located', { name: r.name }))
       setSearchResults([])
       return
     }
@@ -291,7 +293,13 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       const areaFeatures = extractAreaFeatures(geojson)
       if (areaFeatures.length === 0) {
         void trackTelemetry('region_imported', { format, outcome: 'no_area', feature_count: '0' })
-        toast.error(regionAreaErrorMessage(geojson))
+        const errorKey = {
+          'lines-and-points': 'region.toast.areaLinesAndPoints',
+          lines: 'region.toast.areaLines',
+          points: 'region.toast.areaPoints',
+          missing: 'region.toast.areaMissing',
+        }[regionAreaErrorReason(geojson)]
+        toast.error(t(errorKey))
         return
       }
       const rings = ringsFromGeoJSON(geojson)
@@ -314,11 +322,11 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         geometry: 'polygon',
         complexity: telemetryCountBucket(rings.reduce((total, ring) => total + ring.length, 0)),
       })
-      toast.success('边界已导入')
+      toast.success(t('region.toast.imported'))
     } catch (e) {
       void trackTelemetry('region_imported', { format, outcome: 'error', feature_count: '0' })
       const msg = e instanceof Error ? e.message : String(e)
-      toast.error(`导入失败：${msg}`)
+      toast.error(t('region.toast.importError', { message: msg }))
     } finally {
       if (fileRef.current) fileRef.current.value = ''
     }
@@ -331,9 +339,14 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
 
   if (!inTauri) {
     return (
-      <PanelSection icon={MapPin} title="区域选择" description="手动四至" dataTour="region-selector">
+      <PanelSection
+        icon={MapPin}
+        title={t('region.title')}
+        description={t('region.manualDescription')}
+        dataTour="region-selector"
+      >
         <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
-          非 Tauri 环境，行政区划与地名搜索不可用
+          {t('region.unavailable')}
         </div>
         {extras}
       </PanelSection>
@@ -341,12 +354,17 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
   }
 
   return (
-    <PanelSection icon={MapPin} title="区域选择" description="地名 / 行政区划 / 上传边界 / 手动四至" dataTour="region-selector">
+    <PanelSection
+      icon={MapPin}
+      title={t('region.title')}
+      description={t('region.description')}
+      dataTour="region-selector"
+    >
       {/* 地名搜索 */}
       <div className="space-y-1.5">
         <div className="flex gap-1.5">
           <Input
-            placeholder="搜索地名 (省 / 市 / 区 / POI)..."
+            placeholder={t('region.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -390,10 +408,10 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
           }}
         >
           <SelectTrigger className="text-sm">
-            <SelectValue placeholder="省份" />
+            <SelectValue placeholder={t('region.province')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">全国</SelectItem>
+            <SelectItem value="__all__">{t('region.nationwide')}</SelectItem>
             {provincesQuery.data?.map((p) => (
               <SelectItem key={p.code} value={p.code}>
                 {p.name}
@@ -410,10 +428,10 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
           disabled={!provinceCode || citiesQuery.isLoading}
         >
           <SelectTrigger className="text-sm">
-            <SelectValue placeholder="城市" />
+            <SelectValue placeholder={t('region.city')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">全部</SelectItem>
+            <SelectItem value="__all__">{t('region.all')}</SelectItem>
             {citiesQuery.data?.map((c) => (
               <SelectItem key={c.code} value={c.code}>
                 {c.name}
@@ -434,13 +452,13 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
             <SelectValue
               placeholder={
                 cityCode && !districtsQuery.isLoading && (districtsQuery.data?.length ?? 0) === 0
-                  ? '无下级区县'
-                  : '区县'
+                  ? t('region.noDistrict')
+                  : t('region.district')
               }
             />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">全部</SelectItem>
+            <SelectItem value="__all__">{t('region.all')}</SelectItem>
             {districtsQuery.data?.map((d) => (
               <SelectItem key={d.code} value={d.code}>
                 {d.name}
@@ -464,17 +482,17 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
           ) : (
             <MapPin className="mr-1 size-3.5" />
           )}
-          加载行政边界
+          {t('region.loadBoundary')}
         </Button>
         <Button
           type="button"
           variant="outline"
           size="sm"
           onClick={() => fileRef.current?.click()}
-          title="上传 GeoJSON / Shapefile / KML / KMZ"
+          title={t('region.uploadTitle')}
         >
           <Upload className="mr-1 size-3.5" />
-          上传
+          {t('region.upload')}
         </Button>
         <RegionBookmarksDialog onRestore={onRestoreBookmark} />
         <Button
@@ -482,13 +500,13 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
           variant="outline"
           size="icon"
           onClick={onClearSelection}
-          title="清除选区"
+          title={t('region.clear')}
           className="size-8"
         >
           <X className="size-3.5" />
         </Button>
       </div>
-      <Label htmlFor="boundary-upload" className="sr-only">上传边界</Label>
+      <Label htmlFor="boundary-upload" className="sr-only">{t('region.uploadBoundary')}</Label>
       <input
         ref={fileRef}
         id="boundary-upload"

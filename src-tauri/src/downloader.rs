@@ -48,6 +48,30 @@ pub struct TileDownloader {
 }
 
 impl TileDownloader {
+    fn http_error_message(url: &str, status: reqwest::StatusCode) -> String {
+        if url.contains("tianditu.gov.cn") {
+            let reason = match status.as_u16() {
+                401 => "Token 无效或未通过认证",
+                418 => "缺少 Token 或 Token 无效",
+                403 => "Token 无权限、来源受限或公开 Key 已失效",
+                429 => "Token 请求额度不足或服务正在限流",
+                _ => return format!("天地图请求失败：HTTP {}", status.as_u16()),
+            };
+            let token_kind = if url.contains(config::TIANDITU_DEFAULT_TOKEN) {
+                "当前使用 GeoD 内置的公开共享 Key，其额度和可用性不受保证"
+            } else {
+                "当前使用用户配置的天地图 Token"
+            };
+            return format!(
+                "天地图请求失败：HTTP {}（{}）。{}；请在设置中检查 Token，或前往 https://cloudcenter.tianditu.gov.cn/center/development/myApp 申请自己的 Token",
+                status.as_u16(),
+                reason,
+                token_kind
+            );
+        }
+        format!("HTTP {}", status)
+    }
+
     /// 创建新的下载器
     pub fn new(source: TileSource, proxy: Option<&str>) -> Result<Self, String> {
         let mut builder = Client::builder()
@@ -91,10 +115,14 @@ impl TileDownloader {
             url = url.replace("{s}", subdomain);
         }
 
-        // 替换坐标
+        // Replace XYZ, TMS inverted Y and Bing-style QuadKey placeholders.
+        let inverted_y = inverted_y(tile.z, tile.y);
+        let quadkey = tile_quadkey(tile.x, tile.y, tile.z);
         url = url.replace("{x}", &tile.x.to_string());
         url = url.replace("{y}", &tile.y.to_string());
+        url = url.replace("{-y}", &inverted_y.to_string());
         url = url.replace("{z}", &tile.z.to_string());
+        url = url.replace("{q}", &quadkey);
 
         url
     }
@@ -229,9 +257,9 @@ impl TileDownloader {
                             let _ = tokio::fs::remove_file(file_path).await;
                             Ok(())
                         } else if status.as_u16() == 429 || status.as_u16() == 503 {
-                            Err((format!("HTTP {}", status), true))
+                            Err((Self::http_error_message(url, status), true))
                         } else {
-                            Err((format!("HTTP {}", status), false))
+                            Err((Self::http_error_message(url, status), false))
                         }
                     }
                     Err(e) => Err((e.to_string(), false)),
@@ -327,6 +355,7 @@ impl TileDownloader {
 
         // ===== 第一轮：主下载 =====
         let mut failed_tiles: Vec<TileCoord> = Vec::new();
+        let mut first_failure_error: Option<String> = None;
         let retrying_counter = std::sync::Arc::new(AtomicU32::new(0));
 
         // 缓存元信息（每任务一次构建）
@@ -528,6 +557,9 @@ impl TileDownloader {
                                     });
                                 }
                             } else {
+                                if first_failure_error.is_none() {
+                                    first_failure_error = Some(e);
+                                }
                                 failed_tiles.push(_tile);
                                 failed += 1;
                             }
@@ -712,6 +744,12 @@ impl TileDownloader {
             total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: status.to_string(),
         });
 
+        if tile_files.is_empty() && failed > 0 {
+            return Err(first_failure_error.unwrap_or_else(|| {
+                format!("全部 {} 张瓦片下载失败，请检查图源配置和网络连接", failed)
+            }));
+        }
+
         if tile_files.is_empty() {
             if no_data_count > 0 {
                 return Err(format!("该区域在此缩放级别无可用数据（全部 {} 张瓦片均返回 404）", no_data_count));
@@ -730,6 +768,28 @@ pub fn create_blank_tile() -> RgbImage {
         config::TILE_SIZE,
         image::Rgb([255, 255, 255]),
     )
+}
+
+fn inverted_y(z: u8, y: u32) -> u32 {
+    ((1u64 << z.min(31)) - 1)
+        .saturating_sub(y as u64)
+        .min(u32::MAX as u64) as u32
+}
+
+fn tile_quadkey(x: u32, y: u32, z: u8) -> String {
+    let mut key = String::with_capacity(z as usize);
+    for level in (1..=z).rev() {
+        let mask = 1u32 << (level - 1);
+        let mut digit = 0u8;
+        if x & mask != 0 {
+            digit += 1;
+        }
+        if y & mask != 0 {
+            digit += 2;
+        }
+        key.push(char::from(b'0' + digit));
+    }
+    key
 }
 
 #[cfg(test)]
@@ -757,5 +817,65 @@ mod tests {
         assert!(user_agent.starts_with("GeoD/"));
         assert!(user_agent.contains("geodownloader.pages.dev"));
         assert!(!headers.contains_key(reqwest::header::REFERER));
+    }
+
+    fn custom_source(url: &str) -> TileSource {
+        TileSource {
+            id: "custom_test".to_string(),
+            name: "Test".to_string(),
+            url: url.to_string(),
+            subdomains: vec![],
+            max_zoom: 22,
+            attribution: String::new(),
+        }
+    }
+
+    #[test]
+    fn builds_tms_tile_urls_from_inverted_y_placeholder() {
+        let downloader = TileDownloader::new(
+            custom_source("https://example.test/{z}/{x}/{-y}.png"),
+            None,
+        )
+        .unwrap();
+        let url = downloader.get_tile_url(&TileCoord { z: 3, x: 2, y: 1 });
+        assert_eq!(url, "https://example.test/3/2/6.png");
+    }
+
+    #[test]
+    fn builds_bing_quadkey_tile_urls() {
+        let downloader = TileDownloader::new(
+            custom_source("https://example.test/tiles/{q}.jpeg?z={z}"),
+            None,
+        )
+        .unwrap();
+        let url = downloader.get_tile_url(&TileCoord { z: 3, x: 3, y: 5 });
+        assert_eq!(url, "https://example.test/tiles/213.jpeg?z=3");
+    }
+
+    #[test]
+    fn explains_tianditu_auth_and_quota_errors() {
+        let url = format!(
+            "https://t0.tianditu.gov.cn/img_w/wmts?tk={}",
+            config::TIANDITU_DEFAULT_TOKEN
+        );
+        let unauthorized = TileDownloader::http_error_message(
+            &url,
+            reqwest::StatusCode::UNAUTHORIZED,
+        );
+        assert!(unauthorized.contains("Token 无效"));
+        assert!(unauthorized.contains("公开共享 Key"));
+
+        let limited = TileDownloader::http_error_message(
+            &url,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+        );
+        assert!(limited.contains("额度不足"));
+        assert!(limited.contains("cloudcenter.tianditu.gov.cn"));
+
+        let missing = TileDownloader::http_error_message(
+            &url,
+            reqwest::StatusCode::IM_A_TEAPOT,
+        );
+        assert!(missing.contains("缺少 Token"));
     }
 }

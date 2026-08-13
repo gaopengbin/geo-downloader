@@ -34,6 +34,7 @@ export function blankCustomSource(): CustomTileSource {
     url: '',
     subdomains: '',
     max_zoom: 18,
+    scheme: 'xyz',
   }
 }
 
@@ -45,6 +46,7 @@ export function builtinToOverrideDraft(s: TileSource): CustomTileSource {
     url: (s.url ?? s.url_template ?? '') as string,
     subdomains: Array.isArray(s.subdomains) ? s.subdomains.join(',') : (s.subdomains ?? ''),
     max_zoom: typeof s.max_zoom === 'number' ? s.max_zoom : 18,
+    scheme: 'xyz',
   }
 }
 

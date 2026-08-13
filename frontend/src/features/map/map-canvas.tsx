@@ -6,6 +6,9 @@ import '@maplibre/maplibre-gl-leaflet'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useQuery } from '@tanstack/react-query'
 import { Pentagon, Ruler, Trash2 } from 'lucide-react'
+import type { TFunction } from 'i18next'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import 'leaflet/dist/leaflet.css'
 import 'leaflet-draw/dist/leaflet.draw.css'
@@ -20,6 +23,7 @@ import { useMapStatusStore } from '@/store/map-status-store'
 import { useVectorLayersStore } from '@/store/vector-layers-store'
 import { useWaybackStore } from '@/store/wayback-store'
 import { getSettings } from '@/features/settings/settings-api'
+import { probeTile } from '@/features/download/download-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
 import {
@@ -262,6 +266,7 @@ function addDistanceMeasurement(
   group: L.FeatureGroup,
   layer: L.Polyline,
   points: L.LatLng[],
+  t: TFunction,
 ) {
   group.addLayer(layer)
   for (let index = 1; index < points.length; index += 1) {
@@ -279,7 +284,7 @@ function addDistanceMeasurement(
   const total = measurePathDistance(points)
   group.addLayer(
     L.marker(points[points.length - 1], {
-      icon: measurementLabelIcon(`总长 ${formatMeasureDistance(total)}`),
+      icon: measurementLabelIcon(t('map.totalLength', { value: formatMeasureDistance(total) })),
       interactive: false,
       keyboard: false,
     }),
@@ -290,6 +295,7 @@ function addAreaMeasurement(
   group: L.FeatureGroup,
   layer: L.Polygon,
   points: L.LatLng[],
+  t: TFunction,
 ) {
   group.addLayer(layer)
   // leaflet-draw ships GeometryUtil, which calculates geodesic polygon area in square meters.
@@ -299,8 +305,8 @@ function addAreaMeasurement(
   group.addLayer(
     L.marker(layer.getBounds().getCenter(), {
       icon: measurementLabelIcon(
-        `面积 ${formatMeasureArea(area)}`,
-        `周长 ${formatMeasureDistance(perimeter)}`,
+        t('map.area', { value: formatMeasureArea(area) }),
+        t('map.perimeter', { value: formatMeasureDistance(perimeter) }),
       ),
       interactive: false,
       keyboard: false,
@@ -470,6 +476,11 @@ function drawGraticuleLayer(
 }
 
 export function MapCanvas() {
+  const { t } = useTranslation()
+  const translationRef = useRef(t)
+  useEffect(() => {
+    translationRef.current = t
+  }, [t])
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const drawnRef = useRef<L.FeatureGroup | null>(null)
@@ -483,6 +494,7 @@ export function MapCanvas() {
   const mvtLayerRef = useRef<L.Layer | null>(null)
   const mvtKeyRef = useRef<string | null>(null)
   const currentBaseLayerKeyRef = useRef<string | null>(null)
+  const lastTiandituProbeKeyRef = useRef<string | null>(null)
   const customControlRef = useRef<L.Control | null>(null)
   const customControlRadiosRef = useRef<HTMLInputElement[]>([])
   const overlayLayersRef = useRef<L.TileLayer[]>([])
@@ -659,10 +671,20 @@ export function MapCanvas() {
       if (isMeasurement) {
         if (e.layerType === 'polyline') {
           const points = e.layer.getLatLngs() as L.LatLng[]
-          addDistanceMeasurement(measurements, e.layer as L.Polyline, points)
+          addDistanceMeasurement(
+            measurements,
+            e.layer as L.Polyline,
+            points,
+            translationRef.current,
+          )
         } else if (e.layerType === 'polygon') {
           const points = e.layer.getLatLngs()[0] as L.LatLng[]
-          addAreaMeasurement(measurements, e.layer as L.Polygon, points)
+          addAreaMeasurement(
+            measurements,
+            e.layer as L.Polygon,
+            points,
+            translationRef.current,
+          )
         }
         activeMeasureHandler = null
         activeMeasureMode = null
@@ -893,6 +915,53 @@ export function MapCanvas() {
     return k ? `src:${k}` : null
   }, [mode, selectedSourceByMode, waybackPreviewId])
 
+  // 切换到天地图时立即探测授权状态，避免等到创建下载任务后才发现 Key 不可用。
+  useEffect(() => {
+    const sourceKey = selectedSourceByMode[mode]
+    if (!sourceKey?.startsWith('tianditu_')) {
+      lastTiandituProbeKeyRef.current = null
+      return
+    }
+    const map = mapRef.current
+    const source = sourcesQuery.data?.[sourceKey]
+    if (!map || !source) return
+
+    const probeKey = `${sourceKey}:${tdtToken?.trim() || '__public__'}`
+    if (lastTiandituProbeKeyRef.current === probeKey) return
+    lastTiandituProbeKeyRef.current = probeKey
+
+    const center = map.getCenter()
+    const zoom = Math.max(0, Math.min(Math.floor(map.getZoom()), source.max_zoom ?? 18))
+    let cancelled = false
+    void probeTile(sourceKey, zoom, center.lat, center.lng, tdtToken, null)
+      .then((result) => {
+        const statusCode = result.status_code
+        if (
+          cancelled ||
+          result.has_data ||
+          typeof statusCode !== 'number' ||
+          ![401, 403, 418, 429].includes(statusCode)
+        ) {
+          return
+        }
+        toast.error(t('map.tiandituUnavailable'), {
+          description: result.message,
+          duration: 12_000,
+          action: {
+            label: t('map.openTokenSettings'),
+            onClick: () => useAppStore.getState().setTab('settings'),
+          },
+        })
+      })
+      .catch(() => {
+        // 普通网络错误交给图层自身处理；这里只提示已确认的 Token/额度错误。
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [mode, selectedSourceByMode, sourcesQuery.data, tdtToken, t])
+
   // 维护普通图源缓存
   useEffect(() => {
     const map = mapRef.current
@@ -1000,7 +1069,7 @@ export function MapCanvas() {
       `https://t{s}.tianditu.gov.cn/cia_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cia&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tdt}`,
       {
         sourceKey: 'tdt_cia_w',
-        displayName: '天地图中文注记',
+        displayName: t('map.tiandituChineseLabels'),
         urlTemplate:
           'https://t{s}.tianditu.gov.cn/cia_w/wmts?...&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
         subdomains: tdtSubdomains,
@@ -1012,7 +1081,7 @@ export function MapCanvas() {
       `https://t{s}.tianditu.gov.cn/cva_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cva&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tdt}`,
       {
         sourceKey: 'tdt_cva_w',
-        displayName: '天地图英文注记',
+        displayName: t('map.tiandituEnglishLabels'),
         urlTemplate:
           'https://t{s}.tianditu.gov.cn/cva_w/wmts?...&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
         subdomains: tdtSubdomains,
@@ -1035,7 +1104,7 @@ export function MapCanvas() {
       let waybackPanelCleanup: (() => void) | undefined
       for (const v of desc) {
         const date = v.date || ''
-        const year = date.slice(0, 4) || '其他'
+        const year = date.slice(0, 4) || t('map.other')
         const month = date.slice(5, 7) || '--'
         if (!grouped.has(year)) grouped.set(year, new Map())
         const monthMap = grouped.get(year)!
@@ -1060,7 +1129,8 @@ export function MapCanvas() {
             container,
           )
           toggle.href = '#'
-          toggle.title = 'Wayback 历史影像'
+          toggle.title = t('map.waybackLayers')
+          toggle.setAttribute('aria-label', t('map.waybackLayers'))
 
           const list = L.DomUtil.create(
             'section',
@@ -1115,7 +1185,7 @@ export function MapCanvas() {
               const monthDetails = document.createElement('details')
               monthDetails.style.marginLeft = '12px'
               const monthSummary = document.createElement('summary')
-              monthSummary.textContent = `${month}月 (${versions.length})`
+              monthSummary.textContent = `${t('map.month', { month })} (${versions.length})`
               monthSummary.style.cursor = 'pointer'
               monthSummary.style.color = '#555'
               monthSummary.style.padding = '1px 0'
@@ -1180,8 +1250,8 @@ export function MapCanvas() {
             lbl.appendChild(document.createTextNode(label))
             overlayDiv.appendChild(lbl)
           }
-          makeOverlay('天地图 影像标注', ciaLayer, 'cia')
-          makeOverlay('天地图 矢量标注', cvaLayer, 'cva')
+          makeOverlay(t('map.tiandituImageryLabels'), ciaLayer, 'cia')
+          makeOverlay(t('map.tiandituVectorLabels'), cvaLayer, 'cva')
 
           return container
         },
@@ -1218,9 +1288,9 @@ export function MapCanvas() {
             container,
           )
           toggle.href = '#'
-          toggle.title = '\u56fe\u5c42'
+          toggle.title = t('map.layers')
           toggle.setAttribute('role', 'button')
-          toggle.setAttribute('aria-label', '\u56fe\u5c42')
+          toggle.setAttribute('aria-label', t('map.layers'))
 
           const list = L.DomUtil.create(
             'section',
@@ -1248,7 +1318,11 @@ export function MapCanvas() {
               setSelectedSourceForMode(mode as AppMode, key)
             })
             lbl.appendChild(radio)
-            lbl.appendChild(document.createTextNode(source.name || key))
+            lbl.appendChild(
+              document.createTextNode(
+                t(`download.source.names.${key}`, { defaultValue: source.name || key }),
+              ),
+            )
             baseDiv.appendChild(lbl)
           }
 
@@ -1276,8 +1350,8 @@ export function MapCanvas() {
             lbl.appendChild(document.createTextNode(label))
             overlayDiv.appendChild(lbl)
           }
-          makeOverlay('\u5929\u5730\u56fe \u5f71\u50cf\u6807\u6ce8', ciaLayer, 'cia')
-          makeOverlay('\u5929\u5730\u56fe \u77e2\u91cf\u6807\u6ce8', cvaLayer, 'cva')
+          makeOverlay(t('map.tiandituImageryLabels'), ciaLayer, 'cia')
+          makeOverlay(t('map.tiandituVectorLabels'), cvaLayer, 'cva')
 
           return container
         },
@@ -1296,6 +1370,7 @@ export function MapCanvas() {
     tdtToken,
     setSelectedSourceForMode,
     setWaybackPreviewId,
+    t,
     // 注意：waybackPreviewId 不放依赖，避免每次切版本都重建 control；下面单独 effect 同步 radio checked
   ])
 
@@ -1460,8 +1535,8 @@ export function MapCanvas() {
             <button
               type="button"
               className={measureMode === 'distance' ? 'is-active' : undefined}
-              title="测量距离"
-              aria-label="测量距离"
+              title={t('map.measureDistance')}
+              aria-label={t('map.measureDistance')}
               aria-pressed={measureMode === 'distance'}
               onClick={() => {
                 void trackTelemetry('measurement_used', { action: 'distance' })
@@ -1473,8 +1548,8 @@ export function MapCanvas() {
             <button
               type="button"
               className={measureMode === 'area' ? 'is-active' : undefined}
-              title="测量面积"
-              aria-label="测量面积"
+              title={t('map.measureArea')}
+              aria-label={t('map.measureArea')}
               aria-pressed={measureMode === 'area'}
               onClick={() => {
                 void trackTelemetry('measurement_used', { action: 'area' })
@@ -1485,8 +1560,8 @@ export function MapCanvas() {
             </button>
             <button
               type="button"
-              title="清除量测"
-              aria-label="清除量测"
+              title={t('map.clearMeasure')}
+              aria-label={t('map.clearMeasure')}
               onClick={() => {
                 void trackTelemetry('measurement_used', { action: 'clear' })
                 measureActionsRef.current?.clear()
@@ -1500,7 +1575,7 @@ export function MapCanvas() {
       {waybackFromCache && mode === 'wayback' && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2">
           <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-1 text-xs text-yellow-700 shadow-sm backdrop-blur dark:text-yellow-400">
-            离线模式 · 版本列表来自缓存
+            {t('map.offlineVersions')}
           </div>
         </div>
       )}
@@ -1528,7 +1603,7 @@ export function MapCanvas() {
               }}
               className="size-3.5 accent-primary"
             />
-            经纬网
+            {t('map.graticule')}
           </label>
           <select
             value={graticuleAuto ? 'auto' : String(graticuleInterval)}
@@ -1554,9 +1629,9 @@ export function MapCanvas() {
             }}
             disabled={!graticuleVisible}
             className="h-7 rounded-md border bg-background px-2 text-xs outline-none disabled:opacity-50"
-            title="经纬网间隔"
+            title={t('map.graticuleInterval')}
           >
-            <option value="auto">自动</option>
+            <option value="auto">{t('map.auto')}</option>
             {GRATICULE_INTERVALS.map((interval) => (
               <option key={interval} value={interval}>
                 {interval}°
@@ -1566,7 +1641,7 @@ export function MapCanvas() {
         </div>
         {graticuleVisible && effectiveGraticuleInterval !== null && graticuleAuto && (
           <div className="mt-1 text-[11px] text-muted-foreground">
-            当前显示 {trimDegree(effectiveGraticuleInterval)}°
+            {t('map.currentInterval', { value: trimDegree(effectiveGraticuleInterval) })}
           </div>
         )}
         {graticuleVisible &&
@@ -1574,7 +1649,7 @@ export function MapCanvas() {
           !graticuleAuto &&
           effectiveGraticuleInterval !== graticuleInterval && (
             <div className="mt-1 text-[11px] text-muted-foreground">
-              网格过密，显示 {trimDegree(effectiveGraticuleInterval)}°
+              {t('map.denseInterval', { value: trimDegree(effectiveGraticuleInterval) })}
             </div>
           )}
       </div>

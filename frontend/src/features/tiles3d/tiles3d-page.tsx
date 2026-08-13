@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { Box, Download, FolderOpen, Globe, Key, Loader2, Search } from 'lucide-react'
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -63,6 +64,7 @@ function buildPolygonCoords(): number[][] | null {
 }
 
 export function Tiles3dPage() {
+  const { t, i18n } = useTranslation()
   const inTauri = isTauriRuntime()
   const qc = useQueryClient()
 
@@ -89,9 +91,9 @@ export function Tiles3dPage() {
 
   // 初始化 Ion token 从 settings
   useEffect(() => {
-    const t = settingsQuery.data?.cesium_ion_token
-    if (typeof t === 'string' && t && !ionToken) {
-      setIonToken(t)
+    const token = settingsQuery.data?.cesium_ion_token
+    if (typeof token === 'string' && token && !ionToken) {
+      setIonToken(token)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsQuery.data])
@@ -122,14 +124,14 @@ export function Tiles3dPage() {
       await saveSettings({ ...settingsQuery.data, cesium_ion_token: trimmed || null })
       qc.invalidateQueries({ queryKey: ['settings'] })
     } catch (e) {
-      console.warn('Cesium Ion token 保存失败', e)
+      console.warn(t('tiles3d.ionTokenSaveFailed'), e)
     }
   }
 
   // 解析
   const analyzeMutation = useMutation({
     mutationFn: async () => {
-      if (!source) throw new Error('请填写完整的数据源信息')
+      if (!source) throw new Error(t('tiles3d.sourceRequired'))
       setSummary(null)
       setEstimate(null)
       return analyze3dTiles(source, proxy)
@@ -143,7 +145,7 @@ export function Tiles3dPage() {
           const est = await estimate3dTiles(source, coords, proxy)
           setEstimate(est)
         } catch (e) {
-          console.warn('自动估算失败', e)
+          console.warn(t('tiles3d.estimateFailed'), e)
         }
       }
       // 自动在 Cesium viewer 中预览
@@ -169,7 +171,7 @@ export function Tiles3dPage() {
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(`解析失败：${msg}`)
+      toast.error(t('tiles3d.analyzeFailed', { message: msg }))
     },
   })
 
@@ -178,7 +180,7 @@ export function Tiles3dPage() {
   // 下载
   const downloadMutation = useMutation({
     mutationFn: async (args: { saveDir: string; nameOverride?: string }) => {
-      if (!source) throw new Error('请填写完整的数据源信息')
+      if (!source) throw new Error(t('tiles3d.sourceRequired'))
       const coords = buildPolygonCoords()
       const baseName = taskName.trim() || `3dtiles_${timestampNow()}`
       const finalTaskName = args.nameOverride
@@ -203,14 +205,14 @@ export function Tiles3dPage() {
       return result
     },
     onSuccess: () => {
-      toast.success('3D Tiles 下载任务已创建')
+      toast.success(t('tiles3d.taskCreated'))
       useAppStore.getState().setTab('history')
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === '__user_cancelled__') return
-      toast.error(`创建任务失败：${msg}`)
+      toast.error(t('tiles3d.createTaskFailed', { message: msg }))
     },
   })
 
@@ -220,14 +222,14 @@ export function Tiles3dPage() {
 
   const onDownloadClick = async () => {
     if (!source) {
-      toast.error('请填写完整的数据源信息')
+      toast.error(t('tiles3d.sourceRequired'))
       return
     }
     let dir = saveDir.trim()
     if (!dir) {
       const picked = await openDialog({
         directory: true,
-        title: '选择 3D Tiles 保存目录',
+        title: t('tiles3d.selectSaveDirectory'),
       })
       if (!picked) return
       dir = picked as string
@@ -249,7 +251,7 @@ export function Tiles3dPage() {
   const pickSaveDir = async () => {
     const dir = await openDialog({
       directory: true,
-      title: '选择 3D Tiles 保存目录',
+      title: t('tiles3d.selectSaveDirectory'),
     })
     if (dir) setSaveDir(dir as string)
   }
@@ -262,7 +264,7 @@ export function Tiles3dPage() {
       if (!coords || coords.length < 3) return
       estimate3dTiles(source, coords, proxy)
         .then((e) => setEstimate(e))
-        .catch((e) => console.warn('自动估算失败', e))
+        .catch((e) => console.warn(t('tiles3d.estimateFailed'), e))
     }, 400)
     return () => window.clearTimeout(handle)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -274,8 +276,8 @@ export function Tiles3dPage() {
 
       <PanelSection
         icon={Box}
-        title="3D Tiles 数据源"
-        description="URL 或 Cesium Ion，自动估算选区瓦片"
+        title={t('tiles3d.sourceTitle')}
+        description={t('tiles3d.sourceDescription')}
         dataTour="tiles3d-source-section"
       >
         <Tabs value={sourceMode} onValueChange={(v) => setSourceMode(v as SourceMode)}>
@@ -301,7 +303,7 @@ export function Tiles3dPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Referer（可选，针对 OSS/CDN 防盗链）</Label>
+              <Label className="text-xs">{t('tiles3d.referer')}</Label>
               <Input
                 value={referer}
                 onChange={(e) => setReferer(e.target.value)}
@@ -318,7 +320,7 @@ export function Tiles3dPage() {
                 type="number"
                 value={assetId}
                 onChange={(e) => setAssetId(e.target.value)}
-                placeholder="例如 96188"
+                placeholder={t('tiles3d.assetIdPlaceholder')}
                 className="h-8 text-xs"
               />
             </div>
@@ -339,23 +341,24 @@ export function Tiles3dPage() {
         <div className="space-y-3 border-t border-border/60 pt-3" data-tour="tiles3d-output-section">
           <div className="space-y-1.5">
             <Label className="text-xs">
-              任务名称 <span className="text-muted-foreground">(可选)</span>
+              {t('tiles3d.taskName')}{' '}
+              <span className="text-muted-foreground">({t('common.optional')})</span>
             </Label>
             <Input
               value={taskName}
               onChange={(e) => setTaskName(e.target.value)}
-              placeholder="留空则自动生成，例如 3dtiles_20260506"
+              placeholder={t('tiles3d.taskNamePlaceholder')}
               className="h-8 text-xs"
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs">保存目录</Label>
+            <Label className="text-xs">{t('tiles3d.saveDirectory')}</Label>
             <div className="flex gap-1.5">
               <Input
                 value={saveDir}
                 onChange={(e) => setSaveDir(e.target.value)}
-                placeholder="选择下载根目录，任务会自动创建唯一子目录"
+                placeholder={t('tiles3d.saveDirectoryPlaceholder')}
                 className="h-8 font-mono text-xs"
               />
               <Button
@@ -363,14 +366,14 @@ export function Tiles3dPage() {
                 variant="outline"
                 size="icon"
                 className="size-8 shrink-0"
-                title="选择保存目录"
+                title={t('tiles3d.selectSaveDirectory')}
                 onClick={pickSaveDir}
               >
                 <FolderOpen className="size-3.5" />
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              3D Tiles 会输出为目录；为避免覆盖，下载时会在该目录下追加唯一子目录。
+              {t('tiles3d.saveDirectoryHint')}
             </p>
           </div>
         </div>
@@ -396,7 +399,7 @@ export function Tiles3dPage() {
             ) : (
               <Search className="mr-1 size-3.5" />
             )}
-            解析数据源
+            {t('tiles3d.analyze')}
           </Button>
           <Button
             type="button"
@@ -409,26 +412,26 @@ export function Tiles3dPage() {
             ) : (
               <Download className="mr-1 size-3.5" />
             )}
-            下载模型
+            {t('tiles3d.download')}
           </Button>
         </div>
 
         {summary && (
           <StatCard>
-            <StatRow label="瓦片总数" value={summary.total_tiles.toLocaleString()} />
-            <StatRow label="含内容瓦片" value={summary.content_tiles.toLocaleString()} />
+            <StatRow label={t('tiles3d.summary.totalTiles')} value={summary.total_tiles.toLocaleString(i18n.resolvedLanguage)} />
+            <StatRow label={t('tiles3d.summary.contentTiles')} value={summary.content_tiles.toLocaleString(i18n.resolvedLanguage)} />
             <StatRow
-              label="最大深度 / 层级"
+              label={t('tiles3d.summary.maxDepth')}
               value={`${summary.max_depth} / ${summary.levels}`}
             />
             {summary.has_external_tilesets && (
               <div className="text-amber-600 dark:text-amber-400">
-                含外部 tileset 引用，以上仅为根级统计
+                {t('tiles3d.summary.externalTilesets')}
               </div>
             )}
             {summary.extent && (
               <div className="text-muted-foreground">
-                范围：{summary.extent.map((n) => n.toFixed(4)).join(', ')}
+                {t('tiles3d.summary.extent', { value: summary.extent.map((n) => n.toFixed(4)).join(', ') })}
               </div>
             )}
           </StatCard>
@@ -436,13 +439,13 @@ export function Tiles3dPage() {
 
         {estimate && (
           <StatCard>
-            <StatRow label="选区内瓦片" value={estimate.filtered_tiles.toLocaleString()} />
-            <StatRow label="需下载内容" value={estimate.content_tiles.toLocaleString()} />
+            <StatRow label={t('tiles3d.summary.filteredTiles')} value={estimate.filtered_tiles.toLocaleString(i18n.resolvedLanguage)} />
+            <StatRow label={t('tiles3d.summary.downloads')} value={estimate.content_tiles.toLocaleString(i18n.resolvedLanguage)} />
           </StatCard>
         )}
 
         <p className="text-[11px] text-muted-foreground">
-          提示：下载完成后可点击右侧地图工具栏的「预览本地」按钮，选择 tileset.json 直接在 Cesium 中加载查看。
+          {t('tiles3d.localPreviewHint')}
         </p>
       </PanelSection>
     </div>

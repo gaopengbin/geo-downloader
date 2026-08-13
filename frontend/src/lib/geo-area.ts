@@ -96,7 +96,9 @@ function summarizeGeometry(geometry: Geometry | null | undefined): GeometrySumma
   return { areas: 0, lines: 0, points: 0 }
 }
 
-export function regionAreaErrorMessage(geojson: GeoJsonObject): string {
+export type RegionAreaErrorReason = 'lines-and-points' | 'lines' | 'points' | 'missing'
+
+export function regionAreaErrorReason(geojson: GeoJsonObject): RegionAreaErrorReason {
   const geometries: Array<Geometry | null | undefined> =
     geojson.type === 'FeatureCollection'
       ? (geojson as FeatureCollection).features.map((feature) => feature.geometry)
@@ -117,12 +119,26 @@ export function regionAreaErrorMessage(geojson: GeoJsonObject): string {
   )
 
   if (summary.lines > 0 && summary.points > 0) {
-    return '文件已解析，但仅包含开放线和点要素，无法作为下载区域。请将闭合边界转换为 Polygon 后重试'
+    return 'lines-and-points'
   }
   if (summary.lines > 0) {
-    return '文件已解析，但仅包含开放线要素，无法作为下载区域。请闭合边界并转换为 Polygon 后重试'
+    return 'lines'
   }
   if (summary.points > 0) {
+    return 'points'
+  }
+  return 'missing'
+}
+
+export function regionAreaErrorMessage(geojson: GeoJsonObject): string {
+  const reason = regionAreaErrorReason(geojson)
+  if (reason === 'lines-and-points') {
+    return '文件已解析，但仅包含开放线和点要素，无法作为下载区域。请将闭合边界转换为 Polygon 后重试'
+  }
+  if (reason === 'lines') {
+    return '文件已解析，但仅包含开放线要素，无法作为下载区域。请闭合边界并转换为 Polygon 后重试'
+  }
+  if (reason === 'points') {
     return '文件已解析，但仅包含点要素，无法作为下载区域。请选择或转换为 Polygon 面要素'
   }
   return '文件已解析，但没有可用的 Polygon / MultiPolygon 面要素'

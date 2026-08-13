@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Heart } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -15,6 +16,7 @@ import { fallbackToLocal } from '@/lib/qr-assets'
 import { useCachedImage } from '@/lib/use-cached-image'
 
 export function SponsorDialog() {
+  const { t } = useTranslation()
   const [tab, setTab] = useState<'wx' | 'zfb'>('wx')
   const wxSrc = useCachedImage('wx')
   const zfbSrc = useCachedImage('zfb')
@@ -24,7 +26,7 @@ export function SponsorDialog() {
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs">
           <Heart className="size-3.5" />
-          赞助
+          {t('app.header.sponsor')}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-sm">

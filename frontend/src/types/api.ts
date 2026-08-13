@@ -101,6 +101,8 @@ export interface CustomTileSource {
   subdomains?: string
   /** 最大缩放级别（默认 18） */
   max_zoom?: number
+  /** 远程服务瓦片行号方案（默认 XYZ） */
+  scheme?: 'xyz' | 'tms'
 }
 
 export interface SourceUrlAnalysis {
@@ -146,6 +148,8 @@ export interface DownloadRequest {
   compression?: string
   /** 是否构建影像金字塔（仅 GeoTIFF） */
   build_pyramid?: boolean
+  /** 是否在 GeoTIFF 旁生成 .tfw / .prj */
+  generate_sidecars?: boolean
   /** 叠加图层 ID 列表（按顺序自下而上叠在主源之上，仅栅格输出生效） */
   overlay_sources?: Nullable<string[]>
   [key: string]: unknown
@@ -392,6 +396,7 @@ export interface WaybackIncrementalRequest {
   polygon?: Nullable<PolygonCoord[]>
   compression?: string
   build_pyramid?: boolean
+  generate_sidecars?: boolean
   task_name_prefix?: Nullable<string>
   proxy?: Nullable<string>
 }

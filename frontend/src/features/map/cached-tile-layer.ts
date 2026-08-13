@@ -10,6 +10,7 @@
  */
 
 import L from 'leaflet'
+import { resolveTileUrl } from './tile-url'
 import { invokeCommand, isTauriRuntime } from '@/lib/tauri'
 
 export interface CachedTileLayerOptions extends L.TileLayerOptions {
@@ -36,6 +37,17 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     this._cacheDisplayName = options.displayName ?? options.sourceKey
     this._cacheFormat = options.format
     this._cacheReadOnly = options.readOnly === true
+  },
+
+  getTileUrl: function (coords: L.Coords): string {
+    const zoom = this._getZoomForUrl() as number
+    const subdomain = this._getSubdomain(coords) as string
+    return resolveTileUrl(
+      this._url,
+      { x: coords.x, y: coords.y, z: zoom },
+      subdomain,
+      L.Browser.retina ? '@2x' : '',
+    )
   },
 
   createTile: function (coords: L.Coords, done: L.DoneCallback): HTMLElement {

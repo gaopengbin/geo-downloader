@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { Moon, Palette, Sun } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { useTheme, type ThemeAccent } from './theme-provider'
 
-const ACCENTS: { value: ThemeAccent; label: string; color: string }[] = [
-  { value: 'zinc', label: '中性灰', color: 'bg-zinc-900' },
-  { value: 'indigo', label: '靛蓝', color: 'bg-indigo-500' },
-  { value: 'blue', label: '湛蓝', color: 'bg-blue-600' },
-  { value: 'green', label: '翠绿', color: 'bg-green-600' },
-  { value: 'violet', label: '紫罗兰', color: 'bg-violet-600' },
-  { value: 'orange', label: '橙色', color: 'bg-orange-500' },
+const ACCENTS: { value: ThemeAccent; labelKey: string; color: string }[] = [
+  { value: 'zinc', labelKey: 'app.theme.zinc', color: 'bg-zinc-900' },
+  { value: 'indigo', labelKey: 'app.theme.indigo', color: 'bg-indigo-500' },
+  { value: 'blue', labelKey: 'app.theme.blue', color: 'bg-blue-600' },
+  { value: 'green', labelKey: 'app.theme.green', color: 'bg-green-600' },
+  { value: 'violet', labelKey: 'app.theme.violet', color: 'bg-violet-600' },
+  { value: 'orange', labelKey: 'app.theme.orange', color: 'bg-orange-500' },
 ]
 
 export function ThemeSwitcher() {
+  const { t } = useTranslation()
   const { accent, resolvedMode, setMode, setAccent } = useTheme()
   const isDark = resolvedMode === 'dark'
   const [accentMenuOpen, setAccentMenuOpen] = useState(false)
@@ -45,8 +47,8 @@ export function ThemeSwitcher() {
       <Button
         size="icon"
         variant="ghost"
-        aria-label={isDark ? '切换到浅色' : '切换到深色'}
-        title={isDark ? '切换到浅色' : '切换到深色'}
+        aria-label={t(isDark ? 'app.theme.light' : 'app.theme.dark')}
+        title={t(isDark ? 'app.theme.light' : 'app.theme.dark')}
         onClick={() => setMode(isDark ? 'light' : 'dark')}
       >
         {isDark ? <Moon className="size-4" /> : <Sun className="size-4" />}
@@ -56,10 +58,10 @@ export function ThemeSwitcher() {
         <Button
           size="icon"
           variant="ghost"
-          aria-label="主色"
+          aria-label={t('app.theme.accent')}
           aria-haspopup="menu"
           aria-expanded={accentMenuOpen}
-          title="主色"
+          title={t('app.theme.accent')}
           onClick={() => setAccentMenuOpen((open) => !open)}
         >
           <Palette className="size-4" />
@@ -67,7 +69,7 @@ export function ThemeSwitcher() {
         {accentMenuOpen && (
           <div
             role="menu"
-            aria-label="选择主色"
+            aria-label={t('app.theme.chooseAccent')}
             className="pointer-events-auto absolute right-0 top-[calc(100%+0.25rem)] z-[100] w-36 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
           >
             {ACCENTS.map((a) => (
@@ -83,9 +85,9 @@ export function ThemeSwitcher() {
                 }}
               >
                 <span className={`inline-block size-3 rounded-full ${a.color}`} />
-                <span className="flex-1">{a.label}</span>
+                <span className="flex-1">{t(a.labelKey)}</span>
                 {accent === a.value && (
-                  <span className="text-xs text-muted-foreground">当前</span>
+                  <span className="text-xs text-muted-foreground">{t('app.theme.current')}</span>
                 )}
               </button>
             ))}

@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { TFunction } from 'i18next'
 import { AlertTriangle, Code2, Database, ExternalLink, KeyRound, LayoutGrid, Loader2, ShieldAlert, SlidersHorizontal, Wifi, Wrench } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
 
@@ -40,23 +42,24 @@ import {
   setAssistantApiKey,
 } from './settings-api'
 import { TileCacheSection } from './tile-cache-section'
+import { LanguageSection } from './language-section'
 import { useImageryParamsStore } from '@/store/imagery-params-store'
 import type { AppSettings } from '@/types/api'
 
 const FORMAT_OPTIONS = [
-  { value: 'geotiff', label: 'GeoTIFF (.tif)' },
-  { value: 'tiles', label: '原始瓦片目录' },
-  { value: 'mbtiles', label: 'MBTiles (.mbtiles)' },
-  { value: 'gpkg', label: 'GeoPackage (.gpkg)' },
+  { value: 'geotiff', labelKey: 'settings.formats.geotiff' },
+  { value: 'tiles', labelKey: 'settings.formats.tiles' },
+  { value: 'mbtiles', labelKey: 'settings.formats.mbtiles' },
+  { value: 'gpkg', labelKey: 'settings.formats.gpkg' },
 ] as const
 
-const settingsSchema = z
+const createSettingsSchema = (t: TFunction) => z
   .object({
     tianditu_token: z.string().trim(),
     cesium_ion_token: z.string().trim(),
     ai_assistant_enabled: z.boolean(),
     ai_base_url: z.string().trim(),
-    ai_model: z.string().trim().min(1, '请输入模型名称'),
+    ai_model: z.string().trim().min(1, t('settings.ai.modelRequired')),
     deepseek_api_key: z.string().trim(),
     proxy_enabled: z.boolean(),
     proxy_url: z.string().trim(),
@@ -82,12 +85,12 @@ const settingsSchema = z
       context.addIssue({
         code: 'custom',
         path: ['ai_base_url'],
-        message: '请输入有效的 HTTP 或 HTTPS API 地址',
+        message: t('settings.ai.invalidUrl'),
       })
     }
   })
 
-type SettingsFormValues = z.infer<typeof settingsSchema>
+type SettingsFormValues = z.infer<ReturnType<typeof createSettingsSchema>>
 
 const DEFAULT_VALUES: SettingsFormValues = {
   tianditu_token: '',
@@ -168,6 +171,7 @@ function toAppSettings(values: SettingsFormValues, base: AppSettings | undefined
 }
 
 export function SettingsPanel() {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [aiConsentOpen, setAiConsentOpen] = useState(false)
   const [aiConsentAccepted, setAiConsentAccepted] = useState(false)
@@ -181,6 +185,7 @@ export function SettingsPanel() {
   })
   const memoryQuery = useQuery({ queryKey: ['system-memory'], queryFn: getSystemMemory })
 
+  const settingsSchema = useMemo(() => createSettingsSchema(t), [t])
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema),
     defaultValues: DEFAULT_VALUES,
@@ -220,13 +225,13 @@ export function SettingsPanel() {
         !newApiKey &&
         secretQuery.data?.configured !== true
       ) {
-        throw new Error('开启助手前请配置 DeepSeek API Key')
+        throw new Error(t('settings.ai.needKey'))
       }
       if (newApiKey) await setAssistantApiKey(newApiKey)
       await saveSettings(toAppSettings(values, settingsQuery.data))
     },
     onSuccess: (_d, values) => {
-      toast.success('设置已保存')
+      toast.success(t('settings.saved'))
       queryClient.setQueryData<AppSettings>(['settings'], (current) =>
         toAppSettings(values, current),
       )
@@ -249,7 +254,7 @@ export function SettingsPanel() {
       if (msg.includes('DeepSeek API Key')) {
         setError('deepseek_api_key', { type: 'manual', message: msg })
       }
-      toast.error(`保存失败：${msg}`)
+      toast.error(t('settings.saveError', { message: msg }))
     },
   })
 
@@ -261,10 +266,12 @@ export function SettingsPanel() {
       setValue('ai_assistant_enabled', false, { shouldDirty: true })
       queryClient.invalidateQueries({ queryKey: ['assistant-secret-status'] })
       useAssistantStore.getState().setOpen(false)
-      toast.success('DeepSeek API Key 已从系统凭据库移除，请保存以停用助手')
+      toast.success(t('settings.ai.removed'))
     },
     onError: (err: unknown) => {
-      toast.error(`移除失败：${err instanceof Error ? err.message : String(err)}`)
+      toast.error(t('settings.ai.removeError', {
+        message: err instanceof Error ? err.message : String(err),
+      }))
     },
   })
 
@@ -292,7 +299,7 @@ export function SettingsPanel() {
     return (
       <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
-        加载设置中...
+        {t('settings.loading')}
       </div>
     )
   }
@@ -300,10 +307,11 @@ export function SettingsPanel() {
   if (settingsQuery.error) {
     return (
       <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-        读取设置失败：
-        {settingsQuery.error instanceof Error
-          ? settingsQuery.error.message
-          : String(settingsQuery.error)}
+        {t('settings.loadError', {
+          message: settingsQuery.error instanceof Error
+            ? settingsQuery.error.message
+            : String(settingsQuery.error),
+        })}
       </div>
     )
   }
@@ -314,26 +322,40 @@ export function SettingsPanel() {
       className="space-y-3"
       data-agent-target="settings-panel"
     >
+      <LanguageSection />
+
       <PanelSection
         icon={KeyRound}
-        title="访问令牌"
-        description="天地图 / Cesium Ion"
+        title={t('settings.sections.tokens.title')}
+        description={t('settings.sections.tokens.description')}
         dataAgentTarget="settings-tokens"
       >
         <div className="space-y-1.5">
-          <Label htmlFor="tianditu_token">天地图 Token</Label>
+          <Label htmlFor="tianditu_token">{t('settings.fields.tiandituToken')}</Label>
           <Input
             id="tianditu_token"
-            placeholder="可选"
+            placeholder={t('common.optional')}
             autoComplete="off"
             {...register('tianditu_token')}
           />
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t('settings.fields.tiandituTokenHint')}{' '}
+            <a
+              href="https://cloudcenter.tianditu.gov.cn/center/development/myApp"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+            >
+              {t('settings.fields.tiandituApply')}
+              <ExternalLink className="size-3" aria-hidden="true" />
+            </a>
+          </p>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="cesium_ion_token">Cesium Ion Token</Label>
+          <Label htmlFor="cesium_ion_token">{t('settings.fields.cesiumToken')}</Label>
           <Input
             id="cesium_ion_token"
-            placeholder="可选"
+            placeholder={t('common.optional')}
             autoComplete="off"
             {...register('cesium_ion_token')}
           />
@@ -342,8 +364,8 @@ export function SettingsPanel() {
 
       <PanelSection
         icon={Wifi}
-        title="网络代理"
-        description="仅代理下载请求"
+        title={t('settings.sections.network.title')}
+        description={t('settings.sections.network.description')}
         dataAgentTarget="settings-proxy"
         action={
           <Switch
@@ -353,7 +375,7 @@ export function SettingsPanel() {
         }
       >
         <div className="space-y-1.5">
-          <Label htmlFor="proxy_url">代理地址</Label>
+          <Label htmlFor="proxy_url">{t('settings.fields.proxyAddress')}</Label>
           <Input
             id="proxy_url"
             placeholder="http://127.0.0.1:7890"
@@ -366,13 +388,13 @@ export function SettingsPanel() {
 
       <PanelSection
         icon={SlidersHorizontal}
-        title="默认下载参数"
-        description="并发 / 缩放 / 格式 / 内存预算"
+        title={t('settings.sections.defaults.title')}
+        description={t('settings.sections.defaults.description')}
         dataAgentTarget="settings-download"
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="default_concurrency">默认并发 (1-100)</Label>
+            <Label htmlFor="default_concurrency">{t('settings.fields.concurrency')}</Label>
             <Input
               id="default_concurrency"
               type="number"
@@ -385,7 +407,7 @@ export function SettingsPanel() {
             )}
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="default_zoom">默认缩放 (0-22)</Label>
+            <Label htmlFor="default_zoom">{t('settings.fields.zoom')}</Label>
             <Input
               id="default_zoom"
               type="number"
@@ -395,7 +417,7 @@ export function SettingsPanel() {
             />
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label>默认输出格式</Label>
+            <Label>{t('settings.fields.format')}</Label>
             <Select
               value={defaultFormat}
               onValueChange={(v) =>
@@ -410,14 +432,14 @@ export function SettingsPanel() {
               <SelectContent>
                 {FORMAT_OPTIONS.map((opt) => (
                   <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
+                    {t(opt.labelKey)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label>空白瓦片探测</Label>
+            <Label>{t('settings.fields.probe')}</Label>
             <Select
               value={emptyTileProbeAction}
               onValueChange={(v) =>
@@ -432,17 +454,17 @@ export function SettingsPanel() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="continue">自动继续（默认）</SelectItem>
-                <SelectItem value="ask">每次询问</SelectItem>
-                <SelectItem value="cancel">停止创建任务</SelectItem>
+                <SelectItem value="continue">{t('settings.probe.continue')}</SelectItem>
+                <SelectItem value="ask">{t('settings.probe.ask')}</SelectItem>
+                <SelectItem value="cancel">{t('settings.probe.cancel')}</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              探测仅采样选区中心的一张最高级别瓦片，可能误判。自动继续不会弹窗阻塞下载。
+              {t('settings.probe.hint')}
             </p>
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="memory_budget_mb">内存预算 MB (512-16384)</Label>
+            <Label htmlFor="memory_budget_mb">{t('settings.fields.memory')}</Label>
             <Input
               id="memory_budget_mb"
               type="number"
@@ -453,10 +475,12 @@ export function SettingsPanel() {
             />
             {memoryQuery.data && (
               <p className="text-xs text-muted-foreground">
-                系统总计 {Math.round(memoryQuery.data.total_mb)} MB / 可用{' '}
-                {Math.round(memoryQuery.data.available_mb)} MB
+                {t('settings.memorySummary', {
+                  total: Math.round(memoryQuery.data.total_mb),
+                  available: Math.round(memoryQuery.data.available_mb),
+                })}
                 {memoryQuery.data.recommended_budget_mb
-                  ? ` · 推荐 ${Math.round(memoryQuery.data.recommended_budget_mb)} MB`
+                  ? ` · ${t('settings.recommendedMemory', { value: Math.round(memoryQuery.data.recommended_budget_mb) })}`
                   : ''}
               </p>
             )}
@@ -464,7 +488,7 @@ export function SettingsPanel() {
           {/* Issue #31：自动导出最低成功率阈值 */}
           <div className="space-y-1.5 sm:col-span-2">
             <div className="flex items-center justify-between">
-              <Label>自动导出最低成功率</Label>
+              <Label>{t('settings.fields.successRatio')}</Label>
               <span className="text-xs font-medium text-muted-foreground">
                 {Math.round((minExportSuccessRatio ?? 0) * 100)}%
               </span>
@@ -481,17 +505,13 @@ export function SettingsPanel() {
               }
             />
             <p className="text-xs text-muted-foreground">
-              下载结束时成功率达到此值才自动导出。
-              <strong className="text-foreground/80">0%</strong>
-              （默认）= 有 1 张成功就导，
-              <strong className="text-foreground/80">100%</strong>
-              = 必须全成功才导，否则进入待决策状态。
+              {t('settings.successRatioHint')}
             </p>
           </div>
           {/* Issue #27：流式导出并行流水线缓冲 */}
           <div className="space-y-1.5 sm:col-span-2">
             <div className="flex items-center justify-between">
-              <Label>导出流水线缓冲</Label>
+              <Label>{t('settings.fields.exportBuffer')}</Label>
               <span className="text-xs font-medium text-muted-foreground">
                 {exportBufferMb ?? 64} MB
               </span>
@@ -506,10 +526,7 @@ export function SettingsPanel() {
               }
             />
             <p className="text-xs text-muted-foreground">
-              跨 strip 并行解码/压缩的总内存上限。越大越能让 IO 与 CPU 重叠，
-              大区导出提速，代价是内存峰值上升。默认
-              <strong className="text-foreground/80"> 64 MB</strong>，
-              瓦片量大、内存充足时可调到 128~256。
+              {t('settings.exportBufferHint')}
             </p>
           </div>
         </div>
@@ -517,18 +534,18 @@ export function SettingsPanel() {
 
       <PanelSection
         icon={Code2}
-        title="开发者选项"
-        description="实验性功能"
+        title={t('settings.sections.developer.title')}
+        description={t('settings.sections.developer.description')}
         dataAgentTarget="settings-developer"
       >
         <div className="flex items-center justify-between rounded-md border p-2.5">
           <div className="min-w-0 pr-2">
-            <Label className="text-sm">GeoD AI 助手</Label>
-            <p className="text-xs text-muted-foreground">默认关闭，开启后显示顶部助手入口</p>
+            <Label className="text-sm">{t('settings.ai.title')}</Label>
+            <p className="text-xs text-muted-foreground">{t('settings.ai.description')}</p>
           </div>
           <Switch
             checked={aiAssistantEnabled}
-            aria-label="启用 GeoD AI 助手"
+            aria-label={t('settings.ai.enable')}
             onCheckedChange={requestAiAssistantChange}
           />
         </div>
@@ -545,17 +562,17 @@ export function SettingsPanel() {
                   }
                 >
                   {secretQuery.isLoading
-                    ? '检查中'
+                    ? t('settings.ai.checking')
                     : secretQuery.data?.configured
-                      ? '已安全保存'
-                      : '未配置'}
+                      ? t('settings.ai.savedKey')
+                      : t('settings.ai.notConfigured')}
                 </span>
               </div>
               <Input
                 id="deepseek_api_key"
                 type="password"
                 placeholder={
-                  secretQuery.data?.configured ? '留空则保留现有 Key' : 'sk-...'
+                  secretQuery.data?.configured ? t('settings.ai.keepExisting') : 'sk-...'
                 }
                 autoComplete="new-password"
                 spellCheck={false}
@@ -563,7 +580,7 @@ export function SettingsPanel() {
               />
               <div className="flex items-start justify-between gap-3">
                 <p className="text-xs leading-5 text-muted-foreground">
-                  Key 保存到操作系统凭据库，不写入 GeoD 设置文件。
+                  {t('settings.ai.keyHint')}
                 </p>
                 {secretQuery.data?.configured && (
                   <Button
@@ -574,7 +591,7 @@ export function SettingsPanel() {
                     disabled={deleteApiKeyMutation.isPending}
                     onClick={() => setApiKeyDeleteOpen(true)}
                   >
-                    {deleteApiKeyMutation.isPending ? '移除中' : '移除 Key'}
+                    {deleteApiKeyMutation.isPending ? t('settings.ai.removingShort') : t('settings.ai.removeKey')}
                   </Button>
                 )}
               </div>
@@ -583,7 +600,7 @@ export function SettingsPanel() {
               )}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ai_base_url">API 地址</Label>
+              <Label htmlFor="ai_base_url">{t('settings.ai.baseUrl')}</Label>
               <Input
                 id="ai_base_url"
                 type="url"
@@ -597,7 +614,7 @@ export function SettingsPanel() {
               )}
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ai_model">模型</Label>
+              <Label htmlFor="ai_model">{t('settings.ai.model')}</Label>
               <Input
                 id="ai_model"
                 placeholder="deepseek-v4-flash"
@@ -606,8 +623,7 @@ export function SettingsPanel() {
                 {...register('ai_model')}
               />
               <p className="text-xs leading-5 text-muted-foreground">
-                GeoD 在本机检索知识库，并由桌面端直接请求模型；费用由该 Key
-                所属账户承担。
+                {t('settings.ai.serviceHint')}
               </p>
               {errors.ai_model && (
                 <p className="text-xs text-destructive">{errors.ai_model.message}</p>
@@ -619,14 +635,14 @@ export function SettingsPanel() {
 
       <PanelSection
         icon={Wrench}
-        title="高级"
-        description="调试 / 证书校验"
+        title={t('settings.sections.advanced.title')}
+        description={t('settings.sections.advanced.description')}
         dataAgentTarget="settings-advanced"
       >
         <div className="flex items-center justify-between rounded-md border p-2.5">
           <div className="min-w-0 pr-2">
-            <Label className="text-sm">调试模式</Label>
-            <p className="text-xs text-muted-foreground">保留临时瓦片便于排查</p>
+            <Label className="text-sm">{t('settings.fields.debug')}</Label>
+            <p className="text-xs text-muted-foreground">{t('settings.fields.debugHint')}</p>
           </div>
           <Switch
             checked={debugMode}
@@ -635,8 +651,8 @@ export function SettingsPanel() {
         </div>
         <div className="flex items-center justify-between rounded-md border p-2.5">
           <div className="min-w-0 pr-2">
-            <Label className="text-sm">允许无效 HTTPS 证书</Label>
-            <p className="text-xs text-muted-foreground">仅在内网环境开启</p>
+            <Label className="text-sm">{t('settings.fields.invalidCerts')}</Label>
+            <p className="text-xs text-muted-foreground">{t('settings.fields.invalidCertsHint')}</p>
           </div>
           <Switch
             checked={allowInvalidCerts}
@@ -646,15 +662,15 @@ export function SettingsPanel() {
         {allowInvalidCerts && (
           <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-300">
             <AlertTriangle className="size-4 shrink-0" />
-            <span>已禁用 HTTPS 证书校验，确认你信任目标服务器。</span>
+            <span>{t('settings.invalidCertsWarning')}</span>
           </div>
         )}
       </PanelSection>
 
       <PanelSection
         icon={Database}
-        title="瓦片缓存"
-        description="浏览即缓存 / 离线复用"
+        title={t('settings.sections.cache.title')}
+        description={t('settings.sections.cache.description')}
         dataAgentTarget="settings-cache"
       >
         <TileCacheSection
@@ -672,14 +688,14 @@ export function SettingsPanel() {
       <div className="sticky bottom-0 -mx-3 border-t bg-background/95 px-3 py-2 backdrop-blur">
         <Button type="submit" className="w-full" disabled={!isDirty || mutation.isPending}>
           {mutation.isPending && <Loader2 className="mr-1 size-3.5 animate-spin" />}
-          保存
+          {t('common.save')}
         </Button>
       </div>
 
       <PanelSection
         icon={LayoutGrid}
-        title="其他"
-        description="图源管理 / 关于"
+        title={t('settings.sections.other.title')}
+        description={t('settings.sections.other.description')}
         dataAgentTarget="settings-other"
       >
         <div className="flex flex-wrap gap-2">
@@ -700,19 +716,19 @@ export function SettingsPanel() {
             <div className="mb-1 flex size-9 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400">
               <ShieldAlert className="size-5" />
             </div>
-            <DialogTitle>启用 GeoD AI 助手前请确认</DialogTitle>
+            <DialogTitle>{t('settings.ai.consentTitle')}</DialogTitle>
             <DialogDescription>
-              这是开发者实验功能。请阅读以下免责声明与隐私声明，再决定是否启用。
+              {t('settings.ai.consentDescription')}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3 text-sm">
             <section className="space-y-1.5 rounded-md border p-3">
-              <h3 className="font-medium">免责声明</h3>
+              <h3 className="font-medium">{t('settings.ai.disclaimer')}</h3>
               <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
-                <li>AI 回答可能存在错误、遗漏或过时信息，不构成专业建议或结果保证。</li>
-                <li>涉及下载、数据授权、参数修改和文件操作时，请自行核验后再执行。</li>
-                <li>模型调用费用由你的 DeepSeek 账户承担，GeoD 不承担额度消耗或损失。</li>
+                <li>{t('settings.ai.disclaimerError')}</li>
+                <li>{t('settings.ai.disclaimerVerify')}</li>
+                <li>{t('settings.ai.disclaimerCost')}</li>
               </ul>
               <a
                 href="https://geodownloader.pages.dev/disclaimer.html"
@@ -720,21 +736,18 @@ export function SettingsPanel() {
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
               >
-                查看完整使用条款与免责声明
+                {t('settings.ai.fullTerms')}
                 <ExternalLink className="size-3" />
               </a>
             </section>
 
             <section className="space-y-1.5 rounded-md border p-3">
-              <h3 className="font-medium">隐私声明</h3>
+              <h3 className="font-medium">{t('settings.ai.privacy')}</h3>
               <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
-                <li>DeepSeek API Key 保存在操作系统凭据库，不写入 GeoD 设置文件。</li>
-                <li>
-                  对话内容和你主动附加的运行环境信息会由 GeoD 桌面端直接发送到所配置的
-                  AI 服务。
-                </li>
-                <li>GeoD 内置知识库检索在本机完成；第三方 AI 服务适用其自身条款和隐私政策。</li>
-                <li>请勿输入密码、个人隐私、商业秘密或未经授权的敏感地理数据。</li>
+                <li>{t('settings.ai.privacyKey')}</li>
+                <li>{t('settings.ai.privacyConversation')}</li>
+                <li>{t('settings.ai.privacyKnowledge')}</li>
+                <li>{t('settings.ai.privacySensitive')}</li>
               </ul>
             </section>
 
@@ -745,19 +758,16 @@ export function SettingsPanel() {
                 className="mt-0.5 size-4 shrink-0 accent-primary"
                 onChange={(event) => setAiConsentAccepted(event.target.checked)}
               />
-              <span className="text-xs leading-5">
-                我已阅读、理解并同意上述免责声明与隐私声明，确认使用自己的 DeepSeek
-                API Key 启用此实验功能。
-              </span>
+              <span className="text-xs leading-5">{t('settings.ai.consentStatement')}</span>
             </label>
           </div>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setAiConsentOpen(false)}>
-              暂不启用
+              {t('settings.ai.notNow')}
             </Button>
             <Button type="button" disabled={!aiConsentAccepted} onClick={confirmAiAssistant}>
-              同意并启用
+              {t('settings.ai.agree')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -766,9 +776,9 @@ export function SettingsPanel() {
       <Dialog open={apiKeyDeleteOpen} onOpenChange={setApiKeyDeleteOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>移除 DeepSeek API Key？</DialogTitle>
+            <DialogTitle>{t('settings.ai.removeTitle')}</DialogTitle>
             <DialogDescription>
-              Key 将从操作系统凭据库中删除，GeoD 助手随即无法继续调用模型。
+              {t('settings.ai.removeDescription')}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -777,7 +787,7 @@ export function SettingsPanel() {
               variant="outline"
               onClick={() => setApiKeyDeleteOpen(false)}
             >
-              取消
+              {t('common.cancel')}
             </Button>
             <Button
               type="button"
@@ -785,7 +795,9 @@ export function SettingsPanel() {
               disabled={deleteApiKeyMutation.isPending}
               onClick={() => deleteApiKeyMutation.mutate()}
             >
-              {deleteApiKeyMutation.isPending ? '正在移除' : '确认移除'}
+              {deleteApiKeyMutation.isPending
+                ? t('settings.ai.removing')
+                : t('settings.ai.confirmRemove')}
             </Button>
           </DialogFooter>
         </DialogContent>

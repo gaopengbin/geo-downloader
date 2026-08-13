@@ -769,6 +769,7 @@ mod persistence_tests {
             concurrency: 30,
             compression: "lzw".to_string(),
             build_pyramid: false,
+            generate_sidecars: false,
             overlay_sources: None,
         }
     }
