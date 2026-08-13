@@ -29,18 +29,46 @@ if (-not (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
   Set-Content -LiteralPath $tokenFile -Value $adminToken -NoNewline -Encoding UTF8
 }
 
-$npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-Push-Location $serviceRoot
-try {
-  & $npm ci --omit=dev --no-audit --no-fund
-  if ($LASTEXITCODE -ne 0) {
-    throw "npm ci failed with exit code $LASTEXITCODE"
+$legacyModules = Join-Path $nginxRoot 'services\geod-telemetry\node_modules'
+$releaseModules = Join-Path $serviceRoot 'node_modules'
+if (-not (Test-Path -LiteralPath (Join-Path $releaseModules 'sql.js') -PathType Container)) {
+  if (-not (Test-Path -LiteralPath (Join-Path $legacyModules 'sql.js') -PathType Container)) {
+    throw "The telemetry sql.js dependency is missing from $legacyModules."
   }
-} finally {
-  Pop-Location
+  New-Item -ItemType Directory -Force -Path $releaseModules | Out-Null
+  Copy-Item `
+    -LiteralPath (Join-Path $legacyModules 'sql.js') `
+    -Destination (Join-Path $releaseModules 'sql.js') `
+    -Recurse `
+    -Force
 }
 
-$node = (Get-Command node.exe -ErrorAction Stop).Source
+$nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
+if ($nodeCommand) {
+  $node = $nodeCommand.Source
+} else {
+  $runnerRoot = Split-Path -Parent (
+    Split-Path -Parent (
+      Split-Path -Parent $env:GITHUB_WORKSPACE
+    )
+  )
+  $node = Get-ChildItem `
+      -LiteralPath (Join-Path $runnerRoot 'externals') `
+      -Directory `
+      -Filter 'node*' |
+    Sort-Object Name -Descending |
+    ForEach-Object { Join-Path $_.FullName 'bin\node.exe' } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+}
+if (-not $node) {
+  throw 'No compatible Node.js executable was found.'
+}
+$nodeVersion = [version]((& $node --version).TrimStart('v'))
+if ($nodeVersion -lt [version]'20.12.0') {
+  throw "Telemetry requires Node.js 20.12 or newer; found $nodeVersion."
+}
+Write-Host "Using Node.js $nodeVersion from $node"
 Get-CimInstance Win32_Process |
   Where-Object { $_.CommandLine -like '*geod-telemetry*server.mjs*' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
