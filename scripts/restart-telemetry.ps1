@@ -73,9 +73,17 @@ Get-CimInstance Win32_Process |
   Where-Object { $_.CommandLine -like '*geod-telemetry*server.mjs*' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
-$taskName = 'GeoDTelemetry'
-$action = New-ScheduledTaskAction -Execute $node -Argument "`"$script`"" -WorkingDirectory $serviceRoot
+$taskName = 'GeoDTelemetryManaged'
+$legacyWatchdogMarker = 'services\geod-telemetry\server.mjs'
+$action = New-ScheduledTaskAction `
+  -Execute $node `
+  -Argument "`"$script`" `"$legacyWatchdogMarker`"" `
+  -WorkingDirectory $serviceRoot
 $trigger = New-ScheduledTaskTrigger -AtStartup
+$runnerPrincipal = New-ScheduledTaskPrincipal `
+  -UserId 'S-1-5-20' `
+  -LogonType ServiceAccount `
+  -RunLevel Limited
 $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existingTask) {
   Set-ScheduledTask `
@@ -87,6 +95,7 @@ if ($existingTask) {
     -TaskName $taskName `
     -Action $action `
     -Trigger $trigger `
+    -Principal $runnerPrincipal `
     -Force | Out-Null
 }
 
@@ -111,7 +120,7 @@ $watchdogTriggers = @(
     -RepetitionInterval (New-TimeSpan -Minutes 5) `
     -RepetitionDuration (New-TimeSpan -Days 3650))
 )
-$watchdogTaskName = 'GeoDTelemetryWatchdog'
+$watchdogTaskName = 'GeoDTelemetryManagedWatchdog'
 $existingWatchdog = Get-ScheduledTask `
   -TaskName $watchdogTaskName `
   -ErrorAction SilentlyContinue
@@ -125,6 +134,7 @@ if ($existingWatchdog) {
     -TaskName $watchdogTaskName `
     -Action $watchdogAction `
     -Trigger $watchdogTriggers `
+    -Principal $runnerPrincipal `
     -Force | Out-Null
 }
 
