@@ -1,12 +1,14 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$AdminTokenBase64
+  [string]$AdminTokenBase64,
+
+  [string]$ServiceRoot = 'C:\nginx-1.30.2\services\geod-telemetry'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $nginxRoot = 'C:\nginx-1.30.2'
-$serviceRoot = Join-Path $nginxRoot 'services\geod-telemetry'
+$serviceRoot = $ServiceRoot
 $script = Join-Path $serviceRoot 'server.mjs'
 $tokenFile = Join-Path $nginxRoot 'geod-telemetry-admin-token.txt'
 $databasePath = Join-Path $nginxRoot 'data\geod-telemetry.sqlite'
@@ -38,7 +40,7 @@ try {
 
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 Get-CimInstance Win32_Process |
-  Where-Object { $_.CommandLine -like '*services\geod-telemetry\server.mjs*' } |
+  Where-Object { $_.CommandLine -like '*geod-telemetry*server.mjs*' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
 $taskName = 'GeoDTelemetry'
@@ -49,7 +51,7 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Fo
 $watchdogContent = @"
 `$ErrorActionPreference = 'Stop'
 `$process = Get-CimInstance Win32_Process |
-  Where-Object { `$_.CommandLine -like '*services\geod-telemetry\server.mjs*' } |
+  Where-Object { `$_.CommandLine -like '*$script*' } |
   Select-Object -First 1
 if (-not `$process) {
   Start-ScheduledTask -TaskName '$taskName'
