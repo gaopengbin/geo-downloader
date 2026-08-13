@@ -73,22 +73,24 @@ Get-CimInstance Win32_Process |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
 $legacyWatchdogMarker = 'services\geod-telemetry\server.mjs'
-$runnerTrackingId = $env:RUNNER_TRACKING_ID
-try {
-  $env:RUNNER_TRACKING_ID = "geod-telemetry-$([guid]::NewGuid().ToString('N'))"
-  $process = Start-Process `
-    -FilePath $node `
-    -ArgumentList @("`"$script`"", "`"$legacyWatchdogMarker`"") `
-    -WorkingDirectory $serviceRoot `
-    -WindowStyle Hidden `
-    -PassThru
-  Write-Host "Started managed telemetry process $($process.Id)."
-} finally {
-  $env:RUNNER_TRACKING_ID = $runnerTrackingId
+$commandLine = "`"$node`" `"$script`" `"$legacyWatchdogMarker`""
+$createdProcess = Invoke-CimMethod `
+  -ClassName Win32_Process `
+  -MethodName Create `
+  -Arguments @{
+    CommandLine = $commandLine
+    CurrentDirectory = $serviceRoot
+  }
+if ($createdProcess.ReturnValue -ne 0) {
+  throw "WMI could not start telemetry; return value $($createdProcess.ReturnValue)."
 }
+Write-Host "Started managed telemetry process $($createdProcess.ProcessId) through WMI."
 Start-Sleep -Seconds 3
 $health = Invoke-RestMethod -Uri 'http://127.0.0.1:9091/health' -TimeoutSec 10
-if ($health.status -ne 'ok') {
+if (
+  $health.status -ne 'ok' -or
+  $health.product_schema_version -ne 1
+) {
   throw 'Telemetry health check failed'
 }
 
@@ -155,7 +157,10 @@ if ($needsNginxUpdate) {
 $publicHealth = Invoke-RestMethod `
   -Uri 'https://laogao.xyz/geod-telemetry/health' `
   -TimeoutSec 15
-if ($publicHealth.status -ne 'ok') {
+if (
+  $publicHealth.status -ne 'ok' -or
+  $publicHealth.product_schema_version -ne 1
+) {
   throw 'Public telemetry health check failed'
 }
 
