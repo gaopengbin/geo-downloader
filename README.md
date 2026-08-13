@@ -206,10 +206,28 @@ Copyright © 2025–2026 gaopengbin
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡。
 
 <p align="center">
-  <img src="https://laogao.xyz/packages/qr-assets/wx.jpg" alt="微信赞赏" width="220">
+  <img src="static/images/wx.jpg" alt="微信赞赏" width="220">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://laogao.xyz/packages/qr-assets/zfb.jpg" alt="支付宝赞赏" width="220">
+  <img src="static/images/zfb.jpg" alt="支付宝赞赏" width="220">
 </p>
+
+### 感谢支持
+
+感谢每一位愿意支持 GeoD 的朋友。金额不分大小，每一份认可都会被认真记下。
+
+| 日期 | 支持者 | 金额 |
+| --- | --- | ---: |
+| 2026-08-13 | 林冲 | ¥20.00 |
+| 2026-07-20 | Hi-cc | ¥0.01 |
+| 2026-05-10 | lulu | ¥10.00 |
+| 2026-05-08 | jojo | ¥19.90 |
+| 2026-04-22 | 可以超载 | ¥9.90 |
+| 2026-04-20 | 风停在左肩 | ¥10.00 |
+| 2026-04-18 | 注定风雨兼程😊 | ¥10.00 |
+| 2026-04-13 | 邓 | ¥10.00 |
+| 2026-04-10 | jojo | ¥3.99 |
+
+目前共记录 **9 次支持，累计 ¥93.80**。完整记录与说明见 [GeoD 支持者记录](docs/supporters.md)。如希望匿名、更改昵称或移除记录，请联系作者。
 
 ---
 
