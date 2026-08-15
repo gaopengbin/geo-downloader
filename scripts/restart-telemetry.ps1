@@ -13,6 +13,7 @@ $nginxRoot = 'C:\nginx-1.30.2'
 $serviceRoot = $ServiceRoot
 $script = Join-Path $serviceRoot 'server.mjs'
 $tokenFile = Join-Path $nginxRoot 'geod-telemetry-admin-token.txt'
+$wechatTokenFile = Join-Path $nginxRoot 'wechat-callback-token.txt'
 $databasePath = Join-Path $nginxRoot 'data\geod-telemetry.sqlite'
 $nginxConf = Join-Path $nginxRoot 'conf\nginx.conf'
 $nginxExe = Join-Path $nginxRoot 'nginx.exe'
@@ -31,7 +32,13 @@ if (-not [string]::IsNullOrWhiteSpace($WechatCallbackTokenBase64)) {
   if ([string]::IsNullOrWhiteSpace($wechatCallbackToken)) {
     throw 'WeChat callback token is empty'
   }
-  $env:WECHAT_CALLBACK_TOKEN = $wechatCallbackToken
+  Set-Content `
+    -LiteralPath $wechatTokenFile `
+    -Value $wechatCallbackToken `
+    -NoNewline `
+    -Encoding UTF8
+} elseif (-not (Test-Path -LiteralPath $wechatTokenFile -PathType Leaf)) {
+  throw 'WeChat callback token is not configured'
 }
 
 New-Item -ItemType Directory -Force -Path $serviceRoot | Out-Null
