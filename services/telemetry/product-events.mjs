@@ -3,7 +3,13 @@ const UUID_PATTERN =
 
 const PRODUCT_DEFINITIONS = {
   'wechat-dialog-generator': {
-    events: new Set(['page_view', 'dialog_created', 'image_exported']),
+    events: new Set([
+      'page_view',
+      'dialog_created',
+      'image_exported',
+      'official_account_prompt_viewed',
+      'official_account_id_copied',
+    ]),
     funnel: ['page_view', 'dialog_created', 'image_exported'],
   },
   'geod-web': {
@@ -32,6 +38,8 @@ const EVENT_PROPERTIES = {
   page_view: new Set(),
   dialog_created: new Set(['message_count_bucket', 'participant_count_bucket']),
   image_exported: new Set(['capture_mode', 'message_count_bucket']),
+  official_account_prompt_viewed: new Set(['placement']),
+  official_account_id_copied: new Set(['placement']),
   download_clicked: new Set(['platform', 'version', 'channel']),
   wallpaper_viewed: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
   wallpaper_downloaded: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
@@ -135,6 +143,13 @@ function validateProperties(eventName, properties) {
     }
     normalized.wallpaper_kind = properties.wallpaper_kind
     normalized.media_type = properties.media_type
+  }
+
+  if (eventName === 'official_account_prompt_viewed' || eventName === 'official_account_id_copied') {
+    if (!['header', 'export'].includes(properties.placement)) {
+      throw invalid('placement is invalid')
+    }
+    normalized.placement = properties.placement
   }
 
   if (eventName === 'product_clicked') {

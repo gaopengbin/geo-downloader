@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +8,10 @@ import { createTelemetryServer, validateEnvelope } from '../server.mjs'
 import { validateProductEnvelope } from '../product-events.mjs'
 
 const cleanup = []
+
+function wechatSignature(token, timestamp, nonce) {
+  return createHash('sha1').update([token, timestamp, nonce].sort().join('')).digest('hex')
+}
 
 afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((item) => item()))
@@ -130,6 +135,38 @@ test('validates wallpaper events without collecting search text', () => {
     }),
     /properties are invalid/,
   )
+})
+
+test('validates official account growth events with bounded placement', () => {
+  const visitorId = crypto.randomUUID()
+  const sessionId = crypto.randomUUID()
+  const [normalized] = validateProductEnvelope({
+    schema_version: 1,
+    product: 'wechat-dialog-generator',
+    events: [{
+      event_id: crypto.randomUUID(),
+      event: 'official_account_prompt_viewed',
+      occurred_at: new Date().toISOString(),
+      visitor_id: visitorId,
+      session_id: sessionId,
+      properties: { placement: 'export' },
+    }],
+  })
+  assert.equal(normalized.eventName, 'official_account_prompt_viewed')
+  assert.equal(normalized.properties.placement, 'export')
+
+  assert.throws(() => validateProductEnvelope({
+    schema_version: 1,
+    product: 'wechat-dialog-generator',
+    events: [{
+      event_id: crypto.randomUUID(),
+      event: 'official_account_id_copied',
+      occurred_at: new Date().toISOString(),
+      visitor_id: visitorId,
+      session_id: sessionId,
+      properties: { placement: 'popup-ad' },
+    }],
+  }), /placement is invalid/)
 })
 
 test('validates product hub clicks without accepting destination URLs', () => {
@@ -509,4 +546,109 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
   assert.equal(publicStatsResponse.headers.get('access-control-allow-origin'), '*')
   const publicStats = await publicStatsResponse.json()
   assert.equal(publicStats.products[0].visitors, 1)
+})
+
+test('supports account sessions, daily export quota, and one-time follow rewards', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'wechat-account-'))
+  const server = await createTelemetryServer({
+    config: {
+      host: '127.0.0.1',
+      port: 0,
+      databasePath: path.join(directory, 'accounts.sqlite'),
+      adminTokenFile: path.join(directory, 'admin-token.txt'),
+      maxBodyBytes: 131072,
+      rateLimitPerMinute: 120,
+      wechatCallbackToken: 'callback-test-token',
+    },
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  cleanup.push(
+    () => new Promise((resolve) => server.close(resolve)),
+    () => rm(directory, { recursive: true, force: true }),
+  )
+
+  const address = server.address()
+  const origin = `http://127.0.0.1:${address.port}`
+  const baseUrl = `http://127.0.0.1:${address.port}/geod-telemetry/v1`
+  const headers = { 'content-type': 'application/json', origin: 'https://chat.laogao.xyz' }
+  const registration = await fetch(`${baseUrl}/auth/register`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      email: 'hello@example.com',
+      password: 'correct horse battery staple',
+      display_name: '测试用户',
+    }),
+  })
+  assert.equal(registration.status, 201)
+  const account = await registration.json()
+  assert.equal(account.user.email, 'hello@example.com')
+  assert.equal(account.quota.daily_remaining, 10)
+  assert.equal(account.quota.bonus_remaining, 0)
+  const authorized = { ...headers, authorization: `Bearer ${account.token}` }
+
+  const timestamp = String(Math.floor(Date.now() / 1000))
+  const nonce = 'quota-test'
+  const signature = wechatSignature('callback-test-token', timestamp, nonce)
+  const callbackUrl = `${origin}/geod-telemetry/wechat/callback?timestamp=${timestamp}&nonce=${nonce}&signature=${signature}`
+  const verification = await fetch(`${callbackUrl}&echostr=verified`)
+  assert.equal(verification.status, 200)
+  assert.equal(await verification.text(), 'verified')
+
+  const wechatReply = await fetch(callbackUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/xml' },
+    body: '<xml><ToUserName><![CDATA[gh_test]]></ToUserName><FromUserName><![CDATA[o-test-openid]]></FromUserName><CreateTime>1786752000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[额度]]></Content></xml>',
+  })
+  assert.equal(wechatReply.status, 200)
+  const replyXml = await wechatReply.text()
+  const code = replyXml.match(/LG-[A-Z2-9]{4}-[A-Z2-9]{4}/)?.[0]
+  assert.ok(code)
+
+  for (let index = 0; index < 10; index += 1) {
+    const response = await fetch(`${baseUrl}/quota/consume`, {
+      method: 'POST',
+      headers: authorized,
+      body: JSON.stringify({ action_id: crypto.randomUUID() }),
+    })
+    assert.equal(response.status, 200)
+  }
+  const exhausted = await fetch(`${baseUrl}/quota/consume`, {
+    method: 'POST',
+    headers: authorized,
+    body: JSON.stringify({ action_id: crypto.randomUUID() }),
+  })
+  assert.equal(exhausted.status, 402)
+
+  const redemption = await fetch(`${baseUrl}/quota/redeem`, {
+    method: 'POST',
+    headers: authorized,
+    body: JSON.stringify({ code }),
+  })
+  assert.equal(redemption.status, 200)
+  assert.equal((await redemption.json()).quota.bonus_remaining, 20)
+
+  const duplicate = await fetch(`${baseUrl}/quota/redeem`, {
+    method: 'POST',
+    headers: authorized,
+    body: JSON.stringify({ code }),
+  })
+  assert.equal(duplicate.status, 409)
+
+  const bonusExport = await fetch(`${baseUrl}/quota/consume`, {
+    method: 'POST',
+    headers: authorized,
+    body: JSON.stringify({ action_id: crypto.randomUUID() }),
+  })
+  assert.equal(bonusExport.status, 200)
+  assert.equal((await bonusExport.json()).quota.bonus_remaining, 19)
+
+  const profile = await fetch(`${baseUrl}/auth/me`, { headers: authorized })
+  assert.equal(profile.status, 200)
+  assert.equal((await profile.json()).quota.total_remaining, 19)
+
+  const logout = await fetch(`${baseUrl}/auth/logout`, { method: 'POST', headers: authorized })
+  assert.equal(logout.status, 200)
+  const signedOut = await fetch(`${baseUrl}/auth/me`, { headers: authorized })
+  assert.equal(signedOut.status, 401)
 })
