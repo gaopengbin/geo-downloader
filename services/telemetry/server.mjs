@@ -78,6 +78,9 @@ export function loadConfig(env = process.env) {
     adminTokenFile:
       env.TELEMETRY_ADMIN_TOKEN_FILE ||
       'C:/nginx-1.30.2/geod-telemetry-admin-token.txt',
+    wechatCallbackTokenFile:
+      env.WECHAT_CALLBACK_TOKEN_FILE ||
+      'C:/nginx-1.30.2/wechat-callback-token.txt',
     maxBodyBytes: envInteger(env.MAX_BODY_BYTES, 131072, 1024, 1024 * 1024),
     rateLimitPerMinute: envInteger(env.RATE_LIMIT_PER_MINUTE, 120, 10, 5000),
     wechatCallbackToken: env.WECHAT_CALLBACK_TOKEN || '',
@@ -830,6 +833,8 @@ if(tokenInput.value)load()
 
 export async function createTelemetryServer(options = {}) {
   const config = options.config || loadConfig()
+  const wechatCallbackToken = config.wechatCallbackToken ||
+    await readAdminToken(config.wechatCallbackTokenFile)
   const database = await createDatabase(config.databasePath)
   const checkRateLimit = createRateLimiter(config.rateLimitPerMinute)
 
@@ -842,11 +847,11 @@ export async function createTelemetryServer(options = {}) {
       const timestamp = url.searchParams.get('timestamp') || ''
       const nonce = url.searchParams.get('nonce') || ''
       const signature = url.searchParams.get('signature') || ''
-      if (!config.wechatCallbackToken) {
+      if (!wechatCallbackToken) {
         sendError(response, 503, 'wechat callback is not configured', 'wechat_callback_unavailable')
         return
       }
-      if (!validWechatSignature(config.wechatCallbackToken, timestamp, nonce, signature)) {
+      if (!validWechatSignature(wechatCallbackToken, timestamp, nonce, signature)) {
         sendError(response, 403, 'invalid wechat signature', 'invalid_wechat_signature')
         return
       }
@@ -973,7 +978,7 @@ export async function createTelemetryServer(options = {}) {
         schema_version: 1,
         product_schema_version: 1,
         account_schema_version: 1,
-        wechat_callback_configured: Boolean(config.wechatCallbackToken),
+        wechat_callback_configured: Boolean(wechatCallbackToken),
       })
       return
     }
