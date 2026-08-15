@@ -1,9 +1,11 @@
 import { createServer } from 'node:http'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import initSqlJs from 'sql.js'
+import { createAccountService, initializeAccounts } from './account-service.mjs'
 import {
   initializeProductEvents,
   insertProductEvents,
@@ -38,6 +40,7 @@ const PRODUCT_EVENT_ORIGINS = new Set([
   'https://geodownloader.pages.dev',
   'https://wallpaper.gpb.cc',
   'https://laogao.xyz',
+  'http://127.0.0.1:4178',
 ])
 const COUNT_BUCKETS = new Set(['0', '1', '2-10', '11-100', '100+'])
 const SELECTION_METHODS = new Set([
@@ -77,6 +80,7 @@ export function loadConfig(env = process.env) {
       'C:/nginx-1.30.2/geod-telemetry-admin-token.txt',
     maxBodyBytes: envInteger(env.MAX_BODY_BYTES, 131072, 1024, 1024 * 1024),
     rateLimitPerMinute: envInteger(env.RATE_LIMIT_PER_MINUTE, 120, 10, 5000),
+    wechatCallbackToken: env.WECHAT_CALLBACK_TOKEN || '',
   }
 }
 
@@ -293,9 +297,55 @@ function sendError(response, status, message, code) {
 
 function setCors(response, origin = '*') {
   response.setHeader('access-control-allow-origin', origin)
-  response.setHeader('access-control-allow-headers', 'content-type')
-  response.setHeader('access-control-allow-methods', 'POST, OPTIONS')
+  response.setHeader('access-control-allow-headers', 'authorization, content-type')
+  response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
   response.setHeader('access-control-max-age', '86400')
+}
+
+async function readTextBody(request, maxBytes) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > maxBytes) {
+      const error = new Error('request body is too large')
+      error.status = 413
+      error.code = 'body_too_large'
+      throw error
+    }
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+function bearerToken(request) {
+  const value = typeof request.headers.authorization === 'string'
+    ? request.headers.authorization
+    : ''
+  return value.startsWith('Bearer ') ? value.slice(7).trim() : ''
+}
+
+function validWechatSignature(token, timestamp, nonce, signature) {
+  if (!token || !timestamp || !nonce || !signature) return false
+  const timestampSeconds = Number(timestamp)
+  if (!Number.isFinite(timestampSeconds) || Math.abs(Date.now() / 1000 - timestampSeconds) > 300) return false
+  const expected = createHash('sha1').update([token, timestamp, nonce].sort().join('')).digest('hex')
+  const left = Buffer.from(expected)
+  const right = Buffer.from(signature)
+  return left.length === right.length && timingSafeEqual(left, right)
+}
+
+function xmlValue(xml, tag) {
+  const match = xml.match(new RegExp(`<${tag}>(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([^<]*))<\\/${tag}>`, 'i'))
+  return (match?.[1] ?? match?.[2] ?? '').trim()
+}
+
+function cdata(value) {
+  return String(value).replaceAll(']]>', ']]&gt;')
+}
+
+function wechatTextReply(toUser, fromUser, content) {
+  return `<xml><ToUserName><![CDATA[${cdata(toUser)}]]></ToUserName><FromUserName><![CDATA[${cdata(fromUser)}]]></FromUserName><CreateTime>${Math.floor(Date.now() / 1000)}</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[${cdata(content)}]]></Content></xml>`
 }
 
 function requestAddress(request) {
@@ -371,6 +421,7 @@ async function createDatabase(databasePath) {
     CREATE INDEX IF NOT EXISTS events_name_idx ON events(event_name);
   `)
   initializeProductEvents(database)
+  initializeAccounts(database)
 
   await mkdir(path.dirname(databasePath), { recursive: true })
   let writeChain = Promise.resolve()
@@ -420,7 +471,20 @@ async function createDatabase(databasePath) {
     return inserted
   }
 
+  function serializedWrite(operation) {
+    const queued = writeChain.then(async () => {
+      const result = await operation()
+      await persist()
+      return result
+    })
+    writeChain = queued.catch(() => {})
+    return queued
+  }
+
+  const accounts = createAccountService(database, serializedWrite)
+
   return {
+    accounts,
     insert(events) {
       const operation = writeChain.then(() => insert(events))
       writeChain = operation.catch(() => {})
@@ -773,6 +837,132 @@ export async function createTelemetryServer(options = {}) {
     response.setHeader('x-content-type-options', 'nosniff')
     response.setHeader('referrer-policy', 'no-referrer')
     const url = new URL(request.url || '/', 'http://telemetry.local')
+    const apiPath = url.pathname.replace(/^\/geod-telemetry/, '')
+    if (apiPath === '/wechat/callback') {
+      const timestamp = url.searchParams.get('timestamp') || ''
+      const nonce = url.searchParams.get('nonce') || ''
+      const signature = url.searchParams.get('signature') || ''
+      if (!config.wechatCallbackToken) {
+        sendError(response, 503, 'wechat callback is not configured', 'wechat_callback_unavailable')
+        return
+      }
+      if (!validWechatSignature(config.wechatCallbackToken, timestamp, nonce, signature)) {
+        sendError(response, 403, 'invalid wechat signature', 'invalid_wechat_signature')
+        return
+      }
+      if (request.method === 'GET') {
+        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+        response.end(url.searchParams.get('echostr') || '')
+        return
+      }
+      if (request.method !== 'POST') {
+        sendError(response, 405, 'method not allowed', 'method_not_allowed')
+        return
+      }
+      try {
+        const xml = await readTextBody(request, config.maxBodyBytes)
+        const fromUser = xmlValue(xml, 'FromUserName')
+        const toUser = xmlValue(xml, 'ToUserName')
+        const messageType = xmlValue(xml, 'MsgType').toLowerCase()
+        const event = xmlValue(xml, 'Event').toLowerCase()
+        let reply = ''
+        if (messageType === 'event' && event === 'subscribe') {
+          await database.accounts.recordWechatFollow(fromUser, true)
+          reply = '欢迎关注老高 Vibe Coding！回复【额度】可领取微信创作工具箱 20 次额外导出额度。'
+        } else if (messageType === 'event' && event === 'unsubscribe') {
+          await database.accounts.recordWechatFollow(fromUser, false)
+        } else if (messageType === 'text' && xmlValue(xml, 'Content').replaceAll('【', '').replaceAll('】', '').trim() === '额度') {
+          const issued = await database.accounts.issueFollowCode(fromUser)
+          reply = `你的导出额度兑换码：${issued.code}\n15 分钟内有效，每个账户限领一次。`
+        } else if (messageType === 'text') {
+          reply = '回复【额度】领取微信创作工具箱 20 次额外导出额度。'
+        }
+        if (!reply) {
+          response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+          response.end('success')
+          return
+        }
+        response.writeHead(200, { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'no-store' })
+        response.end(wechatTextReply(fromUser, toUser, reply))
+      } catch (error) {
+        sendError(
+          response,
+          error.status || 500,
+          error.status ? error.message : 'internal server error',
+          error.code || 'internal_error',
+        )
+      }
+      return
+    }
+    const accountPaths = new Set([
+      '/v1/auth/register',
+      '/v1/auth/login',
+      '/v1/auth/me',
+      '/v1/auth/logout',
+      '/v1/quota',
+      '/v1/quota/consume',
+      '/v1/quota/redeem',
+    ])
+    const isAccountPath = accountPaths.has(apiPath)
+    const accountOrigin = typeof request.headers.origin === 'string' ? request.headers.origin : ''
+
+    if (isAccountPath && PRODUCT_EVENT_ORIGINS.has(accountOrigin)) {
+      setCors(response, accountOrigin)
+    }
+    if (request.method === 'OPTIONS' && isAccountPath) {
+      if (!PRODUCT_EVENT_ORIGINS.has(accountOrigin)) {
+        sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
+        return
+      }
+      response.writeHead(204)
+      response.end()
+      return
+    }
+    if (isAccountPath) {
+      if (!PRODUCT_EVENT_ORIGINS.has(accountOrigin)) {
+        sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
+        return
+      }
+      if (!checkRateLimit(requestAddress(request))) {
+        sendError(response, 429, 'too many requests', 'rate_limit_exceeded')
+        return
+      }
+      try {
+        const token = bearerToken(request)
+        let result
+        let status = 200
+        if (request.method === 'POST' && apiPath === '/v1/auth/register') {
+          result = await database.accounts.register(await readJsonBody(request, config.maxBodyBytes))
+          status = 201
+        } else if (request.method === 'POST' && apiPath === '/v1/auth/login') {
+          result = await database.accounts.login(await readJsonBody(request, config.maxBodyBytes))
+        } else if (request.method === 'GET' && apiPath === '/v1/auth/me') {
+          result = database.accounts.profile(token)
+        } else if (request.method === 'POST' && apiPath === '/v1/auth/logout') {
+          result = await database.accounts.logout(token)
+        } else if (request.method === 'GET' && apiPath === '/v1/quota') {
+          result = database.accounts.profile(token).quota
+        } else if (request.method === 'POST' && apiPath === '/v1/quota/consume') {
+          const body = await readJsonBody(request, config.maxBodyBytes)
+          result = await database.accounts.consume(token, body.action_id)
+        } else if (request.method === 'POST' && apiPath === '/v1/quota/redeem') {
+          const body = await readJsonBody(request, config.maxBodyBytes)
+          result = await database.accounts.redeem(token, body.code)
+        } else {
+          sendError(response, 405, 'method not allowed', 'method_not_allowed')
+          return
+        }
+        sendJson(response, status, result)
+      } catch (error) {
+        sendError(
+          response,
+          error.status || 500,
+          error.status ? error.message : 'internal server error',
+          error.code || 'internal_error',
+        )
+      }
+      return
+    }
 
     if (
       request.method === 'GET' &&
@@ -782,6 +972,8 @@ export async function createTelemetryServer(options = {}) {
         status: 'ok',
         schema_version: 1,
         product_schema_version: 1,
+        account_schema_version: 1,
+        wechat_callback_configured: Boolean(config.wechatCallbackToken),
       })
       return
     }
