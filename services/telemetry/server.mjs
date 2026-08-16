@@ -398,7 +398,7 @@ function propertyDistribution(database, eventName, propertyName) {
 export async function replaceDatabaseFile(
   temporaryPath,
   databasePath,
-  operations = { copyFile, rename, rm },
+  operations = { copyFile, readFile, rename, rm, writeFile },
 ) {
   try {
     await operations.rename(temporaryPath, databasePath)
@@ -417,12 +417,12 @@ export async function replaceDatabaseFile(
   }
 
   try {
-    await operations.rm(databasePath, { force: true })
-    await operations.rename(temporaryPath, databasePath)
+    const contents = await operations.readFile(temporaryPath)
+    await operations.writeFile(databasePath, contents)
   } catch (error) {
     if (backupCreated) {
-      await operations.rm(databasePath, { force: true }).catch(() => {})
-      await operations.copyFile(backupPath, databasePath).catch(() => {})
+      const backup = await operations.readFile(backupPath).catch(() => null)
+      if (backup) await operations.writeFile(databasePath, backup).catch(() => {})
     }
     throw error
   } finally {
