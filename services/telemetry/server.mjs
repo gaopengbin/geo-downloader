@@ -837,6 +837,9 @@ export async function createTelemetryServer(options = {}) {
     await readAdminToken(config.wechatCallbackTokenFile)
   const database = await createDatabase(config.databasePath)
   const checkRateLimit = createRateLimiter(config.rateLimitPerMinute)
+  const writeWechatAudit = typeof options.wechatAudit === 'function'
+    ? options.wechatAudit
+    : (entry) => console.log(JSON.stringify({ type: 'wechat_callback', ...entry }))
 
   const server = createServer(async (request, response) => {
     response.setHeader('x-content-type-options', 'nosniff')
@@ -844,23 +847,40 @@ export async function createTelemetryServer(options = {}) {
     const url = new URL(request.url || '/', 'http://telemetry.local')
     const apiPath = url.pathname.replace(/^\/geod-telemetry/, '')
     if (apiPath === '/wechat/callback') {
+      const auditStartedAt = Date.now()
+      const audit = (entry) => {
+        try {
+          writeWechatAudit({
+            at: new Date().toISOString(),
+            method: ['GET', 'POST'].includes(request.method) ? request.method : 'OTHER',
+            duration_ms: Date.now() - auditStartedAt,
+            ...entry,
+          })
+        } catch {
+          // Diagnostics must never interrupt the callback response.
+        }
+      }
       const timestamp = url.searchParams.get('timestamp') || ''
       const nonce = url.searchParams.get('nonce') || ''
       const signature = url.searchParams.get('signature') || ''
       if (!wechatCallbackToken) {
+        audit({ stage: 'configuration', signature_valid: false, status: 503 })
         sendError(response, 503, 'wechat callback is not configured', 'wechat_callback_unavailable')
         return
       }
       if (!validWechatSignature(wechatCallbackToken, timestamp, nonce, signature)) {
+        audit({ stage: 'signature', signature_valid: false, status: 403 })
         sendError(response, 403, 'invalid wechat signature', 'invalid_wechat_signature')
         return
       }
       if (request.method === 'GET') {
+        audit({ stage: 'verification', signature_valid: true, status: 200 })
         response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
         response.end(url.searchParams.get('echostr') || '')
         return
       }
       if (request.method !== 'POST') {
+        audit({ stage: 'method', signature_valid: true, status: 405 })
         sendError(response, 405, 'method not allowed', 'method_not_allowed')
         return
       }
@@ -870,26 +890,58 @@ export async function createTelemetryServer(options = {}) {
         const toUser = xmlValue(xml, 'ToUserName')
         const messageType = xmlValue(xml, 'MsgType').toLowerCase()
         const event = xmlValue(xml, 'Event').toLowerCase()
+        const normalizedContent = xmlValue(xml, 'Content').replaceAll('【', '').replaceAll('】', '').trim()
+        const keywordMatched = messageType === 'text' && normalizedContent === '额度'
+        let action = 'ignored'
         let reply = ''
         if (messageType === 'event' && event === 'subscribe') {
           await database.accounts.recordWechatFollow(fromUser, true)
+          action = 'subscribe'
           reply = '欢迎关注老高 Vibe Coding！回复【额度】可领取微信创作工具箱 20 次额外导出额度。'
         } else if (messageType === 'event' && event === 'unsubscribe') {
           await database.accounts.recordWechatFollow(fromUser, false)
-        } else if (messageType === 'text' && xmlValue(xml, 'Content').replaceAll('【', '').replaceAll('】', '').trim() === '额度') {
+          action = 'unsubscribe'
+        } else if (keywordMatched) {
           const issued = await database.accounts.issueFollowCode(fromUser)
+          action = 'issue_follow_code'
           reply = `你的导出额度兑换码：${issued.code}\n15 分钟内有效，每个账户限领一次。`
         } else if (messageType === 'text') {
+          action = 'fallback_reply'
           reply = '回复【额度】领取微信创作工具箱 20 次额外导出额度。'
         }
+        const auditMessageType = ['text', 'event'].includes(messageType) ? messageType : 'other'
+        const auditEvent = ['subscribe', 'unsubscribe'].includes(event) ? event : 'other'
         if (!reply) {
+          audit({
+            stage: 'processed',
+            signature_valid: true,
+            message_type: auditMessageType,
+            event: auditEvent,
+            keyword_match: keywordMatched,
+            action,
+            status: 200,
+          })
           response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
           response.end('success')
           return
         }
+        audit({
+          stage: 'processed',
+          signature_valid: true,
+          message_type: auditMessageType,
+          event: auditEvent,
+          keyword_match: keywordMatched,
+          action,
+          status: 200,
+        })
         response.writeHead(200, { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'no-store' })
         response.end(wechatTextReply(fromUser, toUser, reply))
       } catch (error) {
+        audit({
+          stage: 'processing_error',
+          signature_valid: true,
+          status: error.status || 500,
+        })
         sendError(
           response,
           error.status || 500,

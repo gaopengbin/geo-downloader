@@ -550,7 +550,9 @@ test('ingests, deduplicates, and reports aggregate statistics', async () => {
 
 test('supports account sessions, daily export quota, and one-time follow rewards', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'wechat-account-'))
+  const wechatAudit = []
   const server = await createTelemetryServer({
+    wechatAudit: (entry) => wechatAudit.push(entry),
     config: {
       host: '127.0.0.1',
       port: 0,
@@ -594,6 +596,15 @@ test('supports account sessions, daily export quota, and one-time follow rewards
   const verification = await fetch(`${callbackUrl}&echostr=verified`)
   assert.equal(verification.status, 200)
   assert.equal(await verification.text(), 'verified')
+  assert.deepEqual(
+    {
+      method: wechatAudit[0].method,
+      stage: wechatAudit[0].stage,
+      signature_valid: wechatAudit[0].signature_valid,
+      status: wechatAudit[0].status,
+    },
+    { method: 'GET', stage: 'verification', signature_valid: true, status: 200 },
+  )
 
   const wechatReply = await fetch(callbackUrl, {
     method: 'POST',
@@ -604,6 +615,32 @@ test('supports account sessions, daily export quota, and one-time follow rewards
   const replyXml = await wechatReply.text()
   const code = replyXml.match(/LG-[A-Z2-9]{4}-[A-Z2-9]{4}/)?.[0]
   assert.ok(code)
+  const messageAudit = wechatAudit.at(-1)
+  assert.deepEqual(
+    {
+      method: messageAudit.method,
+      stage: messageAudit.stage,
+      signature_valid: messageAudit.signature_valid,
+      message_type: messageAudit.message_type,
+      keyword_match: messageAudit.keyword_match,
+      action: messageAudit.action,
+      status: messageAudit.status,
+    },
+    {
+      method: 'POST',
+      stage: 'processed',
+      signature_valid: true,
+      message_type: 'text',
+      keyword_match: true,
+      action: 'issue_follow_code',
+      status: 200,
+    },
+  )
+  const forbiddenAuditFields = new Set(['openid', 'content', 'code', 'token', 'ip'])
+  assert.equal(
+    Object.keys(messageAudit).some((key) => forbiddenAuditFields.has(key.toLowerCase())),
+    false,
+  )
 
   for (let index = 0; index < 10; index += 1) {
     const response = await fetch(`${baseUrl}/quota/consume`, {
