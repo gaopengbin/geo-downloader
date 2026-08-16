@@ -937,10 +937,18 @@ export async function createTelemetryServer(options = {}) {
         response.writeHead(200, { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'no-store' })
         response.end(wechatTextReply(fromUser, toUser, reply))
       } catch (error) {
+        const errorName = /^[a-z0-9_.-]{1,64}$/i.test(String(error.name || ''))
+          ? String(error.name)
+          : 'Error'
+        const errorCode = /^[a-z0-9_.-]{1,64}$/i.test(String(error.code || ''))
+          ? String(error.code)
+          : 'unknown'
         audit({
           stage: 'processing_error',
           signature_valid: true,
           status: error.status || 500,
+          error_name: errorName,
+          error_code: errorCode,
         })
         sendError(
           response,

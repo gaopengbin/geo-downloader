@@ -642,6 +642,27 @@ test('supports account sessions, daily export quota, and one-time follow rewards
     false,
   )
 
+  const invalidOpenIdReply = await fetch(callbackUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/xml' },
+    body: '<xml><ToUserName><![CDATA[gh_test]]></ToUserName><FromUserName><![CDATA[]]></FromUserName><CreateTime>1786752000</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[额度]]></Content></xml>',
+  })
+  assert.equal(invalidOpenIdReply.status, 400)
+  assert.deepEqual(
+    {
+      stage: wechatAudit.at(-1).stage,
+      status: wechatAudit.at(-1).status,
+      error_name: wechatAudit.at(-1).error_name,
+      error_code: wechatAudit.at(-1).error_code,
+    },
+    {
+      stage: 'processing_error',
+      status: 400,
+      error_name: 'Error',
+      error_code: 'invalid_openid',
+    },
+  )
+
   for (let index = 0; index < 10; index += 1) {
     const response = await fetch(`${baseUrl}/quota/consume`, {
       method: 'POST',
