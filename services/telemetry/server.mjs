@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -395,6 +395,43 @@ function propertyDistribution(database, eventName, propertyName) {
   )
 }
 
+export async function replaceDatabaseFile(
+  temporaryPath,
+  databasePath,
+  operations = { copyFile, rename, rm },
+) {
+  try {
+    await operations.rename(temporaryPath, databasePath)
+    return
+  } catch (error) {
+    if (!['EPERM', 'EEXIST'].includes(error?.code)) throw error
+  }
+
+  const backupPath = `${databasePath}.bak`
+  let backupCreated = false
+  try {
+    await operations.copyFile(databasePath, backupPath)
+    backupCreated = true
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+
+  try {
+    await operations.copyFile(temporaryPath, databasePath)
+  } catch (error) {
+    if (backupCreated) {
+      await operations.copyFile(backupPath, databasePath).catch(() => {})
+    }
+    throw error
+  } finally {
+    await operations.rm(temporaryPath, { force: true }).catch(() => {})
+  }
+
+  if (backupCreated) {
+    await operations.rm(backupPath, { force: true }).catch(() => {})
+  }
+}
+
 async function createDatabase(databasePath) {
   const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm')
   const SQL = await initSqlJs({ locateFile: () => wasmPath })
@@ -432,8 +469,10 @@ async function createDatabase(databasePath) {
   async function persist() {
     const temporaryPath = `${databasePath}.tmp`
     await writeFile(temporaryPath, Buffer.from(database.export()))
-    await rename(temporaryPath, databasePath)
+    await replaceDatabaseFile(temporaryPath, databasePath)
   }
+
+  await persist()
 
   async function insert(events) {
     let inserted = 0

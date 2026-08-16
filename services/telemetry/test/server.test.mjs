@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, test } from 'node:test'
-import { createTelemetryServer, validateEnvelope } from '../server.mjs'
+import { createTelemetryServer, replaceDatabaseFile, validateEnvelope } from '../server.mjs'
 import { validateProductEnvelope } from '../product-events.mjs'
 
 const cleanup = []
@@ -30,6 +30,34 @@ function event(overrides = {}) {
     ...overrides,
   }
 }
+
+test('falls back to a recoverable copy when Windows rejects database replacement', async () => {
+  const calls = []
+  const windowsError = new Error('replacement denied')
+  windowsError.code = 'EPERM'
+  const operations = {
+    rename: async (source, destination) => {
+      calls.push(['rename', source, destination])
+      throw windowsError
+    },
+    copyFile: async (source, destination) => {
+      calls.push(['copyFile', source, destination])
+    },
+    rm: async (target, options) => {
+      calls.push(['rm', target, options])
+    },
+  }
+
+  await replaceDatabaseFile('events.sqlite.tmp', 'events.sqlite', operations)
+
+  assert.deepEqual(calls, [
+    ['rename', 'events.sqlite.tmp', 'events.sqlite'],
+    ['copyFile', 'events.sqlite', 'events.sqlite.bak'],
+    ['copyFile', 'events.sqlite.tmp', 'events.sqlite'],
+    ['rm', 'events.sqlite.tmp', { force: true }],
+    ['rm', 'events.sqlite.bak', { force: true }],
+  ])
+})
 
 test('accepts the documented event envelope', () => {
   const [normalized] = validateEnvelope({ schema_version: 1, events: [event()] })
