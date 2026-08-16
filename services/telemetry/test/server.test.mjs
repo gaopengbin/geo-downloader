@@ -35,10 +35,12 @@ test('falls back to a recoverable copy when Windows rejects database replacement
   const calls = []
   const windowsError = new Error('replacement denied')
   windowsError.code = 'EPERM'
+  let renameAttempts = 0
   const operations = {
     rename: async (source, destination) => {
       calls.push(['rename', source, destination])
-      throw windowsError
+      renameAttempts += 1
+      if (renameAttempts === 1) throw windowsError
     },
     copyFile: async (source, destination) => {
       calls.push(['copyFile', source, destination])
@@ -53,7 +55,8 @@ test('falls back to a recoverable copy when Windows rejects database replacement
   assert.deepEqual(calls, [
     ['rename', 'events.sqlite.tmp', 'events.sqlite'],
     ['copyFile', 'events.sqlite', 'events.sqlite.bak'],
-    ['copyFile', 'events.sqlite.tmp', 'events.sqlite'],
+    ['rm', 'events.sqlite', { force: true }],
+    ['rename', 'events.sqlite.tmp', 'events.sqlite'],
     ['rm', 'events.sqlite.tmp', { force: true }],
     ['rm', 'events.sqlite.bak', { force: true }],
   ])

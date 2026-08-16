@@ -417,9 +417,11 @@ export async function replaceDatabaseFile(
   }
 
   try {
-    await operations.copyFile(temporaryPath, databasePath)
+    await operations.rm(databasePath, { force: true })
+    await operations.rename(temporaryPath, databasePath)
   } catch (error) {
     if (backupCreated) {
+      await operations.rm(databasePath, { force: true }).catch(() => {})
       await operations.copyFile(backupPath, databasePath).catch(() => {})
     }
     throw error
