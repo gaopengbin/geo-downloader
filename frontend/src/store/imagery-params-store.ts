@@ -15,6 +15,7 @@ export interface ImageryParamsSnapshot {
   format: OutputFormat
   compression: 'none' | 'lzw' | 'deflate'
   buildPyramid: boolean
+  generateSidecars: boolean
   cropToShape: boolean
   concurrency: number
   ready: boolean
@@ -44,6 +45,7 @@ export const useImageryParamsStore = create<ImageryParamsState>()(
       format: 'geotiff' as OutputFormat,
       compression: 'lzw',
       buildPyramid: false,
+      generateSidecars: false,
       cropToShape: true,
       concurrency: 30,
       ready: false,
@@ -72,6 +74,7 @@ export const useImageryParamsStore = create<ImageryParamsState>()(
         format: state.format,
         compression: state.compression,
         buildPyramid: state.buildPyramid,
+        generateSidecars: state.generateSidecars,
         cropToShape: state.cropToShape,
         concurrency: state.concurrency,
         zoomLevelsByMode: state.zoomLevelsByMode,

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test src/features/sources/osm-download-policy.test.ts src/features/region/range-selection.test.ts src/lib/geo-area.test.ts src/lib/kml-region-normalizer.test.ts",
+    "test": "node --experimental-strip-types --test src/features/sources/osm-download-policy.test.ts src/features/map/tile-url.test.ts src/features/region/range-selection.test.ts src/features/tasks/task-copy.test.ts src/i18n/language.test.ts src/lib/geo-area.test.ts src/lib/kml-region-normalizer.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -36,6 +36,7 @@
     "date-fns": "^4.1.0",
     "driver.js": "^1.4.0",
     "geist": "^1.7.0",
+    "i18next": "^26.3.6",
     "jszip": "^3.10.1",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
@@ -46,6 +47,7 @@
     "react-day-picker": "^10.0.1",
     "react-dom": "^19.2.5",
     "react-hook-form": "^7.74.0",
+    "react-i18next": "^17.0.11",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "shpjs": "^6.2.0",

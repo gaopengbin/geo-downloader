@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Boxes, ChevronDown, ChevronUp, Pencil, RotateCcw, Settings2, Square as SquareIcon, FolderOpen } from 'lucide-react'
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,6 +38,7 @@ function lngLatBounds(points: { lng: number; lat: number }[]): MapBounds {
 }
 
 export function CesiumCanvas() {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const viewerRef = useRef<Viewer | null>(null)
   const cesiumRef = useRef<Cesium | null>(null)
@@ -132,14 +134,14 @@ export function CesiumCanvas() {
         setReady(true)
       } catch (e) {
         console.error('CesiumJS 加载失败', e)
-        setError('CesiumJS 加载失败，请检查网络连接')
+        setError(t('cesium.loadFailed'))
       }
     })()
 
     return () => {
       cancelled = true
     }
-  }, [visible])
+  }, [visible, t])
 
   useEffect(() => {
     if (!visible || !ready || !viewerRef.current) return
@@ -256,8 +258,8 @@ export function CesiumCanvas() {
     setDrawMode(mode)
     setHint(
       mode === 'rect'
-        ? '在地球上点击两个角点绘制矩形（右键取消）'
-        : '在地球上点击绘制多边形顶点，双击或右键结束（右键取消）',
+        ? t('cesium.drawRectangleHint')
+        : t('cesium.drawPolygonHint'),
     )
     viewer.canvas.style.cursor = 'crosshair'
 
@@ -319,7 +321,7 @@ export function CesiumCanvas() {
 
     handler.setInputAction(() => {
       cancelDraw()
-      setHint('绘制已取消')
+      setHint(t('cesium.drawCancelled'))
       window.setTimeout(() => setHint(null), 1500)
     }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
   }
@@ -462,8 +464,8 @@ export function CesiumCanvas() {
     const inverseOld = Cesium.Matrix4.inverse(oldT, new Cesium.Matrix4())
     const offsetMatrix = Cesium.Matrix4.multiply(newT, inverseOld, new Cesium.Matrix4())
     tileset.modelMatrix = offsetMatrix
-    toast.success('已应用位置偏移')
-  }, [offsetLng, offsetLat, offsetHeight])
+    toast.success(t('cesium.offsetApplied'))
+  }, [offsetLng, offsetLat, offsetHeight, t])
 
   const resetControls = useCallback(() => {
     setSse(8)
@@ -485,7 +487,7 @@ export function CesiumCanvas() {
   const loadTilesetFromUrl = useCallback(
     async (tilesetUrl: string, opts?: { silent?: boolean }) => {
       if (!cesiumRef.current || !viewerRef.current) {
-        if (!opts?.silent) toast.error('Cesium 尚未就绪')
+        if (!opts?.silent) toast.error(t('cesium.notReady'))
         return
       }
       const Cesium = cesiumRef.current
@@ -506,19 +508,19 @@ export function CesiumCanvas() {
         }
         viewer.zoomTo(tileset)
         setHasTileset(true)
-        if (!opts?.silent) toast.success('3D Tiles 加载成功')
+        if (!opts?.silent) toast.success(t('cesium.tilesetLoaded'))
       } catch (e) {
         console.error('3D Tiles 加载失败', e)
-        if (!opts?.silent) toast.error('加载失败：' + (e instanceof Error ? e.message : String(e)))
+        if (!opts?.silent) toast.error(t('cesium.tilesetLoadFailed', { message: e instanceof Error ? e.message : String(e) }))
       }
     },
-    [sse, opacity, showBV],
+    [sse, opacity, showBV, t],
   )
 
   const loadTilesetFromIon = useCallback(
     async (assetId: number, accessToken: string, opts?: { silent?: boolean }) => {
       if (!cesiumRef.current || !viewerRef.current) {
-        if (!opts?.silent) toast.error('Cesium 尚未就绪')
+        if (!opts?.silent) toast.error(t('cesium.notReady'))
         return
       }
       const Cesium = cesiumRef.current
@@ -540,14 +542,14 @@ export function CesiumCanvas() {
         }
         viewer.zoomTo(tileset)
         setHasTileset(true)
-        if (!opts?.silent) toast.success('Cesium Ion 模型加载成功')
+        if (!opts?.silent) toast.success(t('cesium.ionLoaded'))
       } catch (e) {
         console.error('Cesium Ion 加载失败', e)
         if (!opts?.silent)
-          toast.error('Ion 加载失败：' + (e instanceof Error ? e.message : String(e)))
+          toast.error(t('cesium.ionLoadFailed', { message: e instanceof Error ? e.message : String(e) }))
       }
     },
-    [sse, opacity, showBV],
+    [sse, opacity, showBV, t],
   )
 
   // 监听全局预览请求（来自 tiles3d-page 解析成功后）
@@ -571,11 +573,11 @@ export function CesiumCanvas() {
 
   async function handlePreviewLocal() {
     if (!isTauriRuntime()) {
-      toast.error('本地预览仅在桌面应用中可用')
+      toast.error(t('cesium.desktopOnly'))
       return
     }
     if (!ready || !cesiumRef.current || !viewerRef.current) {
-      toast.error('Cesium 尚未就绪')
+      toast.error(t('cesium.notReady'))
       return
     }
     try {
@@ -583,7 +585,7 @@ export function CesiumCanvas() {
       const filePath = await open({
         filters: [{ name: 'Tileset JSON', extensions: ['json'] }],
         multiple: false,
-        title: '选择 tileset.json',
+        title: t('cesium.selectTileset'),
       })
       if (!filePath || typeof filePath !== 'string') return
 
@@ -596,7 +598,7 @@ export function CesiumCanvas() {
       await loadTilesetFromUrl(tilesetUrl)
     } catch (e) {
       console.error('本地 3D Tiles 加载失败', e)
-      toast.error('加载失败：' + (e instanceof Error ? e.message : String(e)))
+      toast.error(t('cesium.tilesetLoadFailed', { message: e instanceof Error ? e.message : String(e) }))
     } finally {
       setPreviewing(false)
     }
@@ -626,10 +628,10 @@ export function CesiumCanvas() {
           className="h-8 justify-start gap-2 px-2 text-xs"
           onClick={() => startDraw('rect')}
           disabled={!ready}
-          title="矩形选区"
+          title={t('cesium.rectangleTitle')}
         >
           <SquareIcon className="size-3.5" />
-          矩形
+          {t('cesium.rectangle')}
         </Button>
         <Button
           variant={drawMode === 'polygon' ? 'default' : 'ghost'}
@@ -637,10 +639,10 @@ export function CesiumCanvas() {
           className="h-8 justify-start gap-2 px-2 text-xs"
           onClick={() => startDraw('polygon')}
           disabled={!ready}
-          title="多边形选区"
+          title={t('cesium.polygonTitle')}
         >
           <Pencil className="size-3.5" />
-          多边形
+          {t('cesium.polygon')}
         </Button>
         <div className="my-0.5 h-px bg-border" />
         <Button
@@ -649,10 +651,10 @@ export function CesiumCanvas() {
           className="h-8 justify-start gap-2 px-2 text-xs"
           onClick={handlePreviewLocal}
           disabled={!ready || previewing}
-          title="预览本地 3D Tiles 模型"
+          title={t('cesium.previewLocalTitle')}
         >
           <FolderOpen className="size-3.5" />
-          {previewing ? '加载中...' : '预览本地'}
+          {previewing ? t('cesium.loading') : t('cesium.previewLocal')}
         </Button>
       </div>
 
@@ -673,7 +675,7 @@ export function CesiumCanvas() {
           >
             <span className="flex items-center gap-1.5">
               <Settings2 className="size-3.5" />
-              模型调控
+              {t('cesium.controls')}
             </span>
             {ctrlCollapsed ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
           </button>
@@ -681,7 +683,7 @@ export function CesiumCanvas() {
             <div className="space-y-3 border-t p-2.5 text-xs">
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs">显示精度</Label>
+                  <Label className="text-xs">{t('cesium.displayPrecision')}</Label>
                   <span className="font-mono text-xs text-primary">{sse}</span>
                 </div>
                 <Slider
@@ -691,12 +693,12 @@ export function CesiumCanvas() {
                   value={[sse]}
                   onValueChange={(v) => setSse(v[0] ?? 8)}
                 />
-                <p className="text-[10px] text-muted-foreground">值越小越精细，性能开销越大</p>
+                <p className="text-[10px] text-muted-foreground">{t('cesium.precisionHint')}</p>
               </div>
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs">透明度</Label>
+                  <Label className="text-xs">{t('cesium.opacity')}</Label>
                   <span className="font-mono text-xs text-primary">{opacity}%</span>
                 </div>
                 <Slider
@@ -709,7 +711,7 @@ export function CesiumCanvas() {
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-xs">位置偏移</Label>
+                <Label className="text-xs">{t('cesium.positionOffset')}</Label>
                 <div className="grid grid-cols-3 gap-1">
                   <Input
                     type="number"
@@ -717,8 +719,8 @@ export function CesiumCanvas() {
                     onChange={(e) => setOffsetLng(e.target.value)}
                     step="0.0001"
                     className="h-7 px-1.5 text-[11px]"
-                    placeholder="经度°"
-                    title="经度偏移 (°)"
+                    placeholder={t('cesium.longitudePlaceholder')}
+                    title={t('cesium.longitudeOffset')}
                   />
                   <Input
                     type="number"
@@ -726,8 +728,8 @@ export function CesiumCanvas() {
                     onChange={(e) => setOffsetLat(e.target.value)}
                     step="0.0001"
                     className="h-7 px-1.5 text-[11px]"
-                    placeholder="纬度°"
-                    title="纬度偏移 (°)"
+                    placeholder={t('cesium.latitudePlaceholder')}
+                    title={t('cesium.latitudeOffset')}
                   />
                   <Input
                     type="number"
@@ -735,8 +737,8 @@ export function CesiumCanvas() {
                     onChange={(e) => setOffsetHeight(e.target.value)}
                     step="1"
                     className="h-7 px-1.5 text-[11px]"
-                    placeholder="高度m"
-                    title="高度偏移 (m)"
+                    placeholder={t('cesium.heightPlaceholder')}
+                    title={t('cesium.heightOffset')}
                   />
                 </div>
                 <Button
@@ -745,12 +747,12 @@ export function CesiumCanvas() {
                   className="h-7 w-full text-xs"
                   onClick={applyOffset}
                 >
-                  应用位置偏移
+                  {t('cesium.applyOffset')}
                 </Button>
               </div>
 
               <div className="flex items-center justify-between border-t pt-2">
-                <Label htmlFor="cesium-bv" className="text-xs">显示包围盒</Label>
+                <Label htmlFor="cesium-bv" className="text-xs">{t('cesium.showBoundingVolume')}</Label>
                 <Switch id="cesium-bv" checked={showBV} onCheckedChange={setShowBV} />
               </div>
 
@@ -761,7 +763,7 @@ export function CesiumCanvas() {
                 onClick={resetControls}
               >
                 <RotateCcw className="size-3" />
-                重置
+                {t('cesium.reset')}
               </Button>
             </div>
           )}
@@ -772,7 +774,7 @@ export function CesiumCanvas() {
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-background/60">
           <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-1.5 text-xs text-muted-foreground shadow-sm">
             <Boxes className="size-3.5 animate-pulse" />
-            正在加载 CesiumJS...
+            {t('cesium.loadingCesium')}
           </div>
         </div>
       )}

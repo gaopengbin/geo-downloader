@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { Loader2, Play } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import {
@@ -49,6 +50,7 @@ function loadCurrentSettings() {
 }
 
 export function BatchDialog() {
+  const { t } = useTranslation()
   const features = useBatchStore((s) => s.features)
   const filename = useBatchStore((s) => s.filename)
   const stage = useBatchStore((s) => s.stage)
@@ -67,21 +69,10 @@ export function BatchDialog() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [running, setRunning] = useState(false)
 
-  // 进入 panel 阶段时初始化默认命名字段、全选
-  useEffect(() => {
-    if (stage === 'panel' && features) {
-      const recommended = recommendNameField(propertyKeys)
-      setNameField(recommended ?? INDEX_FIELD)
-      setSelected(new Set(features.map((_, i) => i)))
-    }
-    if (stage == null) {
-      setSelected(new Set())
-      setRunning(false)
-    }
-  }, [stage, features, propertyKeys])
-
   const onClose = () => {
     if (running) return
+    setSelected(new Set())
+    setRunning(false)
     close()
   }
 
@@ -94,7 +85,7 @@ export function BatchDialog() {
       .filter((p): p is NonNullable<ReturnType<typeof extractFeaturePolygon>> => !!p)
       .flat()
     if (rings.length === 0) {
-      toast.error('文件中未发现 Polygon / MultiPolygon')
+      toast.error(t('batch.toast.noPolygon'))
       close()
       return
     }
@@ -108,17 +99,23 @@ export function BatchDialog() {
       }
     }
     setExternalSelection({ bounds: { north: n, south: s, east: e, west: w }, polygon: rings })
-    toast.success(`已合并 ${features.length} 个要素为单个选区`)
+    toast.success(t('batch.toast.merged', { count: features.length }))
     close()
   }
 
-  const onPickBatch = () => setStage('panel')
+  const onPickBatch = () => {
+    if (!features) return
+    const recommended = recommendNameField(propertyKeys)
+    setNameField(recommended ?? INDEX_FIELD)
+    setSelected(new Set(features.map((_, i) => i)))
+    setStage('panel')
+  }
 
   // === 批量下载 ===
   const startBatch = async () => {
     if (!features || selected.size === 0) return
     if (!params.ready || !params.source) {
-      toast.error('请先在影像下载面板选择图源与参数')
+      toast.error(t('batch.toast.missingParams'))
       return
     }
 
@@ -137,11 +134,11 @@ export function BatchDialog() {
 
     let dir: string | null = null
     try {
-      const r = await openDialog({ directory: true, title: '选择批量下载输出目录' })
+      const r = await openDialog({ directory: true, title: t('batch.chooseDirectory') })
       dir = typeof r === 'string' ? r : null
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      toast.error(`选择目录失败：${msg}`)
+      toast.error(t('batch.toast.directoryError', { message: msg }))
       return
     }
     if (!dir) return
@@ -210,13 +207,14 @@ export function BatchDialog() {
         polygon: params.cropToShape && polygon ? polygon : null,
         compression: params.format === 'geotiff' ? params.compression : 'none',
         build_pyramid: params.format === 'geotiff' && params.buildPyramid,
+        generate_sidecars: params.format === 'geotiff' && params.generateSidecars,
       }
       try {
         await createDownloadTask(request, task.filename, params.sourceName || params.source)
         success++
       } catch (err) {
         failed++
-        console.error(`批量任务 ${task.filename} 创建失败`, err)
+        console.error(`Batch task ${task.filename} failed to start`, err)
       }
     }
 
@@ -234,9 +232,9 @@ export function BatchDialog() {
     qc.invalidateQueries({ queryKey: ['active-tasks'] })
     qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
     if (failed > 0) {
-      toast.warning(`批量任务已创建：成功 ${success}，失败 ${failed}`)
+      toast.warning(t('batch.toast.createdWithErrors', { success, failed }))
     } else {
-      toast.success(`批量任务已创建：${success} 个`)
+      toast.success(t('batch.toast.created', { count: success }))
     }
     useAppStore.getState().setTab('history')
     close()
@@ -248,11 +246,14 @@ export function BatchDialog() {
       <Dialog open onOpenChange={(o) => !o && onClose()}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>多要素文件检测到 {total} 个要素</DialogTitle>
+            <DialogTitle>{t('batch.modeTitle', { count: total })}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm">
             <p className="text-muted-foreground">
-              {filename || '上传文件'} 包含 {total} 个要素，请选择处理方式：
+              {t('batch.modeDescription', {
+                filename: filename || t('batch.uploadedFile'),
+                count: total,
+              })}
             </p>
             <div className="space-y-2">
               <button
@@ -260,9 +261,9 @@ export function BatchDialog() {
                 onClick={onPickMerge}
                 className="w-full rounded-md border bg-card p-3 text-left text-sm hover:bg-accent"
               >
-                <div className="font-medium">合并为单个选区</div>
+                <div className="font-medium">{t('batch.mergeTitle')}</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">
-                  将所有要素合并显示，按合并后的范围下载（一次任务）
+                  {t('batch.mergeDescription')}
                 </div>
               </button>
               <button
@@ -270,9 +271,9 @@ export function BatchDialog() {
                 onClick={onPickBatch}
                 className="w-full rounded-md border bg-card p-3 text-left text-sm hover:bg-accent"
               >
-                <div className="font-medium">批量独立下载</div>
+                <div className="font-medium">{t('batch.separateTitle')}</div>
                 <div className="mt-0.5 text-xs text-muted-foreground">
-                  每个要素生成单独的文件（仅桌面端 / 影像模式）
+                  {t('batch.separateDescription')}
                 </div>
               </button>
             </div>
@@ -297,12 +298,12 @@ export function BatchDialog() {
       <Dialog open onOpenChange={(o) => !o && onClose()}>
         <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col">
           <DialogHeader>
-            <DialogTitle>批量独立下载（{features.length} 个要素）</DialogTitle>
+            <DialogTitle>{t('batch.panelTitle', { count: features.length })}</DialogTitle>
           </DialogHeader>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">命名字段</Label>
+              <Label className="text-xs">{t('batch.nameField')}</Label>
               <Select value={nameField} onValueChange={setNameField}>
                 <SelectTrigger className="h-8 text-xs">
                   <SelectValue />
@@ -310,15 +311,17 @@ export function BatchDialog() {
                 <SelectContent>
                   {propertyKeys.map((k) => (
                     <SelectItem key={k} value={k}>
-                      {k === '__source_file' ? '来源文件名' : k}
+                      {k === '__source_file' ? t('batch.sourceFilename') : k}
                     </SelectItem>
                   ))}
-                  <SelectItem value={INDEX_FIELD}>序号 (001, 002, ...)</SelectItem>
+                  <SelectItem value={INDEX_FIELD}>{t('batch.sequence')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">批量并发：{batchConcurrency}</Label>
+              <Label className="text-xs">
+                {t('batch.concurrency', { count: batchConcurrency })}
+              </Label>
               <Slider
                 min={1}
                 max={8}
@@ -331,8 +334,12 @@ export function BatchDialog() {
 
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span>
-              已选 {selected.size} / {features.length} ·{' '}
-              {selectedArea.toFixed(2)} / {totalArea.toFixed(2)} km²
+              {t('batch.selected', {
+                selected: selected.size,
+                total: features.length,
+                selectedArea: selectedArea.toFixed(2),
+                totalArea: totalArea.toFixed(2),
+              })}
             </span>
             <div className="flex gap-1">
               <Button
@@ -342,7 +349,7 @@ export function BatchDialog() {
                 className="h-7 text-xs"
                 onClick={() => setSelected(new Set(features.map((_, i) => i)))}
               >
-                全选
+                {t('batch.selectAll')}
               </Button>
               <Button
                 type="button"
@@ -351,7 +358,7 @@ export function BatchDialog() {
                 className="h-7 text-xs"
                 onClick={() => setSelected(new Set())}
               >
-                清空
+                {t('batch.clear')}
               </Button>
               <Button
                 type="button"
@@ -366,7 +373,7 @@ export function BatchDialog() {
                   })
                 }}
               >
-                反选
+                {t('batch.invert')}
               </Button>
             </div>
           </div>
@@ -414,23 +421,25 @@ export function BatchDialog() {
 
           {!params.ready || !params.source ? (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">
-              请先在影像下载面板选择图源 / 缩放 / 格式等参数
+              {t('batch.missingParams')}
             </div>
           ) : (
             <div className="rounded-md border bg-muted/20 p-2 text-xs text-muted-foreground">
-              将使用：图源 <strong>{params.sourceName || params.source}</strong> · 缩放{' '}
-              <strong>z{params.zoom}</strong>
-              {params.zoomMax ? `~z${params.zoomMax}` : ''} · 格式{' '}
-              <strong>{params.format}</strong>
-              {params.format === 'geotiff' ? ` / ${params.compression}` : ''} · 单任务并发{' '}
-              <strong>{params.concurrency}</strong>
-              {params.cropToShape ? ' · 按要素裁剪' : ''}
+              {t('batch.summary', {
+                source: params.sourceName || params.source,
+                zoom: `z${params.zoom}`,
+                zoomMax: params.zoomMax ? `~z${params.zoomMax}` : '',
+                format: params.format,
+                compression: params.format === 'geotiff' ? ` / ${params.compression}` : '',
+                concurrency: params.concurrency,
+                crop: params.cropToShape ? t('batch.crop') : '',
+              })}
             </div>
           )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={running}>
-              取消
+              {t('batch.cancel')}
             </Button>
             <Button
               type="button"
@@ -442,7 +451,7 @@ export function BatchDialog() {
               ) : (
                 <Play className="mr-1 size-3.5" />
               )}
-              开始批量下载（{selected.size}）
+              {t('batch.start', { count: selected.size })}
             </Button>
           </DialogFooter>
         </DialogContent>

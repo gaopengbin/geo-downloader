@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { History } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { isTauriRuntime } from '@/lib/tauri'
@@ -8,6 +9,7 @@ import { useAppStore } from '@/store/app-store'
 
 /** 标题栏的"可恢复任务"入口：显示徽标，点击跳到任务面板。 */
 export function ResumableTasksButton() {
+  const { t } = useTranslation()
   const inTauri = isTauriRuntime()
   const setTab = useAppStore((s) => s.setTab)
 
@@ -28,7 +30,7 @@ export function ResumableTasksButton() {
       variant="ghost"
       size="sm"
       className="relative h-8 gap-1 px-2 text-xs"
-      title={`有 ${count} 个可恢复任务`}
+      title={t('tasks.resumableTitle', { count })}
       onClick={() => setTab('history')}
     >
       <History className="size-3.5" />

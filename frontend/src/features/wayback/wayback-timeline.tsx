@@ -1,6 +1,7 @@
 import { useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { useAppStore } from '@/store/app-store'
@@ -9,6 +10,7 @@ import { getSettings } from '@/features/settings/settings-api'
 import { getWaybackVersions } from '@/features/wayback/wayback-api'
 
 export function WaybackTimeline() {
+  const { t } = useTranslation()
   const mode = useAppStore((s) => s.mode)
   const previewVersionId = useWaybackStore((s) => s.previewVersionId)
   const setPreviewVersionId = useWaybackStore((s) => s.setPreviewVersionId)
@@ -113,7 +115,7 @@ export function WaybackTimeline() {
             className="size-7"
             onClick={() => setIndex(0)}
             disabled={currentIdx <= 0}
-            title="跳到最早"
+            title={t('wayback.timeline.earliest')}
           >
             <ChevronsLeft className="size-4" />
           </Button>
@@ -123,7 +125,7 @@ export function WaybackTimeline() {
             className="size-7"
             onClick={() => setIndex(currentIdx - 1)}
             disabled={currentIdx <= 0}
-            title="上一版本"
+            title={t('wayback.timeline.previous')}
           >
             <ChevronLeft className="size-4" />
           </Button>
@@ -133,7 +135,7 @@ export function WaybackTimeline() {
             className="size-7"
             onClick={() => setIndex(currentIdx + 1)}
             disabled={currentIdx >= total - 1}
-            title="下一版本"
+            title={t('wayback.timeline.next')}
           >
             <ChevronRight className="size-4" />
           </Button>
@@ -143,7 +145,7 @@ export function WaybackTimeline() {
             className="size-7"
             onClick={() => setIndex(total - 1)}
             disabled={currentIdx >= total - 1}
-            title="跳到最新"
+            title={t('wayback.timeline.latest')}
           >
             <ChevronsRight className="size-4" />
           </Button>

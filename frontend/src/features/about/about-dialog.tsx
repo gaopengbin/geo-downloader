@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Info, RefreshCw } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -29,6 +30,7 @@ async function loadTauriVersion(): Promise<string> {
 }
 
 export function AboutDialog() {
+  const { t } = useTranslation()
   const appVersion = useQuery({ queryKey: ['app', 'version'], queryFn: loadAppVersion })
   const tauriVersion = useQuery({
     queryKey: ['app', 'tauri-version'],
@@ -58,7 +60,7 @@ export function AboutDialog() {
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <Info className="size-4" />
-          关于
+          {t('common.about')}
         </Button>
       </DialogTrigger>
       <DialogContent>

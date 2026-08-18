@@ -9,6 +9,7 @@ use crate::exporter::{self, ExportFormat};
 use crate::streaming_tiff;
 use crate::streaming_raster;
 use crate::pyramid;
+use crate::geotiff_sidecar::{self, SidecarCrs};
 use crate::admin::{self, AdminRegion, GeocodeResult};
 use crate::history::{DownloadRecord, DownloadStatus, HistoryPage, HistoryStore};
 use crate::region_bookmarks::{
@@ -145,6 +146,9 @@ pub struct DownloadRequest {
     /// 导出 GeoTIFF 后是否构建内置金字塔（Overview Layers）
     #[serde(default)]
     pub build_pyramid: bool,
+    /// Generate .tfw and .prj files beside a successful GeoTIFF export.
+    #[serde(default)]
+    pub generate_sidecars: bool,
     /// 叠加图层 ID 列表（按顺序自下而上叠在主源之上，如天地图注记）。
     /// 仅对栅格输出有效（geotiff/png/jpeg/tiles/mbtiles）；为空或 None 时禁用。
     /// 叠加图层若 max_zoom 不足，将在不支持的级别静默跳过该图层。
@@ -158,6 +162,27 @@ fn default_concurrency() -> usize {
 
 fn default_compression() -> String {
     "lzw".to_string()
+}
+
+fn write_sidecars_for_grid(
+    save_path: &Path,
+    bounds: &tile::TileBounds,
+    cols: u32,
+    rows: u32,
+    is_dem: bool,
+) -> Result<(PathBuf, PathBuf), String> {
+    let width = cols
+        .checked_mul(config::TILE_SIZE)
+        .ok_or_else(|| "GeoTIFF 宽度超出辅助文件支持范围".to_string())?;
+    let height = rows
+        .checked_mul(config::TILE_SIZE)
+        .ok_or_else(|| "GeoTIFF 高度超出辅助文件支持范围".to_string())?;
+    let crs = if is_dem {
+        SidecarCrs::Wgs84
+    } else {
+        SidecarCrs::WebMercator
+    };
+    geotiff_sidecar::write_geotiff_sidecars(save_path, bounds, width, height, crs)
 }
 
 /// 多边形坐标
@@ -268,10 +293,15 @@ fn custom_to_tile_source(cs: &crate::settings::CustomTileSource, attribution: &s
             .filter(|s| !s.is_empty())
             .collect()
     };
+    let url = if cs.scheme.eq_ignore_ascii_case("tms") {
+        cs.url.replace("{y}", "{-y}")
+    } else {
+        cs.url.clone()
+    };
     TileSource {
         id: cs.id.clone(),
         name: cs.name.clone(),
-        url: cs.url.clone(),
+        url,
         subdomains,
         max_zoom: cs.max_zoom,
         attribution: attribution.to_string(),
@@ -1451,6 +1481,22 @@ async fn execute_zoom_level(
         }
     }
 
+    if request.generate_sidecars && is_geotiff {
+        let merged_bounds = tile::get_merged_bounds(x_min, y_min, x_max, y_max, current_zoom);
+        let (tfw_path, prj_path) = write_sidecars_for_grid(
+            Path::new(&save_path),
+            &merged_bounds,
+            cols,
+            rows,
+            is_dem,
+        )?;
+        task_log(app, tm, task_id, "INFO", &format!(
+            "已生成辅助文件: {}、{}",
+            tfw_path.display(),
+            prj_path.display()
+        ));
+    }
+
     let size_mb = file_size as f64 / 1024.0 / 1024.0;
     task_log(app, tm, task_id, "INFO", &format!(
         "--- 级别 z{} 完成 --- 文件大小: {:.1} MB，耗时: {:.1}s",
@@ -1827,7 +1873,7 @@ pub async fn probe_tile(
     tianditu_token: Option<String>,
     proxy: Option<String>,
 ) -> Result<ProbeResult, String> {
-    let sources = config::get_tile_sources(tianditu_token.as_deref());
+    let sources = get_tile_sources(tianditu_token.clone());
     let source = sources
         .get(&source_key)
         .ok_or_else(|| format!("未知图源: {}", source_key))?
@@ -1853,13 +1899,39 @@ pub async fn probe_tile(
     let status_code = resp.status().as_u16();
 
     if !resp.status().is_success() {
-        let message = match status_code {
-            401 => "HTTP 401（Token 未通过认证）".to_string(),
-            403 if proxy.as_deref().is_some_and(|value| !value.trim().is_empty()) => {
+        let is_tianditu = source_key.starts_with("tianditu_")
+            || url.contains("tianditu.gov.cn");
+        let uses_public_token = tianditu_token
+            .as_deref()
+            .map_or(true, |value| value.trim().is_empty());
+        let token_kind = if uses_public_token {
+            "当前使用 GeoD 内置的公开共享 Key，其额度和可用性不受保证"
+        } else {
+            "当前使用你在设置中填写的天地图 Token"
+        };
+        let message = match (is_tianditu, status_code) {
+            (true, 401) => format!(
+                "天地图 HTTP 401：Token 无效或未通过认证。{}；请检查 Token，建议前往天地图控制台申请或更换自己的 Token",
+                token_kind
+            ),
+            (true, 418) => format!(
+                "天地图 HTTP 418：缺少 Token 或 Token 无效。{}；请前往天地图控制台申请并在设置中填写自己的 Token",
+                token_kind
+            ),
+            (true, 403) => format!(
+                "天地图 HTTP 403：Token 无权限、请求来源受限或 Key 已失效。{}；请检查授权设置或更换自己的 Token",
+                token_kind
+            ),
+            (true, 429) => format!(
+                "天地图 HTTP 429：Token 请求额度不足或服务正在限流。{}；请稍后重试或更换自己的 Token",
+                token_kind
+            ),
+            (false, 401) => "HTTP 401（Token 未通过认证）".to_string(),
+            (false, 403) if proxy.as_deref().is_some_and(|value| !value.trim().is_empty()) => {
                 "HTTP 403（Token 或请求来源未获授权；当前请求经过代理，请检查代理出口 IP 是否在企业 Token 白名单中）"
                     .to_string()
             }
-            403 => {
+            (false, 403) => {
                 "HTTP 403（Token 或请求来源未获授权；请检查企业 Token 的来源 IP/域名白名单）"
                     .to_string()
             }
@@ -2340,7 +2412,7 @@ pub async fn export_partial_task(
             };
 
             // 计算瓦片矩阵
-            let (x_min, y_min, x_max, y_max, _cols, _rows) =
+            let (x_min, y_min, x_max, y_max, cols, rows) =
                 tile::get_tile_matrix_size(&req_clone.bounds, *zoom);
             let actual_count = tile_files.len() as u32;
             task_log(&app_clone, &tm_arc, &tid, "INFO", &format!(
@@ -2369,10 +2441,11 @@ pub async fn export_partial_task(
             let save_p = std::path::PathBuf::from(&level_save_path);
             let zoom_is_dem = is_dem;
             let zoom_format = format;
+            let generate_sidecars = req_clone.generate_sidecars;
 
             let result = tokio::task::spawn_blocking(move || -> Result<u64, String> {
                 let polygons = polygons_owned.as_deref();
-                if zoom_is_dem {
+                let size = if zoom_is_dem {
                     streaming_tiff::merge_and_export_dem_streaming(
                         &tile_files, x_min, y_min, x_max, y_max,
                         &merged_bounds, &save_p, &compression, polygons,
@@ -2387,7 +2460,17 @@ pub async fn export_partial_task(
                         &tile_files, x_min, y_min, x_max, y_max,
                         &merged_bounds, &save_p, polygons,
                     )
+                }?;
+                if generate_sidecars && (zoom_is_dem || zoom_format == ExportFormat::GeoTiff) {
+                    write_sidecars_for_grid(
+                        &save_p,
+                        &merged_bounds,
+                        cols,
+                        rows,
+                        zoom_is_dem,
+                    )?;
                 }
+                Ok(size)
             })
             .await
             .map_err(|e| format!("spawn_blocking 失败: {}", e));
@@ -3912,6 +3995,8 @@ pub struct WaybackIncrementalRequest {
     #[serde(default)]
     pub build_pyramid: bool,
     #[serde(default)]
+    pub generate_sidecars: bool,
+    #[serde(default)]
     pub task_name_prefix: Option<String>,
     #[serde(default)]
     pub proxy: Option<String>,
@@ -3978,6 +4063,7 @@ pub async fn download_wayback_incremental(
             concurrency: default_concurrency(),
             compression: req.compression.clone(),
             build_pyramid: req.build_pyramid,
+            generate_sidecars: req.generate_sidecars,
             overlay_sources: None,
         };
         let result = create_wayback_task(

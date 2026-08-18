@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Boxes, CalendarClock, ClipboardList, History as HistoryIcon, Image as ImageIcon, Layers3, ListChecks, Mountain, Settings, Shapes } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { AppShell } from '@/components/layout/app-shell'
 import { MapStatusBar } from '@/components/layout/map-status-bar'
@@ -40,70 +41,71 @@ import { useAppStore, type AppMode, type SidebarTab } from '@/store/app-store'
 
 interface ModeMeta {
   value: AppMode
-  label: string
+  labelKey: string
   short: string
-  description: string
+  descriptionKey: string
   icon: ComponentType<SVGProps<SVGSVGElement>>
 }
 
 const MODES: ModeMeta[] = [
   {
     value: 'imagery',
-    label: '影像下载',
+    labelKey: 'app.modes.imagery.label',
     short: 'GeoTIFF',
-    description: '单级别 / 多级别瓦片下载，支持自定义图源与断点续传。',
+    descriptionKey: 'app.modes.imagery.description',
     icon: ImageIcon,
   },
   {
     value: 'dem',
-    label: 'DEM 高程',
+    labelKey: 'app.modes.dem.label',
     short: 'DEM',
-    description: '地形高程瓦片下载与裁剪。',
+    descriptionKey: 'app.modes.dem.description',
     icon: Mountain,
   },
   {
     value: 'wayback',
-    label: 'Wayback 历史影像',
+    labelKey: 'app.modes.wayback.label',
     short: 'Wayback',
-    description: 'Esri Wayback fast/fine 扫描、时间轴与增量下载。',
+    descriptionKey: 'app.modes.wayback.description',
     icon: CalendarClock,
   },
   {
     value: 'tiles3d',
-    label: '3D Tiles',
+    labelKey: 'app.modes.tiles3d.label',
     short: '3D',
-    description: 'Cesium 3D Tiles 在线下载、本地预览与模型调控。',
+    descriptionKey: 'app.modes.tiles3d.description',
     icon: Boxes,
   },
   {
     value: 'mvt',
-    label: '矢量切片',
+    labelKey: 'app.modes.mvt.label',
     short: 'MVT',
-    description: 'MVT / PBF 矢量瓦片下载（需自定义图源，如 Maptiler / Mapbox）。',
+    descriptionKey: 'app.modes.mvt.description',
     icon: Layers3,
   },
   {
     value: 'vector',
-    label: '矢量数据 (OSM)',
+    labelKey: 'app.modes.vector.label',
     short: 'OSM',
-    description: 'OSM Overpass 道路 / 建筑 / POI 等要素数据下载（GeoJSON）。',
+    descriptionKey: 'app.modes.vector.description',
     icon: Shapes,
   },
 ]
 
 type SidebarTabMeta = {
   value: SidebarTab
-  label: string
+  labelKey: string
   icon: ComponentType<SVGProps<SVGSVGElement>>
 }
 
 const SIDEBAR_TABS: SidebarTabMeta[] = [
-  { value: 'download', label: '资源下载', icon: ImageIcon },
-  { value: 'history', label: '下载中心', icon: ListChecks },
-  { value: 'settings', label: '设置', icon: Settings },
+  { value: 'download', labelKey: 'app.tabs.download', icon: ImageIcon },
+  { value: 'history', labelKey: 'app.tabs.history', icon: ListChecks },
+  { value: 'settings', labelKey: 'app.tabs.settings', icon: Settings },
 ]
 
 function ModePlaceholder({ mode }: { mode: ModeMeta }) {
+  const { t } = useTranslation()
   const Icon = mode.icon
   return (
     <Card>
@@ -113,14 +115,14 @@ function ModePlaceholder({ mode }: { mode: ModeMeta }) {
             <Icon className="size-4" />
           </div>
           <div>
-            <CardTitle className="text-base">{mode.label}</CardTitle>
-            <CardDescription className="text-xs">{mode.description}</CardDescription>
+            <CardTitle className="text-base">{t(mode.labelKey)}</CardTitle>
+            <CardDescription className="text-xs">{t(mode.descriptionKey)}</CardDescription>
           </div>
         </div>
       </CardHeader>
       <CardContent>
         <div className="rounded-lg border border-dashed bg-muted/40 p-6 text-center text-sm text-muted-foreground">
-          该模块尚未迁移到 React 版
+          {t('app.placeholder')}
         </div>
       </CardContent>
     </Card>
@@ -128,6 +130,7 @@ function ModePlaceholder({ mode }: { mode: ModeMeta }) {
 }
 
 function App() {
+  const { t } = useTranslation()
   const mode = useAppStore((s) => s.mode)
   const setMode = useAppStore((s) => s.setMode)
   const tab = useAppStore((s) => s.tab)
@@ -247,7 +250,7 @@ function App() {
                 key={m.value}
                 type="button"
                 onClick={() => setMode(m.value)}
-                title={m.description}
+                title={t(m.descriptionKey)}
                 className={cn(
                   'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all',
                   active
@@ -304,18 +307,18 @@ function App() {
             data-tour="sidebar-tabs"
             className="flex shrink-0 items-stretch border-b border-border/60 bg-muted/30"
           >
-            {SIDEBAR_TABS.map((t) => {
-              const Icon = t.icon
-              const active = t.value === tab
+            {SIDEBAR_TABS.map((tabMeta) => {
+              const Icon = tabMeta.icon
+              const active = tabMeta.value === tab
               return (
                 <button
-                  key={t.value}
+                  key={tabMeta.value}
                   type="button"
-                  onClick={() => setTab(t.value)}
+                  onClick={() => setTab(tabMeta.value)}
                   data-tour={
-                    t.value === 'settings'
+                    tabMeta.value === 'settings'
                       ? 'settings-tab'
-                      : t.value === 'history'
+                      : tabMeta.value === 'history'
                         ? 'history-tab'
                         : undefined
                   }
@@ -327,7 +330,7 @@ function App() {
                   )}
                 >
                   <Icon className={cn('size-3.5', active && 'text-primary')} />
-                  {t.label}
+                  {t(tabMeta.labelKey)}
                   {active && (
                     <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-t bg-primary" />
                   )}
@@ -360,10 +363,10 @@ function App() {
               data-agent-target="download-center"
               data-tour="download-center"
             >
-              <PanelSection icon={ClipboardList} title="任务" description="进行中 / 暂停 / 可恢复" dataTour="active-tasks-section">
+              <PanelSection icon={ClipboardList} title={t('app.tasks.title')} description={t('app.tasks.description')} dataTour="active-tasks-section">
                 <TasksPanel />
               </PanelSection>
-              <PanelSection icon={HistoryIcon} title="历史记录" description="已完成 / 失败 / 已删除" dataTour="history-section">
+              <PanelSection icon={HistoryIcon} title={t('app.tasks.historyTitle')} description={t('app.tasks.historyDescription')} dataTour="history-section">
                 <HistoryPanel />
               </PanelSection>
             </div>

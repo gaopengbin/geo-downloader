@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { Download, FolderOpen, History, Loader2, RefreshCw, Search, Square } from 'lucide-react'
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { DatePicker } from '@/components/ui/date-picker'
@@ -27,6 +28,7 @@ import { estimateDownload } from '@/features/download/download-api'
 import { buildSelectionCropPolygon } from '@/features/download/crop-utils'
 import {
   BuildPyramidToggle,
+  GeoTiffSidecarToggle,
   SelectionCropToggle,
   TiffCompressionSelect,
   type TiffCompression,
@@ -107,6 +109,7 @@ function formatBytes(mb?: number | null): string {
 }
 
 export function WaybackPage() {
+  const { t, i18n } = useTranslation()
   const inTauri = isTauriRuntime()
   const qc = useQueryClient()
 
@@ -122,6 +125,7 @@ export function WaybackPage() {
   const [compression, setCompression] = useState<string>('lzw')
   const [cropToShape, setCropToShape] = useState<boolean>(true)
   const [buildPyramid, setBuildPyramid] = useState<boolean>(false)
+  const [generateSidecars, setGenerateSidecars] = useState<boolean>(false)
   const [concurrency, setConcurrency] = useState<number>(8)
   const [taskName, setTaskName] = useState<string>('')
   const [singleSaveDir, setSingleSaveDir] = useState<string>('')
@@ -225,7 +229,7 @@ export function WaybackPage() {
       : wbMode === 'batch'
         ? batchSaveDir
         : incrementalSaveDir
-  const outputPathPlaceholder = '选择下载保存目录，文件名会自动生成'
+  const outputPathPlaceholder = t('wayback.outputPlaceholder')
 
   const setCurrentOutputPath = (path: string) => {
     if (wbMode === 'single') setSingleSaveDir(path)
@@ -241,10 +245,10 @@ export function WaybackPage() {
       directory: true,
       title:
         wbMode === 'single'
-          ? '选择 Wayback 保存目录'
+          ? t('wayback.directory.single')
           : wbMode === 'batch'
-            ? '选择批量下载保存目录'
-            : '选择增量下载保存目录',
+            ? t('wayback.directory.batch')
+            : t('wayback.directory.incremental'),
     })
     if (picked) setCurrentOutputPath(picked as string)
     return picked as string | null
@@ -252,7 +256,7 @@ export function WaybackPage() {
 
   const probeMutation = useMutation({
     mutationFn: async () => {
-      if (!versionId) throw new Error('请先选择版本')
+      if (!versionId) throw new Error(t('wayback.errors.selectVersion'))
       // 取选区中心点
       const b = bounds
       let lat = 39.9
@@ -265,11 +269,11 @@ export function WaybackPage() {
     },
     onSuccess: (z) => {
       setZoomLevels([z])
-      toast.success(`最大缩放 z${z}`)
+      toast.success(t('wayback.toast.maxZoom', { zoom: z }))
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(`探测失败：${msg}`)
+      toast.error(t('wayback.toast.probeFailed', { message: msg }))
     },
   })
 
@@ -280,7 +284,7 @@ export function WaybackPage() {
       setEstimate(null)
       return
     }
-    const t = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       setEstimating(true)
       estimateDownload(bounds, zoom, format, effectiveCropToShape, zMaxValue, zLevelsForApi, {
         sourceId: 'wayback_satellite',
@@ -291,21 +295,21 @@ export function WaybackPage() {
         .catch(() => setEstimate(null))
         .finally(() => setEstimating(false))
     }, 400)
-    return () => window.clearTimeout(t)
+    return () => window.clearTimeout(timer)
   }, [wbMode, bounds, zoom, zMaxValue, zLevelsForApi, format, cropToShape, effectiveCropToShape, compression, buildPyramid])
 
   // ========== 单个下载 ==========
   const singleMutation = useMutation({
     mutationFn: async () => {
-      if (!versionId || !selectedVersion) throw new Error('请先选择版本')
-      if (!bounds) throw new Error('请先选择下载区域')
+      if (!versionId || !selectedVersion) throw new Error(t('wayback.errors.selectVersion'))
+      if (!bounds) throw new Error(t('wayback.errors.selectRegion'))
 
       const ext = extOf(format)
       let saveDirOrPath = singleSaveDir.trim()
       if (!saveDirOrPath) {
         const picked = await openDialog({
           directory: true,
-          title: '选择 Wayback 保存目录',
+          title: t('wayback.directory.single'),
         })
         if (!picked) throw new Error('__user_cancelled__')
         saveDirOrPath = picked as string
@@ -335,32 +339,33 @@ export function WaybackPage() {
         tianditu_token: null,
         compression: format === 'geotiff' ? compression : 'none',
         build_pyramid: format === 'geotiff' && buildPyramid,
+        generate_sidecars: format === 'geotiff' && generateSidecars,
       }
       const finalTaskName = taskName.trim() || `Wayback ${selectedVersion.date} ${zLabel}`
       return createWaybackTask(request, versionId, selectedVersion.date, finalTaskName)
     },
     onSuccess: () => {
-      toast.success('Wayback 下载任务已创建')
+      toast.success(t('wayback.toast.taskCreated'))
       useAppStore.getState().setTab('history')
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === '__user_cancelled__') return
-      toast.error(`下载失败：${msg}`)
+      toast.error(t('wayback.toast.downloadFailed', { message: msg }))
     },
   })
 
   // ========== 批量下载 ==========
   const batchMutation = useMutation({
     mutationFn: async () => {
-      if (!bounds) throw new Error('请先选择下载区域')
-      if (batchSelected.size === 0) throw new Error('请至少选择一个版本')
+      if (!bounds) throw new Error(t('wayback.errors.selectRegion'))
+      if (batchSelected.size === 0) throw new Error(t('wayback.errors.selectOneVersion'))
       let dir = batchSaveDir.trim()
       if (!dir) {
         const picked = await openDialog({
           directory: true,
-          title: '选择批量下载保存目录',
+          title: t('wayback.directory.batch'),
         })
         if (!picked) throw new Error('__user_cancelled__')
         dir = picked as string
@@ -390,6 +395,7 @@ export function WaybackPage() {
           tianditu_token: null,
           compression: format === 'geotiff' ? compression : 'none',
           build_pyramid: format === 'geotiff' && buildPyramid,
+          generate_sidecars: format === 'geotiff' && generateSidecars,
         }
         try {
           const finalTaskName = taskName.trim()
@@ -398,20 +404,20 @@ export function WaybackPage() {
           await createWaybackTask(request, v.id, v.date, finalTaskName)
           created += 1
         } catch (e) {
-          console.error(`批量任务 ${v.date} 创建失败:`, e)
+          console.error(t('wayback.logs.batchTaskFailed', { date: v.date }), e)
         }
       }
       return created
     },
     onSuccess: (n) => {
-      toast.success(`已创建 ${n} 个批量任务`)
+      toast.success(t('wayback.toast.batchCreated', { count: n }))
       useAppStore.getState().setTab('history')
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === '__user_cancelled__') return
-      toast.error(`批量下载失败：${msg}`)
+      toast.error(t('wayback.toast.batchFailed', { message: msg }))
     },
   })
 
@@ -419,7 +425,7 @@ export function WaybackPage() {
   const scanMutation = useMutation({
     mutationFn: async (opts: { forceRefresh?: boolean } = {}) => {
       const forceRefresh = opts.forceRefresh ?? false
-      if (!bounds) throw new Error('请先选择下载区域')
+      if (!bounds) throw new Error(t('wayback.errors.selectRegion'))
       const zMin = Math.max(zoom - 1, 1)
       const zMaxScan = Math.min(zoom + 1, 22)
       const bbox: [number, number, number, number] = [
@@ -475,7 +481,7 @@ export function WaybackPage() {
             release_date_to: releaseDateTo || null,
           })
           if (final.kind === 'result') return final
-          throw new Error('扫描完成但未取得结果')
+          throw new Error(t('wayback.errors.scanNoResult'))
         }
         setScanProgress({
           current: prog.current,
@@ -491,12 +497,12 @@ export function WaybackPage() {
       setScanReleases(res.releases ?? [])
       setScanReleasesScanned(res.releases_scanned ?? 0)
       setScanProgress(null)
-      toast.success(`扫描完成：${res.releases.length} 个 release`)
+      toast.success(t('wayback.toast.scanComplete', { count: res.releases.length }))
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === '__user_cancelled__') return
-      toast.error(`扫描失败：${msg}`)
+      toast.error(t('wayback.toast.scanFailed', { message: msg }))
       setScanProgress(null)
     },
     onSettled: () => {
@@ -510,7 +516,7 @@ export function WaybackPage() {
     const scanId = activeScanIdRef.current
     if (scanId) {
       void cancelWaybackScan(scanId).catch((error) => {
-        console.warn('停止 Wayback 扫描失败', error)
+        console.warn(t('wayback.logs.stopScanFailed'), error)
       })
     }
   }
@@ -562,11 +568,11 @@ export function WaybackPage() {
 
   const incDownloadMutation = useMutation({
     mutationFn: async () => {
-      if (!bounds) throw new Error('请先选择下载区域')
-      if (incSelected.size === 0) throw new Error('请至少选择一个 release')
+      if (!bounds) throw new Error(t('wayback.errors.selectRegion'))
+      if (incSelected.size === 0) throw new Error(t('wayback.errors.selectOneRelease'))
       let dir = incrementalSaveDir.trim()
       if (!dir) {
-        const picked = await openDialog({ directory: true, title: '选择保存目录' })
+        const picked = await openDialog({ directory: true, title: t('wayback.directory.generic') })
         if (!picked) throw new Error('__user_cancelled__')
         dir = picked as string
         setIncrementalSaveDir(dir)
@@ -596,20 +602,21 @@ export function WaybackPage() {
         polygon: cropPolygon?.[0] ?? null,
         compression: format === 'geotiff' ? compression : 'none',
         build_pyramid: format === 'geotiff' && buildPyramid,
+        generate_sidecars: format === 'geotiff' && generateSidecars,
         task_name_prefix: taskName.trim() || null,
         proxy,
       })
       return result.task_ids.length
     },
     onSuccess: (n) => {
-      toast.success(`已创建 ${n} 个增量下载任务`)
+      toast.success(t('wayback.toast.incrementalCreated', { count: n }))
       useAppStore.getState().setTab('history')
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === '__user_cancelled__') return
-      toast.error(`下载失败：${msg}`)
+      toast.error(t('wayback.toast.downloadFailed', { message: msg }))
     },
   })
 
@@ -619,8 +626,8 @@ export function WaybackPage() {
 
       <PanelSection
         icon={History}
-        title="Esri Wayback 历史影像"
-        description="按时间轴访问 Esri 全球历史影像"
+        title={t('wayback.panelTitle')}
+        description={t('wayback.panelDescription')}
         dataTour="wayback-section"
         action={
           <Button
@@ -628,7 +635,7 @@ export function WaybackPage() {
             size="icon"
             variant="ghost"
             className="size-7"
-            title="刷新版本列表"
+            title={t('wayback.refreshVersions')}
             onClick={() => versionsQuery.refetch()}
             disabled={versionsQuery.isFetching}
           >
@@ -643,11 +650,11 @@ export function WaybackPage() {
         {/* 版本下拉 */}
         <div className="space-y-1.5">
           <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-            影像日期
+            {t('wayback.imageryDate')}
           </Label>
           <Select value={versionId} onValueChange={setVersionId}>
             <SelectTrigger>
-              <SelectValue placeholder={versionsQuery.isLoading ? '加载中...' : '选择日期'} />
+              <SelectValue placeholder={versionsQuery.isLoading ? t('common.loading') : t('wayback.selectDate')} />
             </SelectTrigger>
             <SelectContent>
               {sortedVersions.map((v) => (
@@ -662,10 +669,10 @@ export function WaybackPage() {
         {/* 缩放级别（任意多选 chip） */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <Label className="text-xs">缩放级别（任意多选）</Label>
+            <Label className="text-xs">{t('wayback.zoom.title')}</Label>
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-muted-foreground">
-                已选 {sortedLevels.length} 级
+                {t('wayback.zoom.selected', { count: sortedLevels.length })}
                 {sortedLevels.length > 0 ? ` · ${zLabel}` : ''}
               </span>
               <Button
@@ -675,14 +682,14 @@ export function WaybackPage() {
                 className="h-7 px-2 text-xs"
                 onClick={() => probeMutation.mutate()}
                 disabled={probeMutation.isPending}
-                title="探测当前选区可达的最大 zoom"
+                title={t('wayback.zoom.probeTitle')}
               >
                 {probeMutation.isPending ? (
                   <Loader2 className="size-3 animate-spin" />
                 ) : (
                   <>
                     <Search className="size-3" />
-                    <span className="ml-1">探测</span>
+                    <span className="ml-1">{t('wayback.zoom.probe')}</span>
                   </>
                 )}
               </Button>
@@ -755,11 +762,11 @@ export function WaybackPage() {
               className="rounded border px-2 py-0.5 hover:bg-muted text-muted-foreground"
               onClick={() => setZoomLevels([13])}
             >
-              重置(z13)
+              {t('wayback.zoom.reset')}
             </button>
           </div>
           <p className="text-xs text-muted-foreground">
-            点击数字勾选/取消，可任意离散组合（如 z10、z15、z18 同时下载）。多级别会按 z&lt;N&gt; 子目录分级保存。
+            {t('wayback.zoom.hint')}
           </p>
         </div>
 
@@ -769,19 +776,19 @@ export function WaybackPage() {
             {estimating ? (
               <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                 <Loader2 className="size-3 animate-spin" />
-                估算中…
+                {t('wayback.estimate.estimating')}
               </span>
             ) : estimate ? (
               <>
-                预计下载{' '}
-                <strong>{estimate.tile_count.toLocaleString()}</strong> 个瓦片
-                {' · '}输出约{' '}
+                {t('wayback.estimate.expected')}{' '}
+                <strong>{t('wayback.estimate.tiles', { count: estimate.tile_count.toLocaleString(i18n.resolvedLanguage) })}</strong>
+                {' · '}{t('wayback.estimate.output')}{' '}
                 <strong>
                   {formatBytes(
                     estimate.estimated_output_mb ?? estimate.raw_size_mb ?? estimate.estimated_size_mb,
                   )}
                 </strong>
-                {' · '}流量约{' '}
+                {' · '}{t('wayback.estimate.traffic')}{' '}
                 <span className="text-muted-foreground">
                   {formatBytes(estimate.tile_download_mb ?? estimate.estimated_size_mb)}
                 </span>
@@ -792,7 +799,7 @@ export function WaybackPage() {
                 )}
               </>
             ) : (
-              <span className="text-muted-foreground">等待估算…</span>
+              <span className="text-muted-foreground">{t('wayback.estimate.waiting')}</span>
             )}
           </StatCard>
         )}
@@ -800,7 +807,7 @@ export function WaybackPage() {
         {/* 输出参数 */}
         <div className="grid grid-cols-2 gap-2">
           <div className="space-y-1.5">
-            <Label className="text-xs">输出格式</Label>
+            <Label className="text-xs">{t('wayback.outputFormat')}</Label>
             <Select value={format} onValueChange={setFormat}>
               <SelectTrigger className="h-8 text-xs">
                 <SelectValue />
@@ -824,7 +831,13 @@ export function WaybackPage() {
         </div>
 
         {format === 'geotiff' && (
-          <BuildPyramidToggle checked={buildPyramid} onChange={setBuildPyramid} />
+          <div className="space-y-2">
+            <BuildPyramidToggle checked={buildPyramid} onChange={setBuildPyramid} />
+            <GeoTiffSidecarToggle
+              checked={generateSidecars}
+              onChange={setGenerateSidecars}
+            />
+          </div>
         )}
 
         {supportsSelectionCrop && (
@@ -838,22 +851,23 @@ export function WaybackPage() {
 
         <div className="space-y-1.5">
           <Label className="text-xs">
-            任务名称 <span className="text-muted-foreground">(可选)</span>
+            {t('wayback.taskName')}{' '}
+            <span className="text-muted-foreground">({t('common.optional')})</span>
           </Label>
           <Input
             value={taskName}
             onChange={(e) => setTaskName(e.target.value)}
             placeholder={
               selectedVersion
-                ? `留空则自动生成，例如 Wayback ${selectedVersion.date} ${zLabel}`
-                : '留空则自动生成'
+                ? t('wayback.taskNameExample', { date: selectedVersion.date, zoom: zLabel })
+                : t('wayback.taskNameAuto')
             }
             className="h-8 text-xs"
           />
         </div>
 
         <div className="space-y-1.5">
-          <Label className="text-xs">保存目录</Label>
+          <Label className="text-xs">{t('wayback.saveDirectory')}</Label>
           <div className="flex gap-1.5">
             <Input
               value={currentOutputPath}
@@ -866,7 +880,7 @@ export function WaybackPage() {
               variant="outline"
               size="icon"
               className="size-8 shrink-0"
-              title="选择保存目录"
+              title={t('wayback.directory.generic')}
               onClick={() => void pickOutputPath()}
             >
               <FolderOpen className="size-3.5" />
@@ -874,8 +888,8 @@ export function WaybackPage() {
           </div>
           <p className="text-[11px] text-muted-foreground">
             {wbMode === 'single'
-              ? '单个版本会在该目录下自动生成文件名；也可手动输入完整文件路径。'
-              : '批量/增量会在该目录下按日期生成多个文件，避免互相覆盖。'}
+              ? t('wayback.directory.singleHint')
+              : t('wayback.directory.multipleHint')}
           </p>
         </div>
 
@@ -883,9 +897,9 @@ export function WaybackPage() {
 
         <Tabs value={wbMode} onValueChange={(v) => setWbMode(v as WbMode)}>
           <TabsList className="grid h-8 w-full grid-cols-3" data-tour="wayback-mode-tabs">
-            <TabsTrigger value="single" className="text-xs">单个</TabsTrigger>
-            <TabsTrigger value="batch" className="text-xs">批量</TabsTrigger>
-            <TabsTrigger value="incremental" className="text-xs">增量</TabsTrigger>
+            <TabsTrigger value="single" className="text-xs">{t('wayback.mode.single')}</TabsTrigger>
+            <TabsTrigger value="batch" className="text-xs">{t('wayback.mode.batch')}</TabsTrigger>
+            <TabsTrigger value="incremental" className="text-xs">{t('wayback.mode.incremental')}</TabsTrigger>
           </TabsList>
 
           {/* 单个下载 */}
@@ -902,7 +916,7 @@ export function WaybackPage() {
               ) : (
                 <Download className="mr-1 size-3.5" />
               )}
-              下载历史影像
+              {t('wayback.downloadImagery')}
             </Button>
           </TabsContent>
 
@@ -915,7 +929,7 @@ export function WaybackPage() {
                 className="h-7 text-xs"
                 onClick={() => setBatchSelected(new Set(sortedVersions.map((v) => v.id)))}
               >
-                全选
+                {t('wayback.selectAll')}
               </Button>
               <Button
                 size="sm"
@@ -923,9 +937,9 @@ export function WaybackPage() {
                 className="h-7 text-xs"
                 onClick={() => setBatchSelected(new Set())}
               >
-                清空
+                {t('wayback.clear')}
               </Button>
-              <span className="ml-auto text-muted-foreground">已选 {batchSelected.size}</span>
+              <span className="ml-auto text-muted-foreground">{t('wayback.selected', { count: batchSelected.size })}</span>
             </div>
             <div className="max-h-48 space-y-0.5 overflow-y-auto rounded border bg-background/50 p-2 text-xs">
               {sortedVersions.map((v) => (
@@ -957,22 +971,22 @@ export function WaybackPage() {
               ) : (
                 <Download className="mr-1 size-3.5" />
               )}
-              批量下载选中版本
+              {t('wayback.batchDownload')}
             </Button>
           </TabsContent>
 
           {/* 增量下载 */}
           <TabsContent value="incremental" className="mt-3 space-y-2">
             <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 text-xs">
-              <Label className="whitespace-nowrap text-xs">扫描模式</Label>
+              <Label className="whitespace-nowrap text-xs">{t('wayback.scan.mode')}</Label>
               <Select value={scanMode} onValueChange={(v) => setScanMode(v as 'fast' | 'fine' | 'official')}>
                 <SelectTrigger className="h-7 w-full text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="official">极速（ESRI 官方版）</SelectItem>
-                  <SelectItem value="fast">fast（AOI 全面）</SelectItem>
-                  <SelectItem value="fine">fine（多层准确）</SelectItem>
+                  <SelectItem value="official">{t('wayback.scan.official')}</SelectItem>
+                  <SelectItem value="fast">{t('wayback.scan.fast')}</SelectItem>
+                  <SelectItem value="fine">{t('wayback.scan.fine')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -990,10 +1004,10 @@ export function WaybackPage() {
                   <Search className="mr-1 size-3" />
                 )}
                 {scanMutation.isPending
-                  ? '停止扫描'
+                  ? t('wayback.scan.stop')
                   : scanReleases.length > 0
-                    ? '重新扫描'
-                    : '扫描影像清单'}
+                    ? t('wayback.scan.rescan')
+                    : t('wayback.scan.start')}
               </Button>
               <Button
                 size="sm"
@@ -1001,25 +1015,25 @@ export function WaybackPage() {
                 className="h-7 min-w-0 text-xs"
                 onClick={() => scanMutation.mutate({ forceRefresh: true })}
                 disabled={scanMutation.isPending || !bounds}
-                title="跳过本地缓存，强制向 ESRI 服务器重新扫描"
+                title={t('wayback.scan.forceRefreshTitle')}
               >
                 <RefreshCw className="mr-1 size-3" />
-                强制刷新
+                {t('wayback.scan.forceRefresh')}
               </Button>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <Label className="text-xs">时间范围</Label>
+              <Label className="text-xs">{t('wayback.scan.dateRange')}</Label>
               <DatePicker
                 value={releaseDateFrom}
                 onChange={setReleaseDateFrom}
-                placeholder="起始日期"
+                placeholder={t('wayback.scan.startDate')}
                 maxDate={releaseDateTo || undefined}
               />
               <span className="text-muted-foreground">~</span>
               <DatePicker
                 value={releaseDateTo}
                 onChange={setReleaseDateTo}
-                placeholder="截止日期"
+                placeholder={t('wayback.scan.endDate')}
                 minDate={releaseDateFrom || undefined}
               />
             </div>
@@ -1045,7 +1059,7 @@ export function WaybackPage() {
                   />
                 </div>
                 <div className="text-muted-foreground">
-                  已发现 {scanProgress.footprints} 个 footprint
+                  {t('wayback.scan.footprints', { count: scanProgress.footprints })}
                 </div>
               </div>
             )}
@@ -1053,48 +1067,45 @@ export function WaybackPage() {
             {scanReleases.length > 0 && (
               <>
                 <div className="rounded border bg-muted/20 p-2 text-xs">
-                  扫描了 <strong>{scanReleasesScanned}</strong> 个 release，区域内有数据{' '}
-                  <strong>{scanReleases.length}</strong> 个
+                  {t('wayback.scan.summary', { scanned: scanReleasesScanned, found: scanReleases.length })}
                 </div>
 
                 <details className="rounded border bg-muted/10 px-2 py-1 text-xs">
                   <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
-                    字段含义说明
+                    {t('wayback.details.title')}
                   </summary>
                   <div className="mt-2 space-y-1.5 text-muted-foreground">
                     <div>
-                      <span className="font-medium text-foreground">主导日期</span>
-                      ：该 release 在 AOI 内出现频率最高的影像拍摄日期（来自元数据 SRC_DATE2 字段）。
+                      <span className="font-medium text-foreground">{t('wayback.details.dominantDate')}</span>
+                      {': '}{t('wayback.details.dominantDateDescription')}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">数据源 / 分辨率</span>
-                      ：主导日期对应栅格的来源（如 Vivid Advanced、Maxar）和空间分辨率（米/像素）。
+                      <span className="font-medium text-foreground">{t('wayback.details.sourceResolution')}</span>
+                      {': '}{t('wayback.details.sourceResolutionDescription')}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">release</span>
-                      ：Wayback 发布日，可能与拍摄日期相差数月～数年（Esri 入库延迟）。
+                      <span className="font-medium text-foreground">{t('wayback.details.release')}</span>
+                      {': '}{t('wayback.details.releaseDescription')}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">主导 %</span>
-                      ：主导日期 footprint 面积 / 该 release 在 AOI 内全部 footprint 面积。值越接近 100% 表示 AOI 内基本是同一天的影像。
+                      <span className="font-medium text-foreground">{t('wayback.details.dominantRatio')}</span>
+                      {': '}{t('wayback.details.dominantRatioDescription')}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">覆盖 %</span>
-                      ：该 release 在 AOI 内 footprint 合计 / AOI 总面积。100% 表示该 release 完整覆盖你的范围。
+                      <span className="font-medium text-foreground">{t('wayback.details.coverageRatio')}</span>
+                      {': '}{t('wayback.details.coverageRatioDescription')}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">共 N 个日期</span>
-                      ：该 release 在 AOI 内包含多个不同拍摄日的影像（拼接图），可在下载后按需裁剪。
+                      <span className="font-medium text-foreground">{t('wayback.details.dateCount')}</span>
+                      {': '}{t('wayback.details.dateCountDescription')}
                     </div>
                     <div>
-                      <span className="font-medium text-foreground">圆点颜色</span>
-                      ：绿=Vivid 系列、蓝=Maxar 系列、灰=其他。
+                      <span className="font-medium text-foreground">{t('wayback.details.dotColor')}</span>
+                      {': '}{t('wayback.details.dotColorDescription')}
                     </div>
                     {scanMode === 'official' && (
                       <div className="rounded border border-amber-500/40 bg-amber-500/10 p-1.5 text-foreground">
-                        当前为「极速（ESRI 官方版）」模式，仅探测 AOI 中心 1 个瓦片，
-                        <span className="font-medium">主导 % 与覆盖 % 退化为二值（≈ 0% 或 ≈ 100%）</span>
-                        ，对应官方「Only versions with local changes」逻辑。如需准确比例请改用 fast/fine 模式。
+                        {t('wayback.details.officialWarning')}
                       </div>
                     )}
                   </div>
@@ -1102,7 +1113,7 @@ export function WaybackPage() {
 
                 <div className="space-y-1.5 rounded border bg-background/50 p-2 text-xs">
                   <div className="flex items-center gap-2">
-                    <Label className="w-20 text-xs">覆盖率 ≥</Label>
+                    <Label className="w-20 text-xs">{t('wayback.filters.coverage')}</Label>
                     <Input
                       type="number"
                       min={0}
@@ -1114,7 +1125,7 @@ export function WaybackPage() {
                     <span>%</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Label className="w-20 text-xs">主导日期 ≥</Label>
+                    <Label className="w-20 text-xs">{t('wayback.filters.dominantDate')}</Label>
                     <Input
                       type="number"
                       min={0}
@@ -1132,7 +1143,7 @@ export function WaybackPage() {
                       onChange={(e) => setOnlyLatestPerYear(e.target.checked)}
                       className="size-3.5"
                     />
-                    每年只保留最新 release
+                    {t('wayback.filters.latestPerYear')}
                   </label>
                   <label className="flex items-center gap-2">
                     <input
@@ -1141,7 +1152,7 @@ export function WaybackPage() {
                       onChange={(e) => setHideUnchanged(e.target.checked)}
                       className="size-3.5"
                     />
-                    隐藏无变化版本
+                    {t('wayback.filters.hideUnchanged')}
                   </label>
                 </div>
 
@@ -1154,7 +1165,7 @@ export function WaybackPage() {
                       setIncSelected(new Set(filteredReleases.map((r) => r.release_id)))
                     }
                   >
-                    全选
+                    {t('wayback.selectAll')}
                   </Button>
                   <Button
                     size="sm"
@@ -1162,16 +1173,16 @@ export function WaybackPage() {
                     className="h-7 text-xs"
                     onClick={() => setIncSelected(new Set())}
                   >
-                    清空
+                    {t('wayback.clear')}
                   </Button>
                   <span className="ml-auto text-muted-foreground">
-                    {filteredReleases.length} 个 release · 已选 {incSelected.size}
+                    {t('wayback.releases.summary', { count: filteredReleases.length, selected: incSelected.size })}
                   </span>
                 </div>
 
                 <div className="max-h-64 space-y-0.5 overflow-y-auto rounded border bg-background/50 p-2 text-xs">
                   {filteredReleases.length === 0 ? (
-                    <div className="py-3 text-center text-muted-foreground">无符合条件的 release</div>
+                    <div className="py-3 text-center text-muted-foreground">{t('wayback.releases.empty')}</div>
                   ) : (
                     filteredReleases.map((r, idx) => {
                       const cov = Math.round((r.coverage_ratio ?? 0) * 100)
@@ -1204,16 +1215,16 @@ export function WaybackPage() {
                             <span className="font-medium">{r.dominant_capture_date}</span>
                             <span className="text-muted-foreground">
                               {' · '}
-                              {r.source_name || '未知源'} ·{' '}
+                              {r.source_name || t('wayback.releases.unknownSource')} ·{' '}
                               {r.resolution_m > 0 ? `${r.resolution_m.toFixed(2)}m` : '?'}
                             </span>
                             <div className="text-muted-foreground">
-                              release {r.release_date} · 主导 {dom}%
-                              {r.captures.length > 1 && ` · 共 ${r.captures.length} 个日期`}
+                              {t('wayback.releases.metadata', { date: r.release_date, ratio: dom })}
+                              {r.captures.length > 1 && t('wayback.releases.dateCount', { count: r.captures.length })}
                             </div>
                           </span>
                           <span className="shrink-0 text-muted-foreground">
-                            {isUnchanged ? '无新影像' : `区域覆盖 ${cov}%`}
+                            {isUnchanged ? t('wayback.releases.unchanged') : t('wayback.releases.coverage', { ratio: cov })}
                           </span>
                         </label>
                       )
@@ -1234,7 +1245,7 @@ export function WaybackPage() {
                   ) : (
                     <Download className="mr-1 size-3.5" />
                   )}
-                  下载选中的 release
+                  {t('wayback.releases.download')}
                 </Button>
               </>
             )}

@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from 'react'
 import { Controller, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Download, FolderOpen, Info, Loader2, Layers, SlidersHorizontal } from 'lucide-react'
+import { AlertTriangle, Download, ExternalLink, FolderOpen, Info, Loader2, Layers, SlidersHorizontal } from 'lucide-react'
 import { ask as askDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
 import { z } from 'zod'
+import type { TFunction } from 'i18next'
+import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,6 +25,7 @@ import { createDownloadTask, estimateDownload, probeTile } from '@/features/down
 import { buildSelectionCropPolygon } from '@/features/download/crop-utils'
 import {
   BuildPyramidToggle,
+  GeoTiffSidecarToggle,
   SelectionCropToggle,
   TiffCompressionSelect,
 } from '@/features/download/output-controls'
@@ -44,30 +47,30 @@ import { StatCard } from '@/components/layout/stat-card'
 import { PanelSection } from '@/components/layout/panel-section'
 
 const FORMAT_OPTIONS = [
-  { value: 'geotiff', label: 'GeoTIFF (.tif)' },
-  { value: 'png', label: 'PNG (.png)' },
-  { value: 'jpeg', label: 'JPEG (.jpg)' },
-  { value: 'tiles', label: '原始瓦片目录' },
-  { value: 'mbtiles', label: 'MBTiles (.mbtiles)' },
-  { value: 'gpkg', label: 'GeoPackage (.gpkg)' },
+  { value: 'geotiff', labelKey: 'download.formats.geotiff' },
+  { value: 'png', labelKey: 'download.formats.png' },
+  { value: 'jpeg', labelKey: 'download.formats.jpeg' },
+  { value: 'tiles', labelKey: 'download.formats.tiles' },
+  { value: 'mbtiles', labelKey: 'download.formats.mbtiles' },
+  { value: 'gpkg', labelKey: 'download.formats.gpkg' },
 ] as const
 
 const MVT_FORMAT_OPTIONS = [
-  { value: 'pbf', label: 'PBF 瓦片目录 ({z}/{x}/{y}.pbf)' },
-  { value: 'mbtiles', label: 'MBTiles (.mbtiles，format=pbf)' },
+  { value: 'pbf', labelKey: 'download.formats.pbf' },
+  { value: 'mbtiles', labelKey: 'download.formats.mvtMbtiles' },
 ] as const
 
-function zoomLevelLabel(z: number): string {
-  if (z <= 3) return '全球'
-  if (z <= 5) return '大洲'
-  if (z <= 7) return '国家'
-  if (z <= 9) return '省域'
-  if (z <= 11) return '城市'
-  if (z <= 13) return '区县'
-  if (z <= 15) return '街道'
-  if (z <= 17) return '建筑'
-  if (z <= 19) return '细节'
-  return '超清'
+function zoomLevelKey(z: number): string {
+  if (z <= 3) return 'download.zoom.levels.global'
+  if (z <= 5) return 'download.zoom.levels.continent'
+  if (z <= 7) return 'download.zoom.levels.country'
+  if (z <= 9) return 'download.zoom.levels.province'
+  if (z <= 11) return 'download.zoom.levels.city'
+  if (z <= 13) return 'download.zoom.levels.district'
+  if (z <= 15) return 'download.zoom.levels.street'
+  if (z <= 17) return 'download.zoom.levels.building'
+  if (z <= 19) return 'download.zoom.levels.detail'
+  return 'download.zoom.levels.ultra'
 }
 
 // GCJ-02 偏移图源（中国区域）
@@ -79,20 +82,7 @@ function isDemSource(key: string): boolean {
 }
 
 // DEM 数据集元信息：原始分辨率 / 覆盖范围 / 编码格式。仅做 UI 提示。
-type DemMeta = {
-  nativeResolution: string
-  coverage: string
-  encoding: string
-}
-const DEM_META: Record<string, DemMeta> = {
-  dem_terrarium: {
-    // AWS Terrain Tiles 拼合自多源：NASADEM / SRTM 全球 30 m，
-    // 高纬度走 ArcticDEM / REMA 可达 2 m，部分国家有 10 m 公开 DEM
-    nativeResolution: '全球约 30 m（高纬度可至 2 m，部分区域 10 m）',
-    coverage: '全球，海域不覆盖',
-    encoding: 'Terrarium PNG（R/G/B 三通道编码高程，米为单位）',
-  },
-}
+const DEM_META_SOURCES = new Set(['dem_terrarium'])
 
 // 给定 zoom 估算 Web Mercator 在赤道处的像素地面分辨率（米/像素）
 function metersPerPixelAtEquator(z: number): number {
@@ -117,19 +107,20 @@ function estimateAreaKm2(b: MapBounds): number {
   return km
 }
 
-const downloadSchema = z.object({
-  source: z.string().min(1, '请选择图源'),
-  zoom_levels: z.array(z.number().int().min(1).max(22)).min(1, '请至少勾选一个缩放级别'),
+const createDownloadSchema = (t: TFunction) => z.object({
+  source: z.string().min(1, t('download.validation.source')),
+  zoom_levels: z.array(z.number().int().min(1).max(22)).min(1, t('download.validation.zoom')),
   format: z.enum(['geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf']),
   compression: z.enum(['none', 'lzw', 'deflate']),
   build_pyramid: z.boolean(),
+  generate_sidecars: z.boolean(),
   overlay_sources: z.array(z.string()),
   concurrency: z.number().int().min(1).max(100),
-  save_path: z.string().min(1, '请填写保存路径'),
+  save_path: z.string().min(1, t('download.validation.savePath')),
   task_name: z.string().optional(),
 })
 
-type DownloadFormValues = z.infer<typeof downloadSchema>
+type DownloadFormValues = z.infer<ReturnType<typeof createDownloadSchema>>
 
 const DEFAULT_VALUES: DownloadFormValues = {
   source: '',
@@ -137,6 +128,7 @@ const DEFAULT_VALUES: DownloadFormValues = {
   format: 'geotiff',
   compression: 'lzw',
   build_pyramid: false,
+  generate_sidecars: false,
   overlay_sources: [],
   concurrency: 30,
   save_path: '',
@@ -212,6 +204,7 @@ function resolveSavePath(
 }
 
 function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
+  const { t } = useTranslation()
   const bounds = useSelectionStore((s) => s.bounds)
   const polygon = useSelectionStore((s) => s.polygon)
   const setBoundsFromInputs = useSelectionStore((s) => s.setBoundsFromInputs)
@@ -249,17 +242,17 @@ function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
     <section className="space-y-2">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          手动四至 (WGS-84)
+          {t('download.bounds.title')}
         </h3>
         {polygon && (
           <Badge variant="outline" className="text-xs">
-            多边形 {polygon[0]?.length ?? 0} 点
+            {t('download.bounds.polygonPoints', { count: polygon[0]?.length ?? 0 })}
           </Badge>
         )}
       </div>
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <Label htmlFor="b-north" className="text-xs">北 N</Label>
+          <Label htmlFor="b-north" className="text-xs">{t('download.bounds.north')}</Label>
           <Input
             id="b-north"
             type="number"
@@ -269,7 +262,7 @@ function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="b-south" className="text-xs">南 S</Label>
+          <Label htmlFor="b-south" className="text-xs">{t('download.bounds.south')}</Label>
           <Input
             id="b-south"
             type="number"
@@ -279,7 +272,7 @@ function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="b-west" className="text-xs">西 W</Label>
+          <Label htmlFor="b-west" className="text-xs">{t('download.bounds.west')}</Label>
           <Input
             id="b-west"
             type="number"
@@ -289,7 +282,7 @@ function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="b-east" className="text-xs">东 E</Label>
+          <Label htmlFor="b-east" className="text-xs">{t('download.bounds.east')}</Label>
           <Input
             id="b-east"
             type="number"
@@ -300,13 +293,14 @@ function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
         </div>
       </div>
       {showError && bounds && !valid && (
-        <p className="text-xs text-destructive">范围无效：N 必须大于 S，E 必须大于 W</p>
+        <p className="text-xs text-destructive">{t('download.bounds.invalid')}</p>
       )}
     </section>
   )
 }
 
 export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | 'mvt' } = {}) {
+  const { t, i18n } = useTranslation()
   const isDemMode = mode === 'dem'
   const isMvtMode = mode === 'mvt'
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
@@ -348,6 +342,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       format: fmt,
       compression: persisted.compression,
       build_pyramid: persisted.buildPyramid,
+      generate_sidecars: persisted.generateSidecars,
       concurrency:
         typeof persisted.concurrency === 'number'
           ? Math.min(100, Math.max(1, persisted.concurrency))
@@ -365,6 +360,8 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     // mode 是 prop，组件 mount 时确定，不会在生命周期中变化
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const downloadSchema = useMemo(() => createDownloadSchema(t), [t])
 
   const form = useForm<DownloadFormValues>({
     resolver: zodResolver(downloadSchema),
@@ -435,6 +432,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     }
     setValue('compression', persistedParams.compression)
     setValue('build_pyramid', persistedParams.buildPyramid)
+    setValue('generate_sidecars', persistedParams.generateSidecars)
     setCropToShape(persistedParams.cropToShape)
     // save_path 仅在 useForm defaultValues 从 store 恢复一次，这里不覆盖。
     if (isDemMode) {
@@ -460,6 +458,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   const zoomMax = sortedLevels[sortedLevels.length - 1] ?? zoom
   const compression = useWatch({ control, name: 'compression' })
   const buildPyramid = useWatch({ control, name: 'build_pyramid' })
+  const generateSidecars = useWatch({ control, name: 'generate_sidecars' })
   const overlaySources = (useWatch({ control, name: 'overlay_sources' }) ?? []) as string[]
   const concurrency = useWatch({ control, name: 'concurrency' })
 
@@ -472,7 +471,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   const submitMutation = useMutation({
     mutationFn: async (values: DownloadFormValues) => {
       const { bounds, polygon } = useSelectionStore.getState()
-      if (!bounds) throw new Error('请先在地图上绘制选区')
+      if (!bounds) throw new Error(t('download.validation.bounds'))
       const sourceMeta = sourcesQuery.data?.[values.source]
       const policyDecision = await requestOsmDownloadApproval(
         values.source,
@@ -508,29 +507,34 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             typeof probe.status_code === 'number' &&
             (probe.status_code < 200 || probe.status_code >= 300)
           const warning = requestFailed
-            ? `瓦片探测请求失败：${probe.message ?? `HTTP ${probe.status_code}`}`
-            : `探测发现该区域在 z${probeZoom} 可能无数据：${probe.message ?? '瓦片可能为空'}`
+            ? t('download.probe.requestFailed', {
+                message: probe.message ?? `HTTP ${probe.status_code}`,
+              })
+            : t('download.probe.empty', {
+                zoom: probeZoom,
+                message: probe.message ?? t('download.probe.emptyFallback'),
+              })
           const guidance = requestFailed
-            ? '请先检查 Token 权限、来源白名单和代理出口，再重试。'
-            : `该图源最高支持 z${maxZoom}，但部分区域实际覆盖可能低于此级别。\n建议降低缩放级别后重试。`
+            ? t('download.probe.requestGuidance')
+            : t('download.probe.coverageGuidance', { maxZoom })
           if (action === 'ask') {
             const proceed = await askDialog(
-              `${warning}\n\n${guidance}\n\n是否仍然继续下载？`,
-              { title: '瓦片探测警告', kind: 'warning' },
+              t('download.probe.continueQuestion', { warning, guidance }),
+              { title: t('download.probe.title'), kind: 'warning' },
             )
             if (!proceed) throw new Error('__user_cancelled__')
           } else if (action === 'cancel') {
-            toast.warning(`${warning}，已按设置停止创建任务`)
+            toast.warning(t('download.probe.stopped', { warning }))
             throw new Error('__user_cancelled__')
           } else {
-            toast.warning(`${warning}，已按设置继续下载`)
+            toast.warning(t('download.probe.continued', { warning }))
           }
         }
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e)
         if (m === '__user_cancelled__') throw e
         // 探测本身失败不阻断下载，仅提示
-        toast.warning(`瓦片探测失败：${m}`)
+        toast.warning(t('download.probe.failed', { message: m }))
       }
 
       const cropPolygon = buildSelectionCropPolygon(bounds, polygon, effectiveCropToShape)
@@ -568,6 +572,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         polygon: cropPolygon,
         compression: values.format === 'geotiff' ? values.compression : 'none',
         build_pyramid: values.format === 'geotiff' && values.build_pyramid,
+        generate_sidecars: values.format === 'geotiff' && values.generate_sidecars,
         overlay_sources:
           (values.overlay_sources && values.overlay_sources.length > 0 && !isMvtMode && !isDemMode && values.format !== 'pbf')
             ? values.overlay_sources.filter((id) => id && id !== values.source)
@@ -576,7 +581,10 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       return createDownloadTask(request, finalName, sourceMeta?.name ?? values.source)
     },
     onSuccess: (res) => {
-      toast.success(`任务已创建（${res.task_id.slice(0, 8)}），瓦片 ${res.tile_count}`)
+      toast.success(t('download.toast.created', {
+        id: res.task_id.slice(0, 8),
+        count: res.tile_count.toLocaleString(i18n.resolvedLanguage),
+      }))
       // 自动跳转到下载中心，刷新任务列表
       useAppStore.getState().setTab('history')
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
@@ -585,7 +593,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === '__user_cancelled__') return
-      toast.error(`创建任务失败：${msg}`)
+      toast.error(t('download.toast.createError', { message: msg }))
     },
   })
 
@@ -628,7 +636,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       const chosen = await openDialog({
         directory: true,
         multiple: false,
-        title: '选择保存目录',
+        title: t('download.output.chooseDirectory'),
         defaultPath: current || undefined,
       })
       if (chosen) {
@@ -636,7 +644,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      toast.error(`选择路径失败：${msg}`)
+      toast.error(t('download.toast.pathError', { message: msg }))
     }
   }
 
@@ -689,6 +697,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       format: format as OutputFormat,
       compression: compression as 'none' | 'lzw' | 'deflate',
       buildPyramid: !!buildPyramid,
+      generateSidecars: !!generateSidecars,
       cropToShape: effectiveCropToShape,
       concurrency,
     })
@@ -703,6 +712,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     format,
     compression,
     buildPyramid,
+    generateSidecars,
     effectiveCropToShape,
     concurrency,
   ])
@@ -732,14 +742,14 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             {bounds && (
               <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs">
                 <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <Info className="size-3.5" /> 选区面积
+                  <Info className="size-3.5" /> {t('download.area')}
                 </span>
                 <span className="font-mono">
                   <span className="font-semibold text-foreground">{areaKm2.toFixed(2)}</span>
                   <span className="ml-0.5 text-muted-foreground">km²</span>
                   {polygon && polygon.length > 0 && (
                     <span className="ml-2 text-muted-foreground">
-                      · {polygon[0]?.length ?? 0} 顶点
+                      {t('download.vertices', { count: polygon[0]?.length ?? 0 })}
                     </span>
                   )}
                 </span>
@@ -749,7 +759,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             {showGcj02 && (
               <div className="flex gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">
                 <AlertTriangle className="size-3.5 shrink-0" />
-                <span>该图源中国区域使用 GCJ-02 坐标系，与行政边界存在偏移</span>
+                <span>{t('download.gcjWarning')}</span>
               </div>
             )}
 
@@ -766,9 +776,16 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       />
 
       <form className="space-y-3">
-        <PanelSection icon={Layers} title="图源 / 缩放级别" description="选择瓦片源与下载级别" dataTour="imagery-source-section">
+        <PanelSection
+          icon={Layers}
+          title={t('download.sections.source.title')}
+          description={t('download.sections.source.description')}
+          dataTour="imagery-source-section"
+        >
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">图源</Label>
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+              {t('download.source.label')}
+            </Label>
           <Select
             value={source}
             onValueChange={(v) => {
@@ -778,14 +795,16 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             disabled={sourcesLoading}
           >
             <SelectTrigger data-agent-target="imagery-source-select">
-              <SelectValue placeholder={sourcesLoading ? '加载中...' : '请选择'} />
+              <SelectValue
+                placeholder={sourcesLoading ? t('download.source.loading') : t('download.source.choose')}
+              />
             </SelectTrigger>
             <SelectContent>
               {sourceList.map((s) => {
                 const id = s.id ?? s.key ?? ''
                 return (
                   <SelectItem key={id} value={id}>
-                    {s.name}
+                    {t(`download.source.names.${id}`, { defaultValue: s.name })}
                   </SelectItem>
                 )
               })}
@@ -796,43 +815,64 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
 
         {isMvtMode && (
           <p className="text-xs text-muted-foreground">
-            MVT 数据已直接渲染到上方主地图（每个矢量图层随机配色）。仍可框选 bbox 进行下载。
+            {t('download.source.mvtHint')}
           </p>
         )}
 
-        {isDemMode && DEM_META[source] && (
+        {source.startsWith('tianditu_') && !settingsQuery.data?.tianditu_token?.trim() && (
+          <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs leading-5 text-amber-800 dark:text-amber-300">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span>
+              {t('download.source.tiandituPublicKeyNotice')}{' '}
+              <a
+                href="https://cloudcenter.tianditu.gov.cn/center/development/myApp"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 font-medium underline underline-offset-4"
+              >
+                {t('download.source.tiandituApply')}
+                <ExternalLink className="size-3" aria-hidden="true" />
+              </a>
+            </span>
+          </div>
+        )}
+
+        {isDemMode && DEM_META_SOURCES.has(source) && (
           <div className="rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 p-2 text-[11px] leading-relaxed text-muted-foreground space-y-0.5">
             <div>
-              <span className="text-foreground font-medium">原始分辨率</span>：{DEM_META[source].nativeResolution}
+              <span className="text-foreground font-medium">{t('download.dem.nativeResolution')}</span>
+              : {t('download.dem.nativeResolutionValue')}
             </div>
             <div>
-              <span className="text-foreground font-medium">覆盖范围</span>：{DEM_META[source].coverage}
+              <span className="text-foreground font-medium">{t('download.dem.coverage')}</span>
+              : {t('download.dem.coverageValue')}
             </div>
             <div>
-              <span className="text-foreground font-medium">编码格式</span>：{DEM_META[source].encoding}
+              <span className="text-foreground font-medium">{t('download.dem.encoding')}</span>
+              : {t('download.dem.encodingValue')}
             </div>
             {sortedLevels.length > 0 && (
               <div>
-                <span className="text-foreground font-medium">当前级别采样间距</span>
-                ：{sortedLevels.length === 1
-                  ? `z${sortedLevels[0]} ≈ ${formatMeters(metersPerPixelAtEquator(sortedLevels[0]))}/px (赤道)`
-                  : `z${sortedLevels[0]}~z${sortedLevels[sortedLevels.length - 1]} ≈ ${formatMeters(metersPerPixelAtEquator(sortedLevels[sortedLevels.length - 1]))} ~ ${formatMeters(metersPerPixelAtEquator(sortedLevels[0]))}/px (赤道)`}
+                <span className="text-foreground font-medium">{t('download.dem.sampling')}</span>
+                : {sortedLevels.length === 1
+                  ? `z${sortedLevels[0]} ≈ ${formatMeters(metersPerPixelAtEquator(sortedLevels[0]))}/px (${t('download.dem.equator')})`
+                  : `z${sortedLevels[0]}~z${sortedLevels[sortedLevels.length - 1]} ≈ ${formatMeters(metersPerPixelAtEquator(sortedLevels[sortedLevels.length - 1]))} ~ ${formatMeters(metersPerPixelAtEquator(sortedLevels[0]))}/px (${t('download.dem.equator')})`}
               </div>
             )}
             <div className="text-muted-foreground/70">
-              提示：高 zoom 仅是重采样切片，真实精度受限于原始 DEM 分辨率。中国大陆范围基本为 30 m。
+              {t('download.dem.hint')}
             </div>
           </div>
         )}
 
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <Label className="text-xs">缩放级别（任意多选）</Label>
+            <Label className="text-xs">{t('download.zoom.title')}</Label>
             <Badge variant="secondary" className="text-xs">
-              已选 {sortedLevels.length} 级
+              {t('download.zoom.selected', { count: sortedLevels.length })}
               {sortedLevels.length > 0
                 ? ` · ${sortedLevels.length === 1
-                    ? `z${sortedLevels[0]} (${zoomLevelLabel(sortedLevels[0])})`
+                    ? `z${sortedLevels[0]} (${t(zoomLevelKey(sortedLevels[0]))})`
                     : `z${sortedLevels[0]}~z${sortedLevels[sortedLevels.length - 1]}`}`
                 : ''}
             </Badge>
@@ -869,7 +909,10 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                               ? 'border-primary bg-primary text-primary-foreground'
                               : 'border-border bg-background text-foreground hover:bg-muted'
                           }`}
-                          title={`z${z} · ${zoomLevelLabel(z)}级`}
+                          title={t('download.zoom.levelTitle', {
+                            zoom: z,
+                            level: t(zoomLevelKey(z)),
+                          })}
                         >
                           {z}
                         </button>
@@ -880,7 +923,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                     <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted" onClick={() => selectRange(10, 14)}>z10~14</button>
                     <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted" onClick={() => selectRange(14, 18)}>z14~18</button>
                     <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted" onClick={() => selectRange(15, 19)}>z15~19</button>
-                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted text-muted-foreground" onClick={clear}>清空</button>
+                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted text-muted-foreground" onClick={clear}>{t('download.zoom.clear')}</button>
                   </div>
                 </div>
               )
@@ -889,7 +932,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
           {errors.zoom_levels && (
             <p className="text-xs text-destructive">{errors.zoom_levels.message as string}</p>
           )}
-          <p className="text-xs text-muted-foreground">点击数字勾选/取消，可任意离散组合（如 10、15、18 同时下载）。</p>
+          <p className="text-xs text-muted-foreground">{t('download.zoom.hint')}</p>
         </div>
 
         {/* 自动估算结果 — 紧跟缩放级别 */}
@@ -899,16 +942,19 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
               <>
                 <div className="grid grid-cols-2 gap-y-1">
                   <div>
-                    瓦片数：
+                    {t('download.estimate.tiles')}
                     <Badge variant="secondary" className="ml-1">
-                      {estimate.tile_count.toLocaleString()}
+                      {estimate.tile_count.toLocaleString(i18n.resolvedLanguage)}
                     </Badge>
                   </div>
                   <div>
-                    网格：{estimate.cols ?? '-'} × {estimate.rows ?? '-'}
+                    {t('download.estimate.grid', {
+                      cols: estimate.cols ?? '-',
+                      rows: estimate.rows ?? '-',
+                    })}
                   </div>
                   <div className="col-span-2">
-                    输出文件大小：
+                    {t('download.estimate.outputSize')}
                     <span className="font-semibold">
                       {formatBytes(
                         estimate.estimated_output_mb ?? estimate.raw_size_mb ?? estimate.estimated_size_mb,
@@ -916,12 +962,16 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                     </span>
                   </div>
                   <div className="col-span-2 text-muted-foreground">
-                    瓦片下载流量：
+                    {t('download.estimate.traffic')}
                     {formatBytes(estimate.tile_download_mb ?? estimate.estimated_size_mb)}
                   </div>
                   {format === 'geotiff' && (
                     <div className="col-span-2 text-[11px] text-muted-foreground/80">
-                      估算依据：裁剪 {effectiveCropToShape ? '开' : '关'} · 金字塔 {buildPyramid ? '开' : '关'} · 压缩 {compression ?? 'lzw'}
+                      {t('download.estimate.basis', {
+                        crop: t(effectiveCropToShape ? 'download.estimate.on' : 'download.estimate.off'),
+                        pyramid: t(buildPyramid ? 'download.estimate.on' : 'download.estimate.off'),
+                        compression: compression ?? 'lzw',
+                      })}
                     </div>
                   )}
                 </div>
@@ -937,20 +987,25 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                 {estimate.budget_check && estimate.budget_check.allowed === false && (
                   <div className="mt-1 flex gap-1.5 rounded border border-destructive/40 bg-destructive/10 p-1.5 text-destructive">
                     <AlertTriangle className="size-3.5 shrink-0" />
-                    <span>{estimate.budget_check.message ?? '内存预算不足'}</span>
+                    <span>{estimate.budget_check.message ?? t('download.estimate.insufficientMemory')}</span>
                   </div>
                 )}
               </>
             ) : (
-              <span className="text-muted-foreground">估算中…</span>
+              <span className="text-muted-foreground">{t('download.estimate.loading')}</span>
             )}
           </StatCard>
         )}
         </PanelSection>
 
-        <PanelSection icon={SlidersHorizontal} title="输出参数" description="格式 / 压缩 / 路径" dataTour="imagery-output-section">
+        <PanelSection
+          icon={SlidersHorizontal}
+          title={t('download.sections.output.title')}
+          description={t('download.sections.output.description')}
+          dataTour="imagery-output-section"
+        >
         <div className="space-y-1.5">
-          <Label className="text-xs">输出格式</Label>
+          <Label className="text-xs">{t('download.output.format')}</Label>
           <Select
             value={format}
             onValueChange={(v) =>
@@ -958,22 +1013,22 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             }
             disabled={isDemMode}
           >
-            <SelectTrigger title={isDemMode ? 'DEM 仅支持 GeoTIFF Float32 输出' : undefined}>
+            <SelectTrigger title={isDemMode ? t('download.dem.formatOnly') : undefined}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {(isMvtMode ? MVT_FORMAT_OPTIONS : FORMAT_OPTIONS).map((opt) => (
                 <SelectItem key={opt.value} value={opt.value} disabled={isDemMode && opt.value !== 'geotiff'}>
-                  {opt.label}
+                  {t(opt.labelKey)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           {isDemMode && (
-            <p className="text-xs text-muted-foreground">DEM 仅支持 GeoTIFF Float32 单波段输出</p>
+            <p className="text-xs text-muted-foreground">{t('download.dem.formatHint')}</p>
           )}
           {isMvtMode && (
-            <p className="text-xs text-muted-foreground">矢量瓦片不拼接/不重编码，PBF 原始字节原样保存</p>
+            <p className="text-xs text-muted-foreground">{t('download.output.mvtHint')}</p>
           )}
         </div>
 
@@ -986,6 +1041,16 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                 <TiffCompressionSelect
                   value={field.value as DownloadFormValues['compression']}
                   onChange={(v) => field.onChange(v)}
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="generate_sidecars"
+              render={({ field }) => (
+                <GeoTiffSidecarToggle
+                  checked={!!field.value}
+                  onChange={(checked) => field.onChange(checked)}
                 />
               )}
             />
@@ -1020,7 +1085,10 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
           }
           return (
             <div className="space-y-1.5">
-              <Label className="text-xs">叠加图层 <span className="text-muted-foreground">（注记/标签，按勾选顺序自下而上叠加）</span></Label>
+              <Label className="text-xs">
+                {t('download.output.overlays')}{' '}
+                <span className="text-muted-foreground">{t('download.output.overlaysHint')}</span>
+              </Label>
               <div className="rounded border bg-background/50 p-2 space-y-1">
                 {overlayCandidates.map((s) => {
                   const id = ((s.id as string) ?? s.key).toString()
@@ -1040,7 +1108,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
               </div>
               {overlaySources.length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  已选 {overlaySources.length} 层；下载时将额外拉取相同 z/x/y 瓦片并合成到主图（输出统一为 PNG 字节）
+                  {t('download.output.overlaysSelected', { count: overlaySources.length })}
                 </p>
               )}
             </div>
@@ -1049,11 +1117,12 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
 
         <div className="space-y-1.5">
           <Label htmlFor="task_name" className="text-xs">
-            任务名称 <span className="text-muted-foreground">(可选)</span>
+            {t('download.output.taskName')}{' '}
+            <span className="text-muted-foreground">{t('download.output.optional')}</span>
           </Label>
           <Input
             id="task_name"
-            placeholder="留空则自动生成，例如 天地图影像 z15"
+            placeholder={t('download.output.taskPlaceholder')}
             {...register('task_name')}
           />
           {errors.task_name && (
@@ -1071,7 +1140,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
 
         <div className="space-y-1.5">
           <Label htmlFor="save_path" className="text-xs">
-            保存目录
+            {t('download.output.saveDirectory')}
           </Label>
           <div className="flex gap-1.5">
             <Input
@@ -1084,7 +1153,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
               variant="outline"
               size="icon"
               className="size-9 shrink-0"
-              title="选择保存目录"
+              title={t('download.output.chooseDirectory')}
               onClick={pickSavePath}
             >
               <FolderOpen className="size-3.5" />
@@ -1094,7 +1163,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             <p className="text-xs text-destructive">{errors.save_path.message}</p>
           )}
           <p className="text-[11px] text-muted-foreground">
-            选择目录后会自动生成文件名；也可手动输入完整文件路径。
+            {t('download.output.saveHint')}
           </p>
         </div>
         </PanelSection>
@@ -1111,7 +1180,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             ) : (
               <Download className="mr-1.5 size-4" />
             )}
-            创建下载任务
+            {t('download.output.create')}
           </Button>
         </div>
       </form>

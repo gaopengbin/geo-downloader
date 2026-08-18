@@ -20,7 +20,3 @@ export function buildSelectionCropPolygon(
   if (polygon && polygon.length > 0) return polygon
   return boundsToCropPolygon(bounds)
 }
-
-export function selectionCropLabel(polygon: Polygon | null | undefined) {
-  return polygon && polygon.length > 0 ? '按多边形精确裁剪' : '按矩形范围裁剪'
-}

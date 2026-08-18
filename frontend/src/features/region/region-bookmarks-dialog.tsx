@@ -11,6 +11,8 @@ import {
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import type { TFunction } from 'i18next'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -33,16 +35,16 @@ import {
 
 const BOOKMARKS_QUERY_KEY = ['region-bookmarks'] as const
 
-function defaultBookmarkName() {
+function defaultBookmarkName(t: TFunction, locale: string) {
   const now = new Date()
-  const date = new Intl.DateTimeFormat('zh-CN', {
+  const date = new Intl.DateTimeFormat(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   }).format(now)
-  return `下载范围 ${date}`
+  return t('bookmarks.defaultName', { date })
 }
 
 function coordinateCount(bookmark: RegionBookmark) {
@@ -58,8 +60,10 @@ interface Props {
 }
 
 export function RegionBookmarksDialog({ onRestore }: Props) {
+  const { t, i18n } = useTranslation()
+  const locale = i18n.resolvedLanguage ?? i18n.language
   const [open, setOpen] = useState(false)
-  const [name, setName] = useState(defaultBookmarkName)
+  const [name, setName] = useState(() => defaultBookmarkName(t, locale))
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -78,10 +82,10 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
     onSuccess: async () => {
       void trackTelemetry('bookmark_action', { action: 'created' })
       await queryClient.invalidateQueries({ queryKey: BOOKMARKS_QUERY_KEY })
-      setName(defaultBookmarkName())
-      toast.success('范围书签已保存')
+      setName(defaultBookmarkName(t, locale))
+      toast.success(t('bookmarks.toast.saved'))
     },
-    onError: (error) => toast.error(`保存失败：${errorMessage(error)}`),
+    onError: (error) => toast.error(t('bookmarks.toast.saveError', { message: errorMessage(error) })),
   })
 
   const renameMutation = useMutation({
@@ -92,9 +96,9 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
       await queryClient.invalidateQueries({ queryKey: BOOKMARKS_QUERY_KEY })
       setEditingId(null)
       setEditingName('')
-      toast.success('书签已重命名')
+      toast.success(t('bookmarks.toast.renamed'))
     },
-    onError: (error) => toast.error(`重命名失败：${errorMessage(error)}`),
+    onError: (error) => toast.error(t('bookmarks.toast.renameError', { message: errorMessage(error) })),
   })
 
   const deleteMutation = useMutation({
@@ -103,9 +107,9 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
       void trackTelemetry('bookmark_action', { action: 'deleted' })
       await queryClient.invalidateQueries({ queryKey: BOOKMARKS_QUERY_KEY })
       setDeletingId(null)
-      toast.success('书签已删除')
+      toast.success(t('bookmarks.toast.deleted'))
     },
-    onError: (error) => toast.error(`删除失败：${errorMessage(error)}`),
+    onError: (error) => toast.error(t('bookmarks.toast.deleteError', { message: errorMessage(error) })),
   })
 
   const totalCoordinates = useMemo(
@@ -115,7 +119,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
 
   const handleSave = () => {
     if (!bounds) {
-      toast.info('请先选择下载范围')
+      toast.info(t('bookmarks.toast.chooseRange'))
       return
     }
     createMutation.mutate({ name, bounds, polygon })
@@ -143,9 +147,9 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
         variant="outline"
         size="icon"
         className="size-8"
-        title="下载范围书签"
+        title={t('bookmarks.title')}
         onClick={() => {
-          setName(defaultBookmarkName())
+          setName(defaultBookmarkName(t, locale))
           setOpen(true)
         }}
       >
@@ -155,9 +159,9 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent className="flex max-h-[80vh] max-w-lg flex-col">
           <DialogHeader>
-            <DialogTitle>下载范围书签</DialogTitle>
+            <DialogTitle>{t('bookmarks.title')}</DialogTitle>
             <DialogDescription>
-              保存当前选区，之后可一键恢复。书签仅保存在本机。
+              {t('bookmarks.description')}
             </DialogDescription>
           </DialogHeader>
 
@@ -165,7 +169,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
             <Input
               value={name}
               maxLength={80}
-              placeholder="输入书签名称"
+              placeholder={t('bookmarks.placeholder')}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && bounds && name.trim()) handleSave()
@@ -182,13 +186,13 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
               ) : (
                 <BookmarkPlus className="mr-1.5 size-4" />
               )}
-              保存当前范围
+              {t('bookmarks.save')}
             </Button>
           </div>
 
           {!bounds && (
             <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-              当前没有选区，仍可管理和恢复已有书签。
+              {t('bookmarks.noSelection')}
             </div>
           )}
 
@@ -199,7 +203,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
               </div>
             ) : bookmarksQuery.isError ? (
               <div className="p-4 text-center text-sm text-destructive">
-                加载失败：{errorMessage(bookmarksQuery.error)}
+                {t('bookmarks.loadError', { message: errorMessage(bookmarksQuery.error) })}
               </div>
             ) : bookmarksQuery.data?.length ? (
               <div className="divide-y">
@@ -228,7 +232,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
                             variant="outline"
                             size="icon"
                             className="size-9"
-                            title="确认重命名"
+                            title={t('bookmarks.renameConfirm')}
                             disabled={!editingName.trim() || renameMutation.isPending}
                             onClick={() =>
                               renameMutation.mutate({ id: bookmark.id, nextName: editingName })
@@ -245,7 +249,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
                             variant="ghost"
                             size="icon"
                             className="size-9"
-                            title="取消重命名"
+                            title={t('bookmarks.renameCancel')}
                             onClick={() => setEditingId(null)}
                           >
                             <X className="size-4" />
@@ -264,8 +268,11 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
                             <div className="truncate text-sm font-medium">{bookmark.name}</div>
                             <div className="mt-0.5 text-xs text-muted-foreground">
                               {bookmark.polygon?.length
-                                ? `${bookmark.polygon.length} 个环 · ${points.toLocaleString()} 个坐标点`
-                                : '矩形范围'}
+                                ? t('bookmarks.polygonSummary', {
+                                    rings: bookmark.polygon.length,
+                                    points: points.toLocaleString(locale),
+                                  })
+                                : t('bookmarks.boundsSummary')}
                             </div>
                           </button>
                           <Button
@@ -273,7 +280,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
                             variant="ghost"
                             size="icon"
                             className="size-8"
-                            title="恢复此范围"
+                            title={t('bookmarks.restore')}
                             onClick={() => {
                               onRestore(bookmark)
                               setOpen(false)
@@ -286,7 +293,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
                             variant="ghost"
                             size="icon"
                             className="size-8"
-                            title="重命名"
+                            title={t('bookmarks.rename')}
                             onClick={() => startRename(bookmark)}
                           >
                             <Pencil className="size-4" />
@@ -296,7 +303,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
                             variant={isDeleting ? 'destructive' : 'ghost'}
                             size="icon"
                             className="size-8"
-                            title={isDeleting ? '再次点击确认删除' : '删除'}
+                            title={t(isDeleting ? 'bookmarks.deleteConfirm' : 'bookmarks.delete')}
                             disabled={deleteMutation.isPending}
                             onClick={() => {
                               if (isDeleting) deleteMutation.mutate(bookmark.id)
@@ -316,9 +323,9 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
                       )}
                       {isDeleting && !isEditing && (
                         <div className="mt-2 flex items-center justify-end gap-2 text-xs text-destructive">
-                          再次点击删除按钮确认
+                          {t('bookmarks.deleteHint')}
                           <button type="button" className="underline" onClick={() => setDeletingId(null)}>
-                            取消
+                            {t('bookmarks.cancel')}
                           </button>
                         </div>
                       )}
@@ -329,15 +336,19 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
             ) : (
               <div className="flex h-28 flex-col items-center justify-center gap-2 text-muted-foreground">
                 <Bookmark className="size-5" />
-                <span className="text-sm">还没有保存的范围</span>
+                <span className="text-sm">{t('bookmarks.empty')}</span>
               </div>
             )}
           </div>
 
           {!!bookmarksQuery.data?.length && (
             <div className="text-right text-xs text-muted-foreground">
-              {bookmarksQuery.data.length} 个书签
-              {totalCoordinates > 0 ? ` · ${totalCoordinates.toLocaleString()} 个坐标点` : ''}
+              {t('bookmarks.total', { count: bookmarksQuery.data.length })}
+              {totalCoordinates > 0
+                ? t('bookmarks.coordinateTotal', {
+                    count: totalCoordinates.toLocaleString(locale),
+                  })
+                : ''}
             </div>
           )}
         </DialogContent>

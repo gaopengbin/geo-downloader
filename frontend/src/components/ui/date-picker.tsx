@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { format, parse, subYears } from 'date-fns'
 import { CalendarIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -25,13 +26,15 @@ const DEFAULT_MIN = '2014-02-20'
 export function DatePicker({
   value,
   onChange,
-  placeholder = '选择日期',
+  placeholder,
   className,
   minDate,
   maxDate,
   showPresets = true,
 }: DatePickerProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const resolvedPlaceholder = placeholder ?? t('datePicker.placeholder')
 
   const selected = value ? parse(value, 'yyyy-MM-dd', new Date()) : undefined
   const today = useMemo(() => new Date(), [])
@@ -65,7 +68,7 @@ export function DatePicker({
           )}
         >
           <CalendarIcon className="mr-1 size-3" />
-          {value || placeholder}
+          {value || resolvedPlaceholder}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">
@@ -81,7 +84,7 @@ export function DatePicker({
                 setOpen(false)
               }}
             >
-              今天
+              {t('datePicker.today')}
             </Button>
             <Button
               type="button"
@@ -93,7 +96,7 @@ export function DatePicker({
                 setOpen(false)
               }}
             >
-              一年前
+              {t('datePicker.oneYearAgo')}
             </Button>
             <Button
               type="button"
@@ -105,7 +108,7 @@ export function DatePicker({
                 setOpen(false)
               }}
             >
-              三年前
+              {t('datePicker.threeYearsAgo')}
             </Button>
             <Button
               type="button"
@@ -117,7 +120,7 @@ export function DatePicker({
                 setOpen(false)
               }}
             >
-              最早
+              {t('datePicker.earliest')}
             </Button>
             <Button
               type="button"
@@ -129,7 +132,7 @@ export function DatePicker({
                 setOpen(false)
               }}
             >
-              清除
+              {t('datePicker.clear')}
             </Button>
           </div>
         )}
@@ -147,4 +150,3 @@ export function DatePicker({
     </Popover>
   )
 }
-

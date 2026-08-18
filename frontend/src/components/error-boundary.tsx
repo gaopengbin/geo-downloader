@@ -3,6 +3,7 @@ import { Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { openAssistantWithContext } from '@/features/assistant/assistant-store'
+import { i18n } from '@/i18n'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -38,9 +39,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <div className="grid min-h-screen place-items-center bg-background p-6">
           <div className="w-full max-w-lg space-y-4 rounded-lg border bg-card p-6 shadow-sm">
             <div>
-              <h2 className="text-lg font-semibold text-destructive">界面渲染异常</h2>
+              <h2 className="text-lg font-semibold text-destructive">
+                {i18n.t('errorBoundary.title')}
+              </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                React 组件抛出未捕获错误，已阻止白屏。可点击下方按钮尝试恢复。
+                {i18n.t('errorBoundary.description')}
               </p>
             </div>
             <pre className="max-h-48 overflow-auto rounded bg-muted p-3 text-xs text-muted-foreground">
@@ -54,19 +57,19 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                     [
                       'GeoD interface render error',
                       `message: ${error.message}`,
-                      `stack: ${error.stack ?? 'unavailable'}`,
+                      `stack: ${error.stack ?? i18n.t('errorBoundary.unavailable')}`,
                     ].join('\n'),
-                    '界面出现渲染异常，请帮我分析可能原因和恢复步骤。',
+                    i18n.t('errorBoundary.assistantPrompt'),
                   )
                 }
               >
                 <Sparkles className="size-4" />
-                询问助手
+                {i18n.t('errorBoundary.askAssistant')}
               </Button>
               <Button variant="outline" onClick={() => window.location.reload()}>
-                重新加载
+                {i18n.t('errorBoundary.reload')}
               </Button>
-              <Button onClick={this.handleReset}>重置组件</Button>
+              <Button onClick={this.handleReset}>{i18n.t('errorBoundary.reset')}</Button>
             </div>
           </div>
         </div>

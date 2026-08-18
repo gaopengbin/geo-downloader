@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { ask as askDialog } from '@tauri-apps/plugin-dialog'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
   ChevronRight,
@@ -58,10 +59,10 @@ function formatDuration(secs?: number): string | null {
   return `${h}h ${m}m`
 }
 
-function formatDate(iso?: string): string {
+function formatDate(iso: string | undefined, locale: string): string {
   if (!iso) return '-'
   try {
-    return new Date(iso).toLocaleString('zh-CN', { hour12: false })
+    return new Date(iso).toLocaleString(locale, { hour12: false })
   } catch {
     return iso
   }
@@ -76,6 +77,7 @@ interface PyramidProgressPayload {
 const PAGE_SIZE = 50
 
 function HistoryLogPanel({ logFile }: { logFile: string }) {
+  const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const logQuery = useQuery({
     queryKey: ['history-log', logFile],
@@ -96,17 +98,17 @@ function HistoryLogPanel({ logFile }: { logFile: string }) {
       .join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      toast.success('日志已复制')
+      toast.success(t('tasks.logs.copied'))
     } catch {
-      toast.error('复制失败')
+      toast.error(t('tasks.logs.copyError'))
     }
-  }, [logs])
+  }, [logs, t])
 
   return (
     <div className="mt-2 rounded-md border bg-muted/30">
       <div className="flex items-center justify-between border-b px-2 py-1">
         <span className="text-xs text-muted-foreground">
-          日志 {logs ? `(${logs.length})` : ''}
+          {t('tasks.logs.title')} {logs ? `(${logs.length})` : ''}
         </span>
         <Button
           size="sm"
@@ -116,17 +118,19 @@ function HistoryLogPanel({ logFile }: { logFile: string }) {
           disabled={!logs || logs.length === 0}
         >
           <ClipboardCopy className="size-3" />
-          复制
+          {t('tasks.logs.copy')}
         </Button>
       </div>
       <div
         ref={scrollRef}
         className="max-h-48 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed"
       >
-        {error && <p className="text-destructive">读取日志失败：{error}</p>}
-        {!error && !logs && <p className="text-muted-foreground">加载中...</p>}
+        {error && (
+          <p className="text-destructive">{t('tasks.logs.readError', { message: error })}</p>
+        )}
+        {!error && !logs && <p className="text-muted-foreground">{t('history.loading')}</p>}
         {!error && logs && logs.length === 0 && (
-          <p className="text-muted-foreground">日志文件为空或已删除</p>
+          <p className="text-muted-foreground">{t('tasks.logs.missing')}</p>
         )}
         {!error &&
           logs?.map((l, i) => {
@@ -156,6 +160,7 @@ function HistoryCard({
   pyramidProgress?: PyramidProgressPayload
   onDeleted: () => void
 }) {
+  const { t, i18n } = useTranslation()
   const qc = useQueryClient()
   const [showLogs, setShowLogs] = useState(false)
   const id = String(record.id)
@@ -182,19 +187,19 @@ function HistoryCard({
       setMvtPreviewUrl(url)
       setMvtPreviewOpen(true)
     },
-    onError: (e) => toast.error(`启动预览服务失败：${String(e)}`),
+    onError: (e) => toast.error(t('history.toast.previewError', { message: String(e) })),
   })
 
   const openMutation = useMutation({
     mutationFn: () => openFileLocation(filePath),
-    onError: (e) => toast.error(`打开文件夹失败：${String(e)}`),
+    onError: (e) => toast.error(t('history.toast.openError', { message: String(e) })),
   })
   const deleteMutation = useMutation({
     mutationFn: async () => {
       const ok = await askDialog(
-        '确定删除这条记录及其关联日志？\n已下载的文件不会被删除。',
+        t('history.confirm.delete'),
         {
-          title: '删除记录和日志',
+          title: t('history.confirm.deleteTitle'),
           kind: 'warning',
         },
       )
@@ -204,29 +209,32 @@ function HistoryCard({
     },
     onSuccess: (changed) => {
       if (changed) {
-        toast.success('已删除记录及关联日志')
+        toast.success(t('history.toast.deleted'))
         onDeleted()
       }
     },
-    onError: (e) => toast.error(`删除失败：${String(e)}`),
+    onError: (e) => toast.error(t('history.toast.deleteError', { message: String(e) })),
   })
   const pyramidMutation = useMutation({
     mutationFn: () => buildPyramidForFile(id, filePath),
     onSuccess: () => {
-      toast.success('金字塔构建完成')
+      toast.success(t('history.toast.pyramidDone'))
       qc.invalidateQueries({ queryKey: ['download-history'] })
     },
-    onError: (e) => toast.error(`金字塔构建失败：${String(e)}`),
+    onError: (e) => toast.error(t('history.toast.pyramidError', { message: String(e) })),
   })
 
   const pyramidLabel = (() => {
     if (pyramidMutation.isPending) {
       if (pyramidProgress) {
-        return `金字塔 ${pyramidProgress.current + 1}/${pyramidProgress.total}`
+        return t('history.actions.pyramidProgress', {
+          current: pyramidProgress.current + 1,
+          total: pyramidProgress.total,
+        })
       }
-      return '构建中...'
+      return t('history.actions.building')
     }
-    return '构建金字塔'
+    return t('history.actions.buildPyramid')
   })()
 
   return (
@@ -236,7 +244,7 @@ function HistoryCard({
           {record.name}
         </span>
         <Badge variant={isFailed ? 'destructive' : 'default'} className="text-xs">
-          {isFailed ? '失败' : '完成'}
+          {isFailed ? t('history.status.failed') : t('history.status.completed')}
         </Badge>
         {hasPyramid && (
           <Badge variant="outline" className="text-xs font-normal">
@@ -245,7 +253,7 @@ function HistoryCard({
         )}
         {record.log_truncated && (
           <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-            日志已截断
+            {t('history.labels.truncated')}
           </Badge>
         )}
         {record.source_name && (
@@ -263,15 +271,17 @@ function HistoryCard({
       <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
         {typeof record.tile_count === 'number' && record.tile_count > 0 && (
           <span>
-            {record.tile_count.toLocaleString()}{' '}
-            {typeof record.zoom === 'number' && record.zoom > 0 ? '瓦片' : '节点'}
+            {record.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}{' '}
+            {typeof record.zoom === 'number' && record.zoom > 0
+              ? t('history.labels.tiles')
+              : t('history.labels.nodes')}
           </span>
         )}
         {typeof record.file_size === 'number' && record.file_size > 0 && (
           <span>{formatBytes(record.file_size)}</span>
         )}
-        {duration && <span>耗时 {duration}</span>}
-        <span>{formatDate(record.created_at)}</span>
+        {duration && <span>{t('history.labels.duration', { duration })}</span>}
+        <span>{formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}</span>
       </div>
 
       {!isFailed && filePath && (
@@ -290,7 +300,7 @@ function HistoryCard({
             className="h-7 gap-1 text-xs"
           >
             <FolderOpen className="size-3" />
-            打开文件夹
+            {t('history.actions.openFolder')}
           </Button>
         )}
         {canBuildPyramid && (
@@ -314,7 +324,9 @@ function HistoryCard({
             className="h-7 gap-1 text-xs"
           >
             <MapIcon className="size-3" />
-            {mvtPreviewMutation.isPending ? '启动中…' : '预览矢量瓦片'}
+            {mvtPreviewMutation.isPending
+              ? t('history.actions.startingPreview')
+              : t('history.actions.previewMvt')}
           </Button>
         )}
         {logFile && (
@@ -325,7 +337,7 @@ function HistoryCard({
             className="h-7 gap-1 text-xs"
           >
             {showLogs ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-            日志
+            {t('history.actions.logs')}
           </Button>
         )}
         <Button
@@ -336,7 +348,7 @@ function HistoryCard({
           className="ml-auto h-7 gap-1 text-xs text-destructive hover:text-destructive"
         >
           <Trash2 className="size-3" />
-          删除
+          {t('history.actions.delete')}
         </Button>
       </div>
 
@@ -345,7 +357,7 @@ function HistoryCard({
         <Dialog open={mvtPreviewOpen} onOpenChange={setMvtPreviewOpen}>
           <DialogContent className="max-w-5xl">
             <DialogHeader>
-              <DialogTitle>矢量瓦片预览 · {record.name}</DialogTitle>
+              <DialogTitle>{t('history.previewTitle', { name: record.name })}</DialogTitle>
             </DialogHeader>
             <p className="truncate font-mono text-[11px] text-muted-foreground" title={mvtPreviewUrl ?? ''}>
               {mvtPreviewUrl}
@@ -363,6 +375,7 @@ function HistoryCard({
 }
 
 export function HistoryPanel() {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const inTauri = isTauriRuntime()
   const [pyramidProgress, setPyramidProgress] = useState<Map<string, PyramidProgressPayload>>(
@@ -426,8 +439,8 @@ export function HistoryPanel() {
   const clearMutation = useMutation({
     mutationFn: async () => {
       const ok = await askDialog(
-        '确定清空所有下载记录及其关联日志？\n已下载的文件不会被删除。',
-        { title: '清空记录和日志', kind: 'warning' },
+        t('history.confirm.clear'),
+        { title: t('history.confirm.clearTitle'), kind: 'warning' },
       )
       if (!ok) return false
       await clearDownloadHistory()
@@ -435,12 +448,12 @@ export function HistoryPanel() {
     },
     onSuccess: (changed) => {
       if (changed) {
-        toast.success('已清空历史记录及关联日志')
+        toast.success(t('history.toast.cleared'))
         setPage(1)
         qc.invalidateQueries({ queryKey: ['download-history'] })
       }
     },
-    onError: (e) => toast.error(`清空失败：${String(e)}`),
+    onError: (e) => toast.error(t('history.toast.clearError', { message: String(e) })),
   })
 
   const records = useMemo(() => historyQuery.data?.records ?? [], [historyQuery.data])
@@ -456,7 +469,7 @@ export function HistoryPanel() {
   if (!inTauri) {
     return (
       <div className="rounded-md border border-dashed bg-muted/30 p-6 text-center text-xs text-muted-foreground">
-        非 Tauri 环境，历史记录不可用
+        {t('history.unavailable')}
       </div>
     )
   }
@@ -465,7 +478,7 @@ export function HistoryPanel() {
     <div className="space-y-2">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>
-          共 <span className="font-semibold text-foreground">{total}</span> 条记录
+          {t('history.labels.total', { count: total })}
         </span>
         <div className="flex items-center gap-1">
           <Button
@@ -474,7 +487,7 @@ export function HistoryPanel() {
             onClick={() => historyQuery.refetch()}
             disabled={historyQuery.isFetching}
             className="size-7"
-            title="刷新"
+            title={t('history.actions.refresh')}
           >
             <RefreshCw
               className={`size-3.5 ${historyQuery.isFetching ? 'animate-spin' : ''}`}
@@ -486,18 +499,18 @@ export function HistoryPanel() {
             onClick={() => clearMutation.mutate()}
             disabled={clearMutation.isPending || total === 0}
             className="size-7"
-            title="清空记录"
+            title={t('history.actions.clear')}
           >
             <X className="size-3.5" />
           </Button>
         </div>
       </div>
 
-      {historyQuery.isLoading && <p className="text-xs text-muted-foreground">加载中...</p>}
+      {historyQuery.isLoading && <p className="text-xs text-muted-foreground">{t('history.loading')}</p>}
       {!historyQuery.isLoading && records.length === 0 && (
         <div className="flex flex-col items-center gap-2 py-8 text-xs text-muted-foreground">
           <Inbox className="size-7 opacity-50" />
-          <p>暂无下载记录</p>
+          <p>{t('history.empty')}</p>
         </div>
       )}
       {records.map((r) => (
@@ -511,7 +524,7 @@ export function HistoryPanel() {
       {total > PAGE_SIZE && (
         <div className="flex items-center justify-between border-t pt-2 text-xs">
           <span className="text-muted-foreground">
-            第 {page} / {totalPages} 页
+            {t('history.labels.page', { page, total: totalPages })}
           </span>
           <div className="flex gap-1">
             <Button
@@ -521,7 +534,7 @@ export function HistoryPanel() {
               onClick={() => setPage((current) => Math.max(1, current - 1))}
               className="h-7 text-xs"
             >
-              上一页
+              {t('history.actions.previous')}
             </Button>
             <Button
               size="sm"
@@ -530,7 +543,7 @@ export function HistoryPanel() {
               onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
               className="h-7 text-xs"
             >
-              下一页
+              {t('history.actions.next')}
             </Button>
           </div>
         </div>

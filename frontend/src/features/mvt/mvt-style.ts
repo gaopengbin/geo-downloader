@@ -2,6 +2,8 @@ import type { StyleSpecification } from 'maplibre-gl'
 import { VectorTile } from '@mapbox/vector-tile'
 import Pbf from 'pbf'
 
+import { i18n } from '@/i18n'
+
 const PALETTE = [
   '#e6194B',
   '#3cb44b',
@@ -92,7 +94,7 @@ async function discoverLayersViaProbe(
     .replace('{y}', String(y))
     .replace(/\{s\}/, 'a')
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`HTTP ${res.status} 抓取首块瓦片失败`)
+  if (!res.ok) throw new Error(i18n.t('mvt.firstTileFailed', { status: res.status }))
   let buf = await res.arrayBuffer()
   const u8 = new Uint8Array(buf)
   if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {

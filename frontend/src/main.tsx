@@ -11,10 +11,13 @@ import { ThemeProvider } from '@/components/theme/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 import { AssistantPanel } from '@/features/assistant/assistant-panel'
 import { createQueryClient } from '@/lib/query-client'
+import { initializeI18n } from '@/i18n'
 
 import './index.css'
 
 const queryClient = createQueryClient()
+
+await initializeI18n()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -1,4 +1,5 @@
 import { HelpCircle } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -39,13 +40,14 @@ export function HelpButton({
   onStartTiles3d,
   onStartWayback,
 }: HelpButtonProps) {
+  const { t } = useTranslation()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           data-tour="help-button"
-          aria-label="新手引导"
-          title="新手引导"
+          aria-label={t('app.help.title')}
+          title={t('app.help.title')}
           size="icon"
           variant="ghost"
         >
@@ -53,20 +55,20 @@ export function HelpButton({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuLabel className="text-xs">新手引导</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs">{t('app.help.title')}</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={onStartMain}>主界面总览</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onStartRegion}>区域选择与地图工具</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onStartDownloadCenter}>下载中心</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartMain}>{t('app.help.overview')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartRegion}>{t('app.help.region')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartDownloadCenter}>{t('app.help.downloadCenter')}</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
-          按模式
+          {t('app.help.byMode')}
         </DropdownMenuLabel>
-        <DropdownMenuItem onSelect={onStartImagery}>影像 / DEM 下载</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onStartMvt}>MVT 矢量瓦片</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onStartOsm}>OSM 矢量数据</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onStartTiles3d}>3D Tiles 下载</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onStartWayback}>Wayback 历史影像</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartImagery}>{t('app.help.imagery')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartMvt}>{t('app.help.mvt')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartOsm}>{t('app.help.osm')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartTiles3d}>{t('app.help.tiles3d')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onStartWayback}>{t('app.help.wayback')}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )
