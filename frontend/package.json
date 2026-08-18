@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test src/features/sources/osm-download-policy.test.ts src/lib/geo-area.test.ts src/lib/kml-region-normalizer.test.ts",
+    "test": "node --experimental-strip-types --test src/features/sources/osm-download-policy.test.ts src/features/region/range-selection.test.ts src/lib/geo-area.test.ts src/lib/kml-region-normalizer.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

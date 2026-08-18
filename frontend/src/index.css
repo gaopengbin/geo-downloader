@@ -176,6 +176,14 @@ body {
   overflow: hidden;
 }
 
+/* Shift is a range-selection modifier in the import dialog. Keep the existing
+   focus target, but avoid WebView switching its pointer focus to a visible ring. */
+.shift-range-selecting :focus-visible {
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  outline: none !important;
+}
+
 @layer base {
   button,
   input,

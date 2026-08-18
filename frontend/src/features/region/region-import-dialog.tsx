@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import type { Feature } from 'geojson'
 
 import {
@@ -30,6 +30,7 @@ import {
   telemetryImportFormat,
   trackTelemetry,
 } from '@/features/telemetry/telemetry-client'
+import { updateRangeSelection } from '@/features/region/range-selection'
 
 const INDEX_FIELD = '__index__'
 
@@ -49,15 +50,43 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
   )
   const [nameField, setNameField] = useState<string>(INDEX_FIELD)
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [shiftSelecting, setShiftSelecting] = useState(false)
+  const selectionAnchorRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!features) {
+      // Dialog state must reset when the imported feature collection is cleared.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelected(new Set())
+      selectionAnchorRef.current = null
       return
     }
     setNameField(recommendNameField(propertyKeys) ?? INDEX_FIELD)
+    // A newly imported collection starts fully selected.
     setSelected(new Set(features.map((_, i) => i)))
+    selectionAnchorRef.current = null
   }, [features, propertyKeys])
+
+  useEffect(() => {
+    if (!open) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') setShiftSelecting(true)
+    }
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') setShiftSelecting(false)
+    }
+    const resetShiftState = () => setShiftSelecting(false)
+
+    document.addEventListener('keydown', handleKeyDown, true)
+    document.addEventListener('keyup', handleKeyUp, true)
+    window.addEventListener('blur', resetShiftState)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      document.removeEventListener('keyup', handleKeyUp, true)
+      window.removeEventListener('blur', resetShiftState)
+    }
+  }, [open])
 
   const totalArea = useMemo(
     () =>
@@ -81,20 +110,32 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
     return String(v)
   }
 
-  const toggle = (i: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(i)) next.delete(i)
-      else next.add(i)
-      return next
-    })
+  const toggle = (i: number, shiftKey = false) => {
+    setSelected((prev) =>
+      updateRangeSelection(prev, i, shiftKey ? selectionAnchorRef.current : null),
+    )
+    if (!shiftKey || selectionAnchorRef.current == null) {
+      selectionAnchorRef.current = i
+    }
   }
-  const selectAll = () => setSelected(new Set(features.map((_, i) => i)))
-  const selectNone = () => setSelected(new Set())
-  const invert = () =>
+  const selectAll = () => {
+    selectionAnchorRef.current = null
+    setSelected(new Set(features.map((_, i) => i)))
+  }
+  const selectNone = () => {
+    selectionAnchorRef.current = null
+    setSelected(new Set())
+  }
+  const invert = () => {
+    selectionAnchorRef.current = null
     setSelected(
       new Set(features.map((_, i) => i).filter((i) => !selected.has(i))),
     )
+  }
+
+  const handleSelectionClick = (i: number, event: MouseEvent) => {
+    toggle(i, event.shiftKey)
+  }
 
   const selectedArea = Array.from(selected).reduce((acc, i) => {
     const bb = featureBbox(features[i])
@@ -155,7 +196,9 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col">
+      <DialogContent
+        className={`flex max-h-[85vh] max-w-2xl flex-col${shiftSelecting ? ' shift-range-selecting' : ''}`}
+      >
         <DialogHeader>
           <DialogTitle>
             导入区域 — {filename || '上传文件'}（{total} 个要素）
@@ -217,15 +260,24 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
                 return (
                   <tr
                     key={i}
-                    className="cursor-pointer border-t border-border/40 hover:bg-accent/40"
-                    onClick={() => toggle(i)}
+                    className="cursor-pointer select-none border-t border-border/40 hover:bg-accent/40"
+                    onMouseDown={(event) => {
+                      if (event.shiftKey) event.preventDefault()
+                    }}
+                    onClick={(event) => handleSelectionClick(i, event)}
                   >
                     <td className="px-2 py-1">
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={() => toggle(i)}
-                        onClick={(e) => e.stopPropagation()}
+                        readOnly
+                        aria-label={`选择${featureName(i)}`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleSelectionClick(i, event)
+                          event.currentTarget.blur()
+                        }}
                       />
                     </td>
                     <td className="px-2 py-1 text-muted-foreground">{i + 1}</td>
