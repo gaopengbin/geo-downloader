@@ -88,15 +88,28 @@ test('serves only GeoD health, event ingestion, and protected statistics', async
   }
 })
 
-test('removes migrated platform tables only after the migration marker exists', async () => {
+test('creates a clean GeoD database and imports only legacy desktop events', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'geod-split-cleanup-'))
-  const databasePath = path.join(directory, 'geod.sqlite')
+  const databasePath = path.join(directory, 'geod-v2.sqlite')
+  const legacyDatabasePath = path.join(directory, 'legacy-mixed.sqlite')
   const markerPath = path.join(directory, 'platform-api-migrated.txt')
   const tokenPath = path.join(directory, 'admin-token.txt')
   const SQL = await initSqlJs({ locateFile: () => require.resolve('sql.js/dist/sql-wasm.wasm') })
   const legacy = new SQL.Database()
-  legacy.run('CREATE TABLE accounts (id TEXT PRIMARY KEY); CREATE TABLE product_events (event_id TEXT PRIMARY KEY);')
-  await writeFile(databasePath, Buffer.from(legacy.export()))
+  legacy.run(`
+    CREATE TABLE events (
+      event_id TEXT PRIMARY KEY, event_name TEXT, occurred_at TEXT, event_day TEXT,
+      install_id TEXT, session_id TEXT, app_version TEXT, platform TEXT,
+      properties_json TEXT, received_at TEXT
+    );
+    CREATE TABLE accounts (id TEXT PRIMARY KEY);
+    CREATE TABLE product_events (event_id TEXT PRIMARY KEY);
+    INSERT INTO events VALUES (
+      'event-1', 'app_started', '2026-08-20T00:00:00.000Z', '2026-08-20',
+      'install-1', 'session-1', '3.6.6', 'windows', '{}', '2026-08-20T00:00:01.000Z'
+    );
+  `)
+  await writeFile(legacyDatabasePath, Buffer.from(legacy.export()))
   legacy.close()
   await writeFile(markerPath, 'migration complete')
   await writeFile(tokenPath, 'admin-test-token')
@@ -104,7 +117,8 @@ test('removes migrated platform tables only after the migration marker exists', 
   const server = await createTelemetryServer({
     config: {
       host: '127.0.0.1', port: 0, databasePath, adminTokenFile: tokenPath,
-      platformMigrationMarker: markerPath, maxBodyBytes: 131072, rateLimitPerMinute: 1000,
+      legacyDatabasePath, platformMigrationMarker: markerPath,
+      maxBodyBytes: 131072, rateLimitPerMinute: 1000,
     },
   })
   server.listen(0, '127.0.0.1')
@@ -117,9 +131,11 @@ test('removes migrated platform tables only after the migration marker exists', 
   const statement = cleaned.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
   while (statement.step()) tables.push(statement.getAsObject().name)
   statement.free()
-  cleaned.close()
   assert.ok(tables.includes('events'))
   assert.ok(!tables.includes('accounts'))
   assert.ok(!tables.includes('product_events'))
+  const count = cleaned.exec('SELECT COUNT(*) AS count FROM events')[0].values[0][0]
+  assert.equal(count, 1)
+  cleaned.close()
   await rm(directory, { recursive: true, force: true })
 })

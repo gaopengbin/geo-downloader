@@ -58,7 +58,9 @@ export function loadConfig(env = process.env) {
     host: env.HOST || '127.0.0.1',
     port: envInteger(env.PORT, 9091, 0, 65535),
     databasePath:
-      env.TELEMETRY_DB_PATH || 'C:/nginx-1.30.2/data/geod-telemetry.sqlite',
+      env.TELEMETRY_DB_PATH || 'C:/nginx-1.30.2/data/geod-telemetry-v2.sqlite',
+    legacyDatabasePath:
+      env.LEGACY_TELEMETRY_DB_PATH || 'C:/nginx-1.30.2/data/geod-telemetry.sqlite',
     adminTokenFile:
       env.TELEMETRY_ADMIN_TOKEN_FILE ||
       'C:/nginx-1.30.2/geod-telemetry-admin-token.txt',
@@ -371,7 +373,49 @@ export async function replaceDatabaseFile(
   }
 }
 
-async function createDatabase(databasePath, platformMigrationMarker) {
+async function importLegacyEvents(database, legacyDatabasePath, SQL) {
+  if (!legacyDatabasePath) return 0
+  let legacy
+  try {
+    legacy = new SQL.Database(await readFile(legacyDatabasePath))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return 0
+    throw error
+  }
+  let imported = 0
+  try {
+    const table = queryRows(
+      legacy,
+      "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'events'",
+    )
+    if (!table.length) return 0
+    const read = legacy.prepare(`
+      SELECT event_id, event_name, occurred_at, event_day, install_id,
+        session_id, app_version, platform, properties_json, received_at
+      FROM events
+    `)
+    const insert = database.prepare(`
+      INSERT OR IGNORE INTO events (
+        event_id, event_name, occurred_at, event_day, install_id,
+        session_id, app_version, platform, properties_json, received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    try {
+      while (read.step()) {
+        insert.run(read.get())
+        imported += database.getRowsModified()
+      }
+    } finally {
+      read.free()
+      insert.free()
+    }
+    return imported
+  } finally {
+    legacy.close()
+  }
+}
+
+async function createDatabase(databasePath, platformMigrationMarker, legacyDatabasePath) {
   const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm')
   const SQL = await initSqlJs({ locateFile: () => wasmPath })
   let database
@@ -399,22 +443,9 @@ async function createDatabase(databasePath, platformMigrationMarker) {
     CREATE INDEX IF NOT EXISTS events_install_idx ON events(install_id);
     CREATE INDEX IF NOT EXISTS events_name_idx ON events(event_name);
   `)
-  if (platformMigrationMarker) {
+  if (platformMigrationMarker && path.resolve(legacyDatabasePath || '') !== path.resolve(databasePath)) {
     const migrated = await access(platformMigrationMarker).then(() => true).catch(() => false)
-    if (migrated) {
-      database.run(`
-        DROP TABLE IF EXISTS account_sessions;
-        DROP TABLE IF EXISTS export_usage;
-        DROP TABLE IF EXISTS export_actions;
-        DROP TABLE IF EXISTS account_redemptions;
-        DROP TABLE IF EXISTS wechat_follow_codes;
-        DROP TABLE IF EXISTS wechat_followers;
-        DROP TABLE IF EXISTS wechat_conversion_events;
-        DROP TABLE IF EXISTS accounts;
-        DROP TABLE IF EXISTS product_events;
-        DROP TABLE IF EXISTS platform_migrations;
-      `)
-    }
+    if (migrated) await importLegacyEvents(database, legacyDatabasePath, SQL)
   }
   await mkdir(path.dirname(databasePath), { recursive: true })
   let writeChain = Promise.resolve()
@@ -800,7 +831,11 @@ if(tokenInput.value)load()
 
 export async function createTelemetryServer(options = {}) {
   const config = options.config || loadConfig()
-  const database = await createDatabase(config.databasePath, config.platformMigrationMarker)
+  const database = await createDatabase(
+    config.databasePath,
+    config.platformMigrationMarker,
+    config.legacyDatabasePath,
+  )
   const checkRateLimit = createRateLimiter(config.rateLimitPerMinute)
 
   const server = createServer(async (request, response) => {
