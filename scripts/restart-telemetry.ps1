@@ -2,8 +2,6 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$AdminTokenBase64,
 
-  [string]$WechatCallbackTokenBase64 = '',
-
   [string]$ServiceRoot = 'C:\nginx-1.30.2\services\geod-telemetry'
 )
 
@@ -13,7 +11,6 @@ $nginxRoot = 'C:\nginx-1.30.2'
 $serviceRoot = $ServiceRoot
 $script = Join-Path $serviceRoot 'server.mjs'
 $tokenFile = Join-Path $nginxRoot 'geod-telemetry-admin-token.txt'
-$wechatTokenFile = Join-Path $nginxRoot 'wechat-callback-token.txt'
 $databasePath = Join-Path $nginxRoot 'data\geod-telemetry.sqlite'
 $nginxConf = Join-Path $nginxRoot 'conf\nginx.conf'
 $nginxExe = Join-Path $nginxRoot 'nginx.exe'
@@ -23,22 +20,6 @@ $adminToken = [System.Text.Encoding]::UTF8.GetString(
 )
 if ([string]::IsNullOrWhiteSpace($adminToken)) {
   throw 'Telemetry admin token is empty'
-}
-
-if (-not [string]::IsNullOrWhiteSpace($WechatCallbackTokenBase64)) {
-  $wechatCallbackToken = [System.Text.Encoding]::UTF8.GetString(
-    [System.Convert]::FromBase64String($WechatCallbackTokenBase64)
-  )
-  if ([string]::IsNullOrWhiteSpace($wechatCallbackToken)) {
-    throw 'WeChat callback token is empty'
-  }
-  Set-Content `
-    -LiteralPath $wechatTokenFile `
-    -Value $wechatCallbackToken `
-    -NoNewline `
-    -Encoding UTF8
-} elseif (-not (Test-Path -LiteralPath $wechatTokenFile -PathType Leaf)) {
-  throw 'WeChat callback token is not configured'
 }
 
 New-Item -ItemType Directory -Force -Path $serviceRoot | Out-Null
@@ -143,9 +124,7 @@ Start-Sleep -Seconds 3
 $health = Invoke-RestMethod -Uri 'http://127.0.0.1:9091/health' -TimeoutSec 10
 if (
   $health.status -ne 'ok' -or
-  $health.product_schema_version -ne 1 -or
-  $health.account_schema_version -ne 1 -or
-  -not $health.wechat_callback_configured
+  $health.schema_version -ne 1
 ) {
   if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) {
     Write-Warning "Telemetry stdout:`n$(Get-Content -LiteralPath $stdoutPath -Raw)"
@@ -221,9 +200,7 @@ $publicHealth = Invoke-RestMethod `
   -TimeoutSec 15
 if (
   $publicHealth.status -ne 'ok' -or
-  $publicHealth.product_schema_version -ne 1 -or
-  $publicHealth.account_schema_version -ne 1 -or
-  -not $publicHealth.wechat_callback_configured
+  $publicHealth.schema_version -ne 1
 ) {
   throw 'Public telemetry health check failed'
 }

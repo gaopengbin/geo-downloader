@@ -1,4 +1,4 @@
-const productionEndpoint = 'https://laogao.xyz/geod-telemetry/v1/product-events'
+const productionEndpoint = 'https://laogao.xyz/platform-api/v1/product-events'
 const visitorStorageKey = 'geod-web:analytics-visitor'
 const sessionStorageKey = 'geod-web:analytics-session'
 
