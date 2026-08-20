@@ -2,6 +2,10 @@
 
 Small self-hosted collector for GeoD's opt-in anonymous usage statistics.
 
+Production uses the clean `geod-telemetry-v2.sqlite` database. After the
+platform migration marker exists, GeoD imports only the legacy `events` table;
+accounts, quotas, WeChat data, and web-product events remain outside GeoD.
+
 ## Run locally
 
 ```powershell
