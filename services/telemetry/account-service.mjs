@@ -25,6 +25,18 @@ function one(database, sql, parameters = []) {
   }
 }
 
+function queryRows(database, sql, parameters = []) {
+  const statement = database.prepare(sql)
+  try {
+    statement.bind(parameters)
+    const rows = []
+    while (statement.step()) rows.push(statement.getAsObject())
+    return rows
+  } finally {
+    statement.free()
+  }
+}
+
 function normalizeEmail(value) {
   return String(value ?? '').trim().toLowerCase()
 }
@@ -135,10 +147,89 @@ export function initializeAccounts(database) {
       redeemed_at TEXT,
       FOREIGN KEY(redeemed_by) REFERENCES accounts(id) ON DELETE SET NULL
     );
+    CREATE TABLE IF NOT EXISTS wechat_conversion_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      openid_hash TEXT,
+      user_id TEXT,
+      occurred_at TEXT NOT NULL,
+      event_day TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES accounts(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS wechat_conversion_events_day_idx
+      ON wechat_conversion_events(event_day);
+    CREATE INDEX IF NOT EXISTS wechat_conversion_events_type_idx
+      ON wechat_conversion_events(event_type);
+
+    INSERT OR IGNORE INTO wechat_conversion_events (
+      event_id, event_type, openid_hash, occurred_at, event_day
+    )
+    SELECT 'legacy-subscribe:' || openid_hash, 'subscribe', openid_hash,
+      subscribed_at, date(subscribed_at, '+8 hours')
+    FROM wechat_followers;
+
+    INSERT OR IGNORE INTO wechat_conversion_events (
+      event_id, event_type, openid_hash, occurred_at, event_day
+    )
+    SELECT 'legacy-code:' || openid_hash, 'quota_requested', openid_hash,
+      created_at, date(created_at, '+8 hours')
+    FROM wechat_follow_codes;
+
+    INSERT OR IGNORE INTO wechat_conversion_events (
+      event_id, event_type, openid_hash, user_id, occurred_at, event_day
+    )
+    SELECT 'legacy-redeem:' || openid_hash, 'code_redeemed', openid_hash,
+      redeemed_by, redeemed_at, date(redeemed_at, '+8 hours')
+    FROM wechat_follow_codes
+    WHERE redeemed_at IS NOT NULL;
   `)
 }
 
 export function createAccountService(database, serializedWrite) {
+  function recordWechatConversion(eventType, openidHash, occurredAt, userId = null) {
+    database.run(`
+      INSERT INTO wechat_conversion_events (
+        event_id, event_type, openid_hash, user_id, occurred_at, event_day
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `, [randomUUID(), eventType, openidHash || null, userId, occurredAt, chinaDay(Date.parse(occurredAt))])
+  }
+
+  function wechatAnalytics() {
+    const followerTotals = one(database, `
+      SELECT COUNT(*) AS followers_total,
+        SUM(CASE WHEN unsubscribed_at IS NULL THEN 1 ELSE 0 END) AS followers_active
+      FROM wechat_followers
+    `) ?? { followers_total: 0, followers_active: 0 }
+    const eventTotals = queryRows(database, `
+      SELECT event_type, COUNT(*) AS count,
+        COUNT(DISTINCT COALESCE(openid_hash, user_id)) AS people
+      FROM wechat_conversion_events
+      GROUP BY event_type
+    `)
+    const byType = Object.fromEntries(eventTotals.map((row) => [row.event_type, row]))
+    return {
+      totals: {
+        followers_total: Number(followerTotals.followers_total) || 0,
+        followers_active: Number(followerTotals.followers_active) || 0,
+        quota_requests: Number(byType.quota_requested?.count) || 0,
+        quota_requesters: Number(byType.quota_requested?.people) || 0,
+        codes_redeemed: Number(byType.code_redeemed?.count) || 0,
+        redeemed_users: Number(byType.code_redeemed?.people) || 0,
+      },
+      daily: queryRows(database, `
+        SELECT event_day AS day,
+          SUM(CASE WHEN event_type = 'subscribe' THEN 1 ELSE 0 END) AS subscriptions,
+          SUM(CASE WHEN event_type = 'unsubscribe' THEN 1 ELSE 0 END) AS unsubscriptions,
+          SUM(CASE WHEN event_type = 'quota_requested' THEN 1 ELSE 0 END) AS quota_requests,
+          COUNT(DISTINCT CASE WHEN event_type = 'quota_requested' THEN openid_hash END) AS quota_requesters,
+          SUM(CASE WHEN event_type = 'code_redeemed' THEN 1 ELSE 0 END) AS codes_redeemed
+        FROM wechat_conversion_events
+        WHERE event_day >= date('now', '+8 hours', '-29 day')
+        GROUP BY event_day ORDER BY event_day
+      `),
+    }
+  }
+
   function quota(userId) {
     const day = chinaDay()
     const row = one(database, `
@@ -173,6 +264,7 @@ export function createAccountService(database, serializedWrite) {
   }
 
   return {
+    wechatAnalytics,
     async register(input) {
       const { email, password, displayName } = validateRegistration(input)
       const salt = randomBytes(16).toString('hex')
@@ -280,11 +372,13 @@ export function createAccountService(database, serializedWrite) {
               last_interaction_at = excluded.last_interaction_at,
               unsubscribed_at = NULL
           `, [openidHash, now, now])
+          recordWechatConversion('subscribe', openidHash, now)
         } else {
           database.run(`
             UPDATE wechat_followers SET unsubscribed_at = ?, last_interaction_at = ?
             WHERE openid_hash = ?
           `, [now, now, openidHash])
+          recordWechatConversion('unsubscribe', openidHash, now)
         }
         return { ok: true }
       })
@@ -315,6 +409,7 @@ export function createAccountService(database, serializedWrite) {
             redeemed_by = NULL,
             redeemed_at = NULL
         `, [openidHash, hashToken(code), now.toISOString(), expiresAt.toISOString()])
+        recordWechatConversion('quota_requested', openidHash, now.toISOString())
         return { code, expires_at: expiresAt.toISOString() }
       })
     },
@@ -331,7 +426,7 @@ export function createAccountService(database, serializedWrite) {
         }
         const codeHash = hashToken(normalizedCode)
         const issued = one(database, `
-          SELECT code_hash FROM wechat_follow_codes
+          SELECT code_hash, openid_hash FROM wechat_follow_codes
           WHERE code_hash = ? AND redeemed_by IS NULL AND expires_at > ?
         `, [codeHash, new Date().toISOString()])
         if (!issued) throw accountError(400, 'invalid_redeem_code', '兑换码无效或已过期，请重新回复“额度”获取')
@@ -347,6 +442,7 @@ export function createAccountService(database, serializedWrite) {
           }
           database.run('INSERT INTO account_redemptions (user_id, campaign, redeemed_at) VALUES (?, ?, ?)', [user.id, 'wechat-follow-v1', now])
           database.run('UPDATE accounts SET bonus_exports = bonus_exports + ?, updated_at = ? WHERE id = ?', [FOLLOW_BONUS_EXPORTS, now, user.id])
+          recordWechatConversion('code_redeemed', issued.openid_hash, now, user.id)
           database.run('COMMIT')
         } catch (error) {
           database.run('ROLLBACK')

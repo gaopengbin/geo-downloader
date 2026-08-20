@@ -206,6 +206,61 @@ test('validates official account growth events with bounded placement', () => {
   }), /placement is invalid/)
 })
 
+test('validates shared template lifecycle events without content payloads', () => {
+  const visitorId = crypto.randomUUID()
+  const sessionId = crypto.randomUUID()
+  for (const eventName of ['shared_template_created', 'shared_template_opened']) {
+    const [normalized] = validateProductEnvelope({
+      schema_version: 1,
+      product: 'wechat-dialog-generator',
+      events: [{
+        event_id: crypto.randomUUID(),
+        event: eventName,
+        occurred_at: new Date().toISOString(),
+        visitor_id: visitorId,
+        session_id: sessionId,
+        properties: {},
+      }],
+    })
+    assert.equal(normalized.eventName, eventName)
+  }
+  assert.throws(() => validateProductEnvelope({
+    schema_version: 1,
+    product: 'wechat-dialog-generator',
+    events: [{
+      event_id: crypto.randomUUID(),
+      event: 'shared_template_created',
+      occurred_at: new Date().toISOString(),
+      visitor_id: visitorId,
+      session_id: sessionId,
+      properties: { content: 'private conversation' },
+    }],
+  }), /properties are invalid/)
+})
+
+test('validates local project lifecycle events', () => {
+  const visitorId = crypto.randomUUID()
+  const sessionId = crypto.randomUUID()
+  const base = {
+    event_id: crypto.randomUUID(),
+    occurred_at: new Date().toISOString(),
+    visitor_id: visitorId,
+    session_id: sessionId,
+  }
+  const [created] = validateProductEnvelope({
+    schema_version: 1,
+    product: 'wechat-dialog-generator',
+    events: [{ ...base, event: 'project_created', properties: { creation_source: 'editor' } }],
+  })
+  assert.equal(created.properties.creation_source, 'editor')
+  const [reopened] = validateProductEnvelope({
+    schema_version: 1,
+    product: 'wechat-dialog-generator',
+    events: [{ ...base, event_id: crypto.randomUUID(), event: 'project_reopened', properties: { message_count_bucket: '6-20' } }],
+  })
+  assert.equal(reopened.properties.message_count_bucket, '6-20')
+})
+
 test('validates product hub clicks without accepting destination URLs', () => {
   const visitorId = crypto.randomUUID()
   const sessionId = crypto.randomUUID()
@@ -722,6 +777,16 @@ test('supports account sessions, daily export quota, and one-time follow rewards
   })
   assert.equal(redemption.status, 200)
   assert.equal((await redemption.json()).quota.bonus_remaining, 20)
+
+  const conversionStatsResponse = await fetch(`${origin}/geod-telemetry/public/product-stats`)
+  assert.equal(conversionStatsResponse.status, 200)
+  const conversionStats = await conversionStatsResponse.json()
+  assert.equal(conversionStats.wechat_account.totals.quota_requests, 1)
+  assert.equal(conversionStats.wechat_account.totals.quota_requesters, 1)
+  assert.equal(conversionStats.wechat_account.totals.codes_redeemed, 1)
+  assert.equal(conversionStats.wechat_account.totals.redeemed_users, 1)
+  assert.equal(conversionStats.wechat_account.daily.at(-1).quota_requests, 1)
+  assert.equal(conversionStats.wechat_account.daily.at(-1).codes_redeemed, 1)
 
   const duplicate = await fetch(`${baseUrl}/quota/redeem`, {
     method: 'POST',
