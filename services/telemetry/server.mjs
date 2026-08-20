@@ -544,7 +544,10 @@ async function createDatabase(databasePath) {
       return operation
     },
     productStats() {
-      return productStats(database)
+      return {
+        ...productStats(database),
+        wechat_account: accounts.wechatAnalytics(),
+      }
     },
     stats() {
       const totals = queryRows(

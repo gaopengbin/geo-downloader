@@ -7,8 +7,13 @@ const PRODUCT_DEFINITIONS = {
       'page_view',
       'dialog_created',
       'image_exported',
+      'project_created',
+      'project_reopened',
+      'project_duplicated',
       'official_account_prompt_viewed',
       'official_account_id_copied',
+      'shared_template_created',
+      'shared_template_opened',
     ]),
     funnel: ['page_view', 'dialog_created', 'image_exported'],
   },
@@ -38,8 +43,13 @@ const EVENT_PROPERTIES = {
   page_view: new Set(),
   dialog_created: new Set(['message_count_bucket', 'participant_count_bucket']),
   image_exported: new Set(['capture_mode', 'message_count_bucket']),
+  project_created: new Set(['creation_source']),
+  project_reopened: new Set(['message_count_bucket']),
+  project_duplicated: new Set(),
   official_account_prompt_viewed: new Set(['placement']),
   official_account_id_copied: new Set(['placement']),
+  shared_template_created: new Set(),
+  shared_template_opened: new Set(),
   download_clicked: new Set(['platform', 'version', 'channel']),
   wallpaper_viewed: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
   wallpaper_downloaded: new Set(['wallpaper_id', 'wallpaper_kind', 'media_type']),
@@ -107,6 +117,20 @@ function validateProperties(eventName, properties) {
       throw invalid('message_count_bucket is invalid')
     }
     normalized.capture_mode = properties.capture_mode
+    normalized.message_count_bucket = properties.message_count_bucket
+  }
+
+  if (eventName === 'project_created') {
+    if (!['editor', 'import_draft'].includes(properties.creation_source)) {
+      throw invalid('creation_source is invalid')
+    }
+    normalized.creation_source = properties.creation_source
+  }
+
+  if (eventName === 'project_reopened') {
+    if (!['1-5', '6-20', '21-50', '51+'].includes(properties.message_count_bucket)) {
+      throw invalid('message_count_bucket is invalid')
+    }
     normalized.message_count_bucket = properties.message_count_bucket
   }
 
