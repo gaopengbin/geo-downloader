@@ -34,7 +34,7 @@ jobs:
             "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}" \
             "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\services\geod-telemetry' | Out-Null; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\tools' | Out-Null\""
 
-          for file in package.json package-lock.json server.mjs product-events.mjs account-service.mjs; do
+          for file in package.json package-lock.json server.mjs; do
             sshpass -e scp -o StrictHostKeyChecking=no \
               "services/telemetry/$file" \
               "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}:/C:/nginx-1.30.2/services/geod-telemetry/$file"
@@ -48,13 +48,11 @@ jobs:
         env:
           SSHPASS: ${{ secrets.MIRROR_PASSWORD }}
           TELEMETRY_ADMIN_TOKEN: ${{ secrets.QR_ADMIN_TOKEN }}
-          WECHAT_CALLBACK_TOKEN: ${{ secrets.WECHAT_CALLBACK_TOKEN }}
         run: |
           ADMIN_TOKEN_B64="$(printf %s "$TELEMETRY_ADMIN_TOKEN" | base64 -w0)"
-          WECHAT_CALLBACK_TOKEN_B64="$(printf %s "$WECHAT_CALLBACK_TOKEN" | base64 -w0)"
           sshpass -e ssh -o StrictHostKeyChecking=no \
             "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}" \
-            "powershell -NoProfile -ExecutionPolicy Bypass -File C:/nginx-1.30.2/tools/restart-telemetry.ps1 -AdminTokenBase64 $ADMIN_TOKEN_B64 -WechatCallbackTokenBase64 $WECHAT_CALLBACK_TOKEN_B64"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File C:/nginx-1.30.2/tools/restart-telemetry.ps1 -AdminTokenBase64 $ADMIN_TOKEN_B64"
 
       - name: Verify public endpoints
         run: |
@@ -62,5 +60,3 @@ jobs:
             https://laogao.xyz/geod-telemetry/health
           curl --fail --silent --show-error \
             https://laogao.xyz/geod-telemetry/admin/ > /dev/null
-          curl --fail --silent --show-error \
-            https://laogao.xyz/geod-telemetry/public/product-stats > /dev/null

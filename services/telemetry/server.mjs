@@ -1,17 +1,9 @@
 import { createServer } from 'node:http'
-import { createHash, timingSafeEqual } from 'node:crypto'
-import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import initSqlJs from 'sql.js'
-import { createAccountService, initializeAccounts } from './account-service.mjs'
-import {
-  initializeProductEvents,
-  insertProductEvents,
-  productStats,
-  validateProductEnvelope,
-} from './product-events.mjs'
 
 const SERVICE_ROOT = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
@@ -34,14 +26,6 @@ const EVENT_NAMES = new Set([
 const PLATFORMS = new Set(['windows', 'macos', 'linux', 'web', 'unknown'])
 const MODES = new Set(['imagery', 'dem', 'wayback', 'tiles3d', 'vector', 'mvt'])
 const SIDEBAR_TABS = new Set(['download', 'history', 'settings'])
-const PRODUCT_EVENT_ORIGINS = new Set([
-  'https://gaopengbin.github.io',
-  'https://chat.laogao.xyz',
-  'https://geodownloader.pages.dev',
-  'https://wallpaper.gpb.cc',
-  'https://laogao.xyz',
-  'http://127.0.0.1:4178',
-])
 const COUNT_BUCKETS = new Set(['0', '1', '2-10', '11-100', '100+'])
 const SELECTION_METHODS = new Set([
   'draw_rectangle', 'draw_polygon', 'admin', 'search', 'import', 'bookmark',
@@ -78,12 +62,11 @@ export function loadConfig(env = process.env) {
     adminTokenFile:
       env.TELEMETRY_ADMIN_TOKEN_FILE ||
       'C:/nginx-1.30.2/geod-telemetry-admin-token.txt',
-    wechatCallbackTokenFile:
-      env.WECHAT_CALLBACK_TOKEN_FILE ||
-      'C:/nginx-1.30.2/wechat-callback-token.txt',
+    platformMigrationMarker:
+      env.PLATFORM_MIGRATION_MARKER ||
+      'C:/nginx-1.30.2/data/platform-api-migrated.txt',
     maxBodyBytes: envInteger(env.MAX_BODY_BYTES, 131072, 1024, 1024 * 1024),
     rateLimitPerMinute: envInteger(env.RATE_LIMIT_PER_MINUTE, 120, 10, 5000),
-    wechatCallbackToken: env.WECHAT_CALLBACK_TOKEN || '',
   }
 }
 
@@ -305,52 +288,6 @@ function setCors(response, origin = '*') {
   response.setHeader('access-control-max-age', '86400')
 }
 
-async function readTextBody(request, maxBytes) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of request) {
-    size += chunk.length
-    if (size > maxBytes) {
-      const error = new Error('request body is too large')
-      error.status = 413
-      error.code = 'body_too_large'
-      throw error
-    }
-    chunks.push(chunk)
-  }
-  return Buffer.concat(chunks).toString('utf8')
-}
-
-function bearerToken(request) {
-  const value = typeof request.headers.authorization === 'string'
-    ? request.headers.authorization
-    : ''
-  return value.startsWith('Bearer ') ? value.slice(7).trim() : ''
-}
-
-function validWechatSignature(token, timestamp, nonce, signature) {
-  if (!token || !timestamp || !nonce || !signature) return false
-  const timestampSeconds = Number(timestamp)
-  if (!Number.isFinite(timestampSeconds) || Math.abs(Date.now() / 1000 - timestampSeconds) > 300) return false
-  const expected = createHash('sha1').update([token, timestamp, nonce].sort().join('')).digest('hex')
-  const left = Buffer.from(expected)
-  const right = Buffer.from(signature)
-  return left.length === right.length && timingSafeEqual(left, right)
-}
-
-function xmlValue(xml, tag) {
-  const match = xml.match(new RegExp(`<${tag}>(?:<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>|([^<]*))<\\/${tag}>`, 'i'))
-  return (match?.[1] ?? match?.[2] ?? '').trim()
-}
-
-function cdata(value) {
-  return String(value).replaceAll(']]>', ']]&gt;')
-}
-
-function wechatTextReply(toUser, fromUser, content) {
-  return `<xml><ToUserName><![CDATA[${cdata(toUser)}]]></ToUserName><FromUserName><![CDATA[${cdata(fromUser)}]]></FromUserName><CreateTime>${Math.floor(Date.now() / 1000)}</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[${cdata(content)}]]></Content></xml>`
-}
-
 function requestAddress(request) {
   const realIp = request.headers['x-real-ip']
   if (typeof realIp === 'string' && realIp.length <= 64) return realIp
@@ -434,7 +371,7 @@ export async function replaceDatabaseFile(
   }
 }
 
-async function createDatabase(databasePath) {
+async function createDatabase(databasePath, platformMigrationMarker) {
   const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm')
   const SQL = await initSqlJs({ locateFile: () => wasmPath })
   let database
@@ -462,9 +399,23 @@ async function createDatabase(databasePath) {
     CREATE INDEX IF NOT EXISTS events_install_idx ON events(install_id);
     CREATE INDEX IF NOT EXISTS events_name_idx ON events(event_name);
   `)
-  initializeProductEvents(database)
-  initializeAccounts(database)
-
+  if (platformMigrationMarker) {
+    const migrated = await access(platformMigrationMarker).then(() => true).catch(() => false)
+    if (migrated) {
+      database.run(`
+        DROP TABLE IF EXISTS account_sessions;
+        DROP TABLE IF EXISTS export_usage;
+        DROP TABLE IF EXISTS export_actions;
+        DROP TABLE IF EXISTS account_redemptions;
+        DROP TABLE IF EXISTS wechat_follow_codes;
+        DROP TABLE IF EXISTS wechat_followers;
+        DROP TABLE IF EXISTS wechat_conversion_events;
+        DROP TABLE IF EXISTS accounts;
+        DROP TABLE IF EXISTS product_events;
+        DROP TABLE IF EXISTS platform_migrations;
+      `)
+    }
+  }
   await mkdir(path.dirname(databasePath), { recursive: true })
   let writeChain = Promise.resolve()
 
@@ -515,39 +466,11 @@ async function createDatabase(databasePath) {
     return inserted
   }
 
-  function serializedWrite(operation) {
-    const queued = writeChain.then(async () => {
-      const result = await operation()
-      await persist()
-      return result
-    })
-    writeChain = queued.catch(() => {})
-    return queued
-  }
-
-  const accounts = createAccountService(database, serializedWrite)
-
   return {
-    accounts,
     insert(events) {
       const operation = writeChain.then(() => insert(events))
       writeChain = operation.catch(() => {})
       return operation
-    },
-    insertProduct(events) {
-      const operation = writeChain.then(async () => {
-        const inserted = insertProductEvents(database, events)
-        await persist()
-        return inserted
-      })
-      writeChain = operation.catch(() => {})
-      return operation
-    },
-    productStats() {
-      return {
-        ...productStats(database),
-        wechat_account: accounts.wechatAnalytics(),
-      }
     },
     stats() {
       const totals = queryRows(
@@ -877,221 +800,25 @@ if(tokenInput.value)load()
 
 export async function createTelemetryServer(options = {}) {
   const config = options.config || loadConfig()
-  const wechatCallbackToken = config.wechatCallbackToken ||
-    await readAdminToken(config.wechatCallbackTokenFile)
-  const database = await createDatabase(config.databasePath)
+  const database = await createDatabase(config.databasePath, config.platformMigrationMarker)
   const checkRateLimit = createRateLimiter(config.rateLimitPerMinute)
-  const writeWechatAudit = typeof options.wechatAudit === 'function'
-    ? options.wechatAudit
-    : (entry) => console.log(JSON.stringify({ type: 'wechat_callback', ...entry }))
 
   const server = createServer(async (request, response) => {
     response.setHeader('x-content-type-options', 'nosniff')
     response.setHeader('referrer-policy', 'no-referrer')
     const url = new URL(request.url || '/', 'http://telemetry.local')
-    const apiPath = url.pathname.replace(/^\/geod-telemetry/, '')
-    if (apiPath === '/wechat/callback') {
-      const auditStartedAt = Date.now()
-      const audit = (entry) => {
-        try {
-          writeWechatAudit({
-            at: new Date().toISOString(),
-            method: ['GET', 'POST'].includes(request.method) ? request.method : 'OTHER',
-            duration_ms: Date.now() - auditStartedAt,
-            ...entry,
-          })
-        } catch {
-          // Diagnostics must never interrupt the callback response.
-        }
-      }
-      const timestamp = url.searchParams.get('timestamp') || ''
-      const nonce = url.searchParams.get('nonce') || ''
-      const signature = url.searchParams.get('signature') || ''
-      if (!wechatCallbackToken) {
-        audit({ stage: 'configuration', signature_valid: false, status: 503 })
-        sendError(response, 503, 'wechat callback is not configured', 'wechat_callback_unavailable')
-        return
-      }
-      if (!validWechatSignature(wechatCallbackToken, timestamp, nonce, signature)) {
-        audit({ stage: 'signature', signature_valid: false, status: 403 })
-        sendError(response, 403, 'invalid wechat signature', 'invalid_wechat_signature')
-        return
-      }
-      if (request.method === 'GET') {
-        audit({ stage: 'verification', signature_valid: true, status: 200 })
-        response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
-        response.end(url.searchParams.get('echostr') || '')
-        return
-      }
-      if (request.method !== 'POST') {
-        audit({ stage: 'method', signature_valid: true, status: 405 })
-        sendError(response, 405, 'method not allowed', 'method_not_allowed')
-        return
-      }
-      try {
-        const xml = await readTextBody(request, config.maxBodyBytes)
-        const fromUser = xmlValue(xml, 'FromUserName')
-        const toUser = xmlValue(xml, 'ToUserName')
-        const messageType = xmlValue(xml, 'MsgType').toLowerCase()
-        const event = xmlValue(xml, 'Event').toLowerCase()
-        const normalizedContent = xmlValue(xml, 'Content').replaceAll('【', '').replaceAll('】', '').trim()
-        const keywordMatched = messageType === 'text' && normalizedContent === '额度'
-        let action = 'ignored'
-        let reply = ''
-        if (messageType === 'event' && event === 'subscribe') {
-          await database.accounts.recordWechatFollow(fromUser, true)
-          action = 'subscribe'
-          reply = '欢迎关注老高 Vibe Coding！回复【额度】可领取微信创作工具箱 20 次额外导出额度。'
-        } else if (messageType === 'event' && event === 'unsubscribe') {
-          await database.accounts.recordWechatFollow(fromUser, false)
-          action = 'unsubscribe'
-        } else if (keywordMatched) {
-          const issued = await database.accounts.issueFollowCode(fromUser)
-          action = 'issue_follow_code'
-          reply = `你的导出额度兑换码：${issued.code}\n15 分钟内有效，每个账户限领一次。`
-        } else if (messageType === 'text') {
-          action = 'fallback_reply'
-          reply = '回复【额度】领取微信创作工具箱 20 次额外导出额度。'
-        }
-        const auditMessageType = ['text', 'event'].includes(messageType) ? messageType : 'other'
-        const auditEvent = ['subscribe', 'unsubscribe'].includes(event) ? event : 'other'
-        if (!reply) {
-          audit({
-            stage: 'processed',
-            signature_valid: true,
-            message_type: auditMessageType,
-            event: auditEvent,
-            keyword_match: keywordMatched,
-            action,
-            status: 200,
-          })
-          response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
-          response.end('success')
-          return
-        }
-        audit({
-          stage: 'processed',
-          signature_valid: true,
-          message_type: auditMessageType,
-          event: auditEvent,
-          keyword_match: keywordMatched,
-          action,
-          status: 200,
-        })
-        response.writeHead(200, { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'no-store' })
-        response.end(wechatTextReply(fromUser, toUser, reply))
-      } catch (error) {
-        const errorName = /^[a-z0-9_.-]{1,64}$/i.test(String(error.name || ''))
-          ? String(error.name)
-          : 'Error'
-        const errorCode = /^[a-z0-9_.-]{1,64}$/i.test(String(error.code || ''))
-          ? String(error.code)
-          : 'unknown'
-        audit({
-          stage: 'processing_error',
-          signature_valid: true,
-          status: error.status || 500,
-          error_name: errorName,
-          error_code: errorCode,
-        })
-        sendError(
-          response,
-          error.status || 500,
-          error.status ? error.message : 'internal server error',
-          error.code || 'internal_error',
-        )
-      }
-      return
-    }
-    const accountPaths = new Set([
-      '/v1/auth/register',
-      '/v1/auth/login',
-      '/v1/auth/me',
-      '/v1/auth/logout',
-      '/v1/quota',
-      '/v1/quota/consume',
-      '/v1/quota/redeem',
-    ])
-    const isAccountPath = accountPaths.has(apiPath)
-    const accountOrigin = typeof request.headers.origin === 'string' ? request.headers.origin : ''
-
-    if (isAccountPath && PRODUCT_EVENT_ORIGINS.has(accountOrigin)) {
-      setCors(response, accountOrigin)
-    }
-    if (request.method === 'OPTIONS' && isAccountPath) {
-      if (!PRODUCT_EVENT_ORIGINS.has(accountOrigin)) {
-        sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
-        return
-      }
-      response.writeHead(204)
-      response.end()
-      return
-    }
-    if (isAccountPath) {
-      if (!PRODUCT_EVENT_ORIGINS.has(accountOrigin)) {
-        sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
-        return
-      }
-      if (!checkRateLimit(requestAddress(request))) {
-        sendError(response, 429, 'too many requests', 'rate_limit_exceeded')
-        return
-      }
-      try {
-        const token = bearerToken(request)
-        let result
-        let status = 200
-        if (request.method === 'POST' && apiPath === '/v1/auth/register') {
-          result = await database.accounts.register(await readJsonBody(request, config.maxBodyBytes))
-          status = 201
-        } else if (request.method === 'POST' && apiPath === '/v1/auth/login') {
-          result = await database.accounts.login(await readJsonBody(request, config.maxBodyBytes))
-        } else if (request.method === 'GET' && apiPath === '/v1/auth/me') {
-          result = database.accounts.profile(token)
-        } else if (request.method === 'POST' && apiPath === '/v1/auth/logout') {
-          result = await database.accounts.logout(token)
-        } else if (request.method === 'GET' && apiPath === '/v1/quota') {
-          result = database.accounts.profile(token).quota
-        } else if (request.method === 'POST' && apiPath === '/v1/quota/consume') {
-          const body = await readJsonBody(request, config.maxBodyBytes)
-          result = await database.accounts.consume(token, body.action_id)
-        } else if (request.method === 'POST' && apiPath === '/v1/quota/redeem') {
-          const body = await readJsonBody(request, config.maxBodyBytes)
-          result = await database.accounts.redeem(token, body.code)
-        } else {
-          sendError(response, 405, 'method not allowed', 'method_not_allowed')
-          return
-        }
-        sendJson(response, status, result)
-      } catch (error) {
-        sendError(
-          response,
-          error.status || 500,
-          error.status ? error.message : 'internal server error',
-          error.code || 'internal_error',
-        )
-      }
-      return
-    }
 
     if (
       request.method === 'GET' &&
       ['/health', '/geod-telemetry/health'].includes(url.pathname)
     ) {
-      sendJson(response, 200, {
-        status: 'ok',
-        schema_version: 1,
-        product_schema_version: 1,
-        account_schema_version: 1,
-        wechat_callback_configured: Boolean(wechatCallbackToken),
-      })
+      sendJson(response, 200, { status: 'ok', schema_version: 1 })
       return
     }
 
     if (
       request.method === 'GET' &&
-      ['/admin', '/admin/', '/geod-telemetry/admin', '/geod-telemetry/admin/'].includes(
-        url.pathname,
-      )
+      ['/admin', '/admin/', '/geod-telemetry/admin', '/geod-telemetry/admin/'].includes(url.pathname)
     ) {
       serveAdmin(response)
       return
@@ -1110,55 +837,15 @@ export async function createTelemetryServer(options = {}) {
       return
     }
 
-    if (
-      request.method === 'GET' &&
-      ['/public/product-stats', '/geod-telemetry/public/product-stats'].includes(url.pathname)
-    ) {
-      setCors(response)
-      sendJson(response, 200, database.productStats())
-      return
-    }
-
-    if (
-      request.method === 'GET' &&
-      ['/admin/product-stats', '/geod-telemetry/admin/product-stats'].includes(url.pathname)
-    ) {
-      const token = await readAdminToken(config.adminTokenFile)
-      if (!token || request.headers.authorization !== `Bearer ${token}`) {
-        sendError(response, 401, 'unauthorized', 'unauthorized')
-        return
-      }
-      sendJson(response, 200, database.productStats())
-      return
-    }
-
     const isEventsPath = ['/v1/events', '/geod-telemetry/v1/events'].includes(url.pathname)
-    const isProductEventsPath = [
-      '/v1/product-events',
-      '/geod-telemetry/v1/product-events',
-    ].includes(url.pathname)
-    const productOrigin = typeof request.headers.origin === 'string'
-      ? request.headers.origin
-      : ''
     if (isEventsPath) setCors(response)
-    if (isProductEventsPath && PRODUCT_EVENT_ORIGINS.has(productOrigin)) {
-      setCors(response, productOrigin)
-    }
-    if (request.method === 'OPTIONS' && (isEventsPath || isProductEventsPath)) {
-      if (isProductEventsPath && !PRODUCT_EVENT_ORIGINS.has(productOrigin)) {
-        sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
-        return
-      }
+    if (request.method === 'OPTIONS' && isEventsPath) {
       response.writeHead(204)
       response.end()
       return
     }
-    if (request.method !== 'POST' || (!isEventsPath && !isProductEventsPath)) {
+    if (request.method !== 'POST' || !isEventsPath) {
       sendError(response, 404, 'not found', 'not_found')
-      return
-    }
-    if (isProductEventsPath && !PRODUCT_EVENT_ORIGINS.has(productOrigin)) {
-      sendError(response, 403, 'origin is not allowed', 'origin_not_allowed')
       return
     }
     if (!checkRateLimit(requestAddress(request))) {
@@ -1167,13 +854,8 @@ export async function createTelemetryServer(options = {}) {
     }
 
     try {
-      const body = await readJsonBody(request, config.maxBodyBytes)
-      const events = isProductEventsPath
-        ? validateProductEnvelope(body)
-        : validateEnvelope(body)
-      const inserted = isProductEventsPath
-        ? await database.insertProduct(events)
-        : await database.insert(events)
+      const events = validateEnvelope(await readJsonBody(request, config.maxBodyBytes))
+      const inserted = await database.insert(events)
       sendJson(response, 202, { accepted: events.length, inserted })
     } catch (error) {
       sendError(
@@ -1188,7 +870,6 @@ export async function createTelemetryServer(options = {}) {
   server.on('close', () => database.close())
   return server
 }
-
 const launchedDirectly =
   typeof process !== 'undefined' &&
   process.argv?.[1] &&

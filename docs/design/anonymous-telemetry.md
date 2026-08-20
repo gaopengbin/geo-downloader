@@ -53,11 +53,11 @@ The production collector is deployed at:
 
 ## First-party product events
 
-The same service also stores privacy-limited events for the public GeoD website
-and WeChat Dialog Generator in a separate `product_events` SQLite table.
+Public website analytics are intentionally separated from GeoD desktop
+telemetry and are owned by the Laogao platform API.
 
-- Ingest: `https://laogao.xyz/geod-telemetry/v1/product-events`
-- Public aggregates: `https://laogao.xyz/geod-telemetry/public/product-stats`
+- Ingest: `https://laogao.xyz/platform-api/v1/product-events`
+- Public aggregates: `https://laogao.xyz/platform-api/public/product-stats`
 
 Web events use random browser-local visitor and session IDs. Only page paths,
 referrer host names, UTM attribution, download platform/version, message-count
