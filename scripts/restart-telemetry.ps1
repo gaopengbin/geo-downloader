@@ -106,20 +106,21 @@ if ($activeListener) {
 $legacyWatchdogMarker = 'services\geod-telemetry\server.mjs'
 $stdoutPath = Join-Path $serviceRoot 'stdout.log'
 $stderrPath = Join-Path $serviceRoot 'stderr.log'
-$commandLine = `
-  "cmd.exe /d /s /c `"`"$node`" `"$script`" `"$legacyWatchdogMarker`" " +
-  "1>`"$stdoutPath`" 2>`"$stderrPath`"`""
-$createdProcess = Invoke-CimMethod `
-  -ClassName Win32_Process `
-  -MethodName Create `
-  -Arguments @{
-    CommandLine = $commandLine
-    CurrentDirectory = $serviceRoot
-  }
-if ($createdProcess.ReturnValue -ne 0) {
-  throw "WMI could not start telemetry; return value $($createdProcess.ReturnValue)."
+$trackingId = $env:RUNNER_TRACKING_ID
+try {
+  Remove-Item Env:RUNNER_TRACKING_ID -ErrorAction SilentlyContinue
+  $createdProcess = Start-Process `
+    -FilePath $node `
+    -ArgumentList @($script, $legacyWatchdogMarker) `
+    -WorkingDirectory $serviceRoot `
+    -RedirectStandardOutput $stdoutPath `
+    -RedirectStandardError $stderrPath `
+    -WindowStyle Hidden `
+    -PassThru
+} finally {
+  if ($trackingId) { $env:RUNNER_TRACKING_ID = $trackingId }
 }
-Write-Host "Started managed telemetry process $($createdProcess.ProcessId) through WMI."
+Write-Host "Started telemetry process $($createdProcess.Id) as the deployment Runner account."
 Start-Sleep -Seconds 3
 $health = Invoke-RestMethod -Uri 'http://127.0.0.1:9091/health' -TimeoutSec 10
 if (
