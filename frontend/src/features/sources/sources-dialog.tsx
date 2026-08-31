@@ -157,6 +157,7 @@ function CustomPanel({
 }) {
   const list = useMemo(() => settings.custom_sources ?? [], [settings.custom_sources])
   const [editing, setEditing] = useState<CustomTileSource | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [smartOpen, setSmartOpen] = useState(false)
   const [smartUrl, setSmartUrl] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
@@ -179,6 +180,7 @@ function CustomPanel({
 
   function handleDelete(id: string) {
     onMutate(removeCustomSource(settings, id))
+    setDeletingId(null)
     if (editing?.id === id) setEditing(null)
   }
 
@@ -329,22 +331,51 @@ function CustomPanel({
                 </code>
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setEditing({ ...s })}
-                  disabled={pending}
-                >
-                  <Pencil className="size-4" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => handleDelete(s.id)}
-                  disabled={pending}
-                >
-                  <Trash2 className="size-4 text-destructive" />
-                </Button>
+                {deletingId === s.id ? (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDeletingId(null)}
+                      disabled={pending}
+                    >
+                      取消
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => handleDelete(s.id)}
+                      disabled={pending}
+                    >
+                      确认删除
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setDeletingId(null)
+                        setEditing({ ...s })
+                      }}
+                      disabled={pending}
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setEditing(null)
+                        setDeletingId(s.id)
+                      }}
+                      disabled={pending}
+                    >
+                      <Trash2 className="size-4 text-destructive" />
+                    </Button>
+                  </>
+                )}
               </div>
             </li>
           ))}
