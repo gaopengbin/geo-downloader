@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test src/features/sources/osm-download-policy.test.ts src/features/map/tile-url.test.ts src/features/region/range-selection.test.ts src/features/tasks/task-copy.test.ts src/i18n/language.test.ts src/lib/geo-area.test.ts src/lib/kml-region-normalizer.test.ts",
+    "test": "node --experimental-strip-types --test src/features/sources/osm-download-policy.test.ts src/features/map/tile-url.test.ts src/features/region/range-selection.test.ts src/features/tasks/task-copy.test.ts src/i18n/language.test.ts src/lib/geo-area.test.ts src/lib/geo-import.test.ts src/lib/kml-region-normalizer.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -30,6 +30,7 @@
     "@tanstack/react-query": "^5.100.5",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.7.0",
+    "@tauri-apps/plugin-fs": "^2.5.1",
     "@tmcw/togeojson": "^7.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -43,6 +44,7 @@
     "lucide-react": "^1.11.0",
     "maplibre-gl": "^5.24.0",
     "pbf": "^4.0.1",
+    "proj4": "^2.21.0",
     "react": "^19.2.5",
     "react-day-picker": "^10.0.1",
     "react-dom": "^19.2.5",

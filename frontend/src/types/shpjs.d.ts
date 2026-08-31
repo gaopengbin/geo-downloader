@@ -6,9 +6,15 @@ declare module 'shpjs' {
   } from 'geojson'
 
   type ShpInput = ArrayBuffer | ArrayBufferView | string | Blob
+  type ShpBundleInput = {
+    shp: ArrayBuffer | ArrayBufferView
+    dbf?: ArrayBuffer | ArrayBufferView
+    prj?: ArrayBuffer | ArrayBufferView | string
+    cpg?: ArrayBuffer | ArrayBufferView | string
+  }
 
   function shp(
-    input: ShpInput,
+    input: ShpInput | ShpBundleInput,
   ): Promise<FeatureCollection | FeatureCollection[] | GeoJsonObject>
 
   export default shp

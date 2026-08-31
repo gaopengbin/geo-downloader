@@ -4,6 +4,7 @@ import { Loader2, MapPin, Search, Upload, X } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Feature, GeoJsonObject } from 'geojson'
 import { useTranslation } from 'react-i18next'
+import { ask as askDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,8 +20,11 @@ import { isTauriRuntime } from '@/lib/tauri'
 import { PanelSection } from '@/components/layout/panel-section'
 import {
   parseRegionFile,
+  parseRegionPath,
   REGION_FILE_ACCEPT_ATTR,
+  type ParsedRegionFile,
   UnsupportedRegionFileError,
+  validateWgs84Coordinates,
 } from '@/lib/geo-import'
 import {
   extractAreaFeatures,
@@ -267,21 +271,77 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
     setSearchResults([])
   }
 
-  const importedFilesRef = useRef<File[]>([])
   const [importDialog, setImportDialog] = useState<{
     features: Feature[]
     filename: string
+    crs: ParsedRegionFile['crs']
   } | null>(null)
+
+  const processParsedRegion = async (parsed: ParsedRegionFile) => {
+    const { geojson, filename, crs } = parsed
+    const format = telemetryImportFormat(filename)
+    const areaFeatures = extractAreaFeatures(geojson)
+    if (areaFeatures.length === 0) {
+      void trackTelemetry('region_imported', { format, outcome: 'no_area', feature_count: '0' })
+      const errorKey = {
+        'lines-and-points': 'region.toast.areaLinesAndPoints',
+        lines: 'region.toast.areaLines',
+        points: 'region.toast.areaPoints',
+        missing: 'region.toast.areaMissing',
+      }[regionAreaErrorReason(geojson)]
+      toast.error(t(errorKey))
+      return
+    }
+
+    const validation = validateWgs84Coordinates(
+      { type: 'FeatureCollection', features: areaFeatures } as GeoJsonObject,
+    )
+    if (!validation.valid) {
+      void trackTelemetry('region_imported', { format, outcome: 'error', feature_count: '0' })
+      const sample = validation.firstInvalid
+        ? `${validation.firstInvalid[0]}, ${validation.firstInvalid[1]}`
+        : t('region.toast.unknownCoordinate')
+      toast.error(t('region.toast.invalidCoordinates', { sample }))
+      return
+    }
+
+    if (crs.needsConfirmation) {
+      const confirmed = await askDialog(t('region.crsAssumptionMessage'), {
+        title: t('region.crsAssumptionTitle'),
+        kind: 'warning',
+        okLabel: t('region.crsAssumptionConfirm'),
+        cancelLabel: t('common.cancel'),
+      })
+      if (!confirmed) return
+    }
+
+    const rings = ringsFromGeoJSON(geojson)
+    if (areaFeatures.length > 1) {
+      setImportDialog({ features: areaFeatures, filename, crs })
+      return
+    }
+
+    setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings })
+    void trackTelemetry('region_imported', {
+      format,
+      outcome: 'success',
+      feature_count: telemetryCountBucket(areaFeatures.length),
+    })
+    void trackTelemetry('selection_changed', {
+      method: 'import',
+      geometry: 'polygon',
+      complexity: telemetryCountBucket(rings.reduce((total, ring) => total + ring.length, 0)),
+    })
+    toast.success(t('region.toast.imported'), { description: crs.label })
+  }
 
   const onPickFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return
-    importedFilesRef.current = Array.from(files)
     const file = files[0]
     const format = telemetryImportFormat(file.name)
     try {
-      let geojson: GeoJsonObject
       try {
-        geojson = await parseRegionFile(file)
+        await processParsedRegion(await parseRegionFile(file))
       } catch (e) {
         if (e instanceof UnsupportedRegionFileError) {
           void trackTelemetry('region_imported', { format, outcome: 'error', feature_count: '0' })
@@ -290,45 +350,31 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         }
         throw e
       }
-      const areaFeatures = extractAreaFeatures(geojson)
-      if (areaFeatures.length === 0) {
-        void trackTelemetry('region_imported', { format, outcome: 'no_area', feature_count: '0' })
-        const errorKey = {
-          'lines-and-points': 'region.toast.areaLinesAndPoints',
-          lines: 'region.toast.areaLines',
-          points: 'region.toast.areaPoints',
-          missing: 'region.toast.areaMissing',
-        }[regionAreaErrorReason(geojson)]
-        toast.error(t(errorKey))
-        return
-      }
-      const rings = ringsFromGeoJSON(geojson)
-
-      // 多要素 → 弹出选择对话框（仅选范围，不触发下载）
-      if (areaFeatures.length > 1) {
-        setImportDialog({ features: areaFeatures, filename: file.name })
-        return
-      }
-
-      // 单要素 / FeatureCollection 仅 1 项 / 裸 Geometry
-      setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings })
-      void trackTelemetry('region_imported', {
-        format,
-        outcome: 'success',
-        feature_count: telemetryCountBucket(areaFeatures.length),
-      })
-      void trackTelemetry('selection_changed', {
-        method: 'import',
-        geometry: 'polygon',
-        complexity: telemetryCountBucket(rings.reduce((total, ring) => total + ring.length, 0)),
-      })
-      toast.success(t('region.toast.imported'))
     } catch (e) {
       void trackTelemetry('region_imported', { format, outcome: 'error', feature_count: '0' })
       const msg = e instanceof Error ? e.message : String(e)
       toast.error(t('region.toast.importError', { message: msg }))
     } finally {
       if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  const onOpenRegionFile = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        title: t('region.uploadTitle'),
+        filters: [{
+          name: t('region.fileFilter'),
+          extensions: ['geojson', 'json', 'shp', 'zip', 'kml', 'kmz'],
+        }],
+      })
+      if (typeof selected !== 'string') return
+      await processParsedRegion(await parseRegionPath(selected))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      toast.error(t('region.toast.importError', { message }))
     }
   }
 
@@ -488,7 +534,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => fileRef.current?.click()}
+          onClick={() => void onOpenRegionFile()}
           title={t('region.uploadTitle')}
         >
           <Upload className="mr-1 size-3.5" />
@@ -519,6 +565,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       <RegionImportDialog
         features={importDialog?.features ?? null}
         filename={importDialog?.filename ?? ''}
+        crs={importDialog?.crs ?? null}
         onClose={() => setImportDialog(null)}
       />
     </PanelSection>

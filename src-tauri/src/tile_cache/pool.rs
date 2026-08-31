@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{
     active_downloads, get_config, store::TileStore, PruneReport, SourceInfo, SourceKey,
@@ -13,6 +13,9 @@ use super::{
 };
 
 const POOL_MAX: usize = 8;
+const AUTO_PRUNE_WRITE_THRESHOLD: u64 = 64 * 1024 * 1024;
+const AUTO_PRUNE_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+const AUTO_PRUNE_TARGET_PERCENT: u64 = 90;
 
 struct PoolEntry {
     store: Arc<Mutex<TileStore>>,
@@ -48,15 +51,37 @@ impl Inner {
 
 pub struct Store {
     inner: Mutex<Inner>,
+    prune_gate: Mutex<()>,
+    auto_prune: Mutex<AutoPruneState>,
+}
+
+struct AutoPruneState {
+    bytes_since_check: u64,
+    last_check: Instant,
+}
+
+impl Default for AutoPruneState {
+    fn default() -> Self {
+        Self {
+            bytes_since_check: 0,
+            last_check: Instant::now(),
+        }
+    }
 }
 
 static GLOBAL_STORE: OnceLock<Store> = OnceLock::new();
 
 impl Store {
     pub fn global() -> &'static Store {
-        GLOBAL_STORE.get_or_init(|| Store {
+        GLOBAL_STORE.get_or_init(Self::new)
+    }
+
+    fn new() -> Self {
+        Self {
             inner: Mutex::new(Inner::default()),
-        })
+            prune_gate: Mutex::new(()),
+            auto_prune: Mutex::new(AutoPruneState::default()),
+        }
     }
 
     fn path_for(src: &SourceKey) -> PathBuf {
@@ -129,7 +154,10 @@ impl Store {
             Self::checkpoint_entry(entry);
         }
         if n > 0 {
-            log::info!("[tile_cache] shutdown: checkpoint 并关闭了 {} 个 mbtiles 连接", n);
+            log::info!(
+                "[tile_cache] shutdown: checkpoint 并关闭了 {} 个 mbtiles 连接",
+                n
+            );
         }
     }
 
@@ -156,21 +184,25 @@ impl Store {
         tile: StoredTile,
         info: Option<SourceInfo>,
     ) -> Result<(), String> {
-        let Some(_access) = crate::cache_migration::begin_cache_access() else {
-            return Ok(());
-        };
-        if !get_config().enabled {
-            return Ok(());
+        let written_bytes = tile.bytes.len() as u64;
+        {
+            let Some(_access) = crate::cache_migration::begin_cache_access() else {
+                return Ok(());
+            };
+            if !get_config().enabled {
+                return Ok(());
+            }
+            let handle = self.handle(src)?;
+            let mut store = handle.lock().map_err(|_| "store poisoned".to_string())?;
+            if let Some(info) = info {
+                store.ensure_metadata(&info)?;
+            } else {
+                store.touch().ok();
+            }
+            store.put(coord, &tile)?;
+            active_downloads::notify_cached(src.as_str(), coord);
         }
-        let handle = self.handle(src)?;
-        let mut store = handle.lock().map_err(|_| "store poisoned".to_string())?;
-        if let Some(info) = info {
-            store.ensure_metadata(&info)?;
-        } else {
-            store.touch().ok();
-        }
-        store.put(coord, &tile)?;
-        active_downloads::notify_cached(src.as_str(), coord);
+        self.maybe_auto_prune(written_bytes, false);
         Ok(())
     }
 
@@ -180,18 +212,26 @@ impl Store {
         batch: Vec<(TileCoord, StoredTile)>,
         info: Option<SourceInfo>,
     ) -> Result<(), String> {
-        let Some(_access) = crate::cache_migration::begin_cache_access() else {
-            return Ok(());
-        };
-        if !get_config().enabled || batch.is_empty() {
+        if batch.is_empty() {
             return Ok(());
         }
-        let handle = self.handle(src)?;
-        let mut store = handle.lock().map_err(|_| "store poisoned".to_string())?;
-        if let Some(info) = info {
-            store.ensure_metadata(&info)?;
+        let written_bytes = batch.iter().map(|(_, tile)| tile.bytes.len() as u64).sum();
+        {
+            let Some(_access) = crate::cache_migration::begin_cache_access() else {
+                return Ok(());
+            };
+            if !get_config().enabled {
+                return Ok(());
+            }
+            let handle = self.handle(src)?;
+            let mut store = handle.lock().map_err(|_| "store poisoned".to_string())?;
+            if let Some(info) = info {
+                store.ensure_metadata(&info)?;
+            }
+            store.put_batch(&batch)?;
         }
-        store.put_batch(&batch)
+        self.maybe_auto_prune(written_bytes, false);
+        Ok(())
     }
 
     /// 批量判断哪些坐标已在缓存中。
@@ -259,10 +299,7 @@ impl Store {
                 Some(s) => s.to_string(),
                 None => continue,
             };
-            let size = entry
-                .metadata()
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let size = Self::source_disk_size(&path);
             let src = SourceKey::from_slug(stem);
             let handle = match self.handle(&src) {
                 Ok(h) => h,
@@ -281,6 +318,10 @@ impl Store {
 
     /// 清理：source=Some 删单库；None 全清。返回释放的字节数。
     pub fn clear(&self, src: Option<&SourceKey>) -> Result<u64, String> {
+        let _prune = self
+            .prune_gate
+            .lock()
+            .map_err(|_| "prune lock poisoned".to_string())?;
         let _access = crate::cache_migration::begin_cache_access()
             .ok_or_else(|| "缓存正在迁移".to_string())?;
         self.clear_inner(src)
@@ -291,12 +332,7 @@ impl Store {
             Some(s) => {
                 self.close(s);
                 let path = Self::path_for(s);
-                let size = path.metadata().map(|m| m.len()).unwrap_or(0);
-                let _ = std::fs::remove_file(&path);
-                // WAL/journal 副文件
-                let _ = std::fs::remove_file(path.with_extension("mbtiles-wal"));
-                let _ = std::fs::remove_file(path.with_extension("mbtiles-shm"));
-                Ok(size)
+                Self::remove_source_files(&path)
             }
             None => {
                 // 关闭全部连接（先 checkpoint 再丢，避免删主文件后留下孤儿 -wal）
@@ -304,19 +340,18 @@ impl Store {
                 let cfg = get_config();
                 let mut freed = 0u64;
                 if let Ok(rd) = std::fs::read_dir(&cfg.root_dir) {
-                    for entry in rd.flatten() {
-                        let path = entry.path();
-                        if path
-                            .extension()
-                            .and_then(|s| s.to_str())
-                            .map(|e| e == "mbtiles" || e == "mbtiles-wal" || e == "mbtiles-shm")
-                            .unwrap_or(false)
-                        {
-                            freed += entry.metadata().map(|m| m.len()).unwrap_or(0);
-                            let _ = std::fs::remove_file(&path);
-                        }
+                    let sources: Vec<PathBuf> = rd
+                        .flatten()
+                        .map(|entry| entry.path())
+                        .filter(|path| {
+                            path.extension().and_then(|value| value.to_str()) == Some("mbtiles")
+                        })
+                        .collect();
+                    for path in sources {
+                        freed += Self::remove_source_files(&path)?;
                     }
                 }
+                freed += Self::remove_orphan_companions(&cfg.root_dir)?;
                 Ok(freed)
             }
         }
@@ -324,20 +359,30 @@ impl Store {
 
     /// LRU 整库淘汰：按 gd_last_used_at 升序删，直到总大小 <= max_total_bytes。
     pub fn prune(&self, max_total_bytes: u64) -> Result<PruneReport, String> {
+        let _prune = self
+            .prune_gate
+            .lock()
+            .map_err(|_| "prune lock poisoned".to_string())?;
         let _access = crate::cache_migration::begin_cache_access()
             .ok_or_else(|| "缓存正在迁移".to_string())?;
+        self.prune_inner(max_total_bytes)
+    }
+
+    fn prune_inner(&self, max_total_bytes: u64) -> Result<PruneReport, String> {
         if max_total_bytes == 0 {
             return Ok(PruneReport {
                 removed_sources: vec![],
                 freed_bytes: 0,
             });
         }
+        let config = get_config();
+        let orphan_freed = Self::remove_orphan_companions(&config.root_dir)?;
         let mut stats = self.stats_inner()?;
         let total: u64 = stats.iter().map(|s| s.size_bytes).sum();
         if total <= max_total_bytes {
             return Ok(PruneReport {
                 removed_sources: vec![],
-                freed_bytes: 0,
+                freed_bytes: orphan_freed,
             });
         }
         // 升序：last_used_at 缺失视为最早
@@ -348,40 +393,187 @@ impl Store {
                 .cmp(b.last_used_at.as_deref().unwrap_or(""))
         });
         let mut removed = Vec::new();
-        let mut freed = 0u64;
+        let mut freed = orphan_freed;
         let mut current = total;
         for s in stats {
             if current <= max_total_bytes {
                 break;
             }
+            if active_downloads::is_source_active(&s.source) || self.source_is_busy(&s.source) {
+                continue;
+            }
             let key = SourceKey::from_slug(s.source.clone());
-            let f = self.clear_inner(Some(&key)).unwrap_or(0);
+            let f = match self.clear_inner(Some(&key)) {
+                Ok(freed) => freed,
+                Err(error) => {
+                    log::warn!("[tile_cache] 自动清理 {} 失败: {}", s.source, error);
+                    continue;
+                }
+            };
             current = current.saturating_sub(f);
             freed += f;
-            removed.push(s.source);
+            if f > 0 {
+                removed.push(s.source);
+            }
         }
         Ok(PruneReport {
             removed_sources: removed,
             freed_bytes: freed,
         })
     }
+
+    fn source_disk_size(path: &std::path::Path) -> u64 {
+        [
+            path.to_path_buf(),
+            path.with_extension("mbtiles-wal"),
+            path.with_extension("mbtiles-shm"),
+        ]
+        .iter()
+        .map(|candidate| {
+            candidate
+                .metadata()
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+        })
+        .sum()
+    }
+
+    fn remove_source_files(path: &std::path::Path) -> Result<u64, String> {
+        let candidates = [
+            path.to_path_buf(),
+            path.with_extension("mbtiles-wal"),
+            path.with_extension("mbtiles-shm"),
+        ];
+        let mut freed = 0;
+        for candidate in candidates {
+            if !candidate.exists() {
+                continue;
+            }
+            let size = candidate
+                .metadata()
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            std::fs::remove_file(&candidate)
+                .map_err(|error| format!("删除缓存失败 {}: {}", candidate.display(), error))?;
+            freed += size;
+        }
+        Ok(freed)
+    }
+
+    fn remove_orphan_companions(root: &std::path::Path) -> Result<u64, String> {
+        if !root.exists() {
+            return Ok(0);
+        }
+        let mut freed = 0;
+        for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
+            let path = match entry {
+                Ok(entry) => entry.path(),
+                Err(_) => continue,
+            };
+            let is_companion = matches!(
+                path.extension().and_then(|value| value.to_str()),
+                Some("mbtiles-wal" | "mbtiles-shm")
+            );
+            if !is_companion || path.with_extension("mbtiles").exists() {
+                continue;
+            }
+            let size = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("删除孤立缓存文件失败 {}: {}", path.display(), error))?;
+            freed += size;
+        }
+        Ok(freed)
+    }
+
+    fn source_is_busy(&self, source: &str) -> bool {
+        let Ok(inner) = self.inner.lock() else {
+            return true;
+        };
+        let Some(entry) = inner.entries.get(source) else {
+            return false;
+        };
+        if Arc::strong_count(&entry.store) > 1 {
+            return true;
+        }
+        let busy = entry.store.try_lock().is_err();
+        busy
+    }
+
+    fn maybe_auto_prune(&self, written_bytes: u64, force: bool) {
+        let config = get_config();
+        if !config.enabled || config.max_total_bytes == 0 {
+            return;
+        }
+        let should_check = {
+            let Ok(mut state) = self.auto_prune.lock() else {
+                return;
+            };
+            state.bytes_since_check = state.bytes_since_check.saturating_add(written_bytes);
+            let due = force
+                || state.bytes_since_check >= AUTO_PRUNE_WRITE_THRESHOLD
+                || state.last_check.elapsed() >= AUTO_PRUNE_CHECK_INTERVAL;
+            if due {
+                state.bytes_since_check = 0;
+                state.last_check = Instant::now();
+            }
+            due
+        };
+        if !should_check {
+            return;
+        }
+        let Ok(_prune) = self.prune_gate.try_lock() else {
+            return;
+        };
+        let Some(_access) = crate::cache_migration::begin_cache_access() else {
+            return;
+        };
+        let target = config
+            .max_total_bytes
+            .saturating_mul(AUTO_PRUNE_TARGET_PERCENT)
+            / 100;
+        match self.prune_inner(target) {
+            Ok(report) if report.freed_bytes > 0 => log::info!(
+                "[tile_cache] 自动清理 {} 个图源，释放 {} 字节",
+                report.removed_sources.len(),
+                report.freed_bytes
+            ),
+            Ok(_) => {}
+            Err(error) => log::warn!("[tile_cache] 自动容量检查失败: {}", error),
+        }
+    }
+
+    pub fn request_capacity_check(&self) {
+        self.maybe_auto_prune(0, true);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tile_cache::{set_root_dir, CacheConfig, set_config};
+    use crate::tile_cache::{get_config, set_config, CacheConfig};
     use tempfile::tempdir;
+
+    static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ConfigRestore(CacheConfig);
+
+    impl Drop for ConfigRestore {
+        fn drop(&mut self) {
+            set_config(self.0.clone());
+        }
+    }
 
     #[test]
     fn end_to_end_get_put() {
+        let _lock = CACHE_TEST_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();
+        let _restore = ConfigRestore(get_config());
         set_config(CacheConfig {
             enabled: true,
             root_dir: dir.path().to_path_buf(),
             max_total_bytes: 10 * 1024 * 1024,
         });
-        let store = Store::global();
+        let store = Store::new();
         let src = SourceKey::new("World Imagery");
         let coord = TileCoord { z: 4, x: 3, y: 5 };
         assert!(store.get(&src, coord).unwrap().is_none());
@@ -409,8 +601,118 @@ mod tests {
         let freed = store.clear(Some(&src)).unwrap();
         assert!(freed > 0);
         assert!(store.get(&src, coord).unwrap().is_none());
+    }
 
-        // 重置全局，避免影响其他测试
-        set_root_dir(CacheConfig::default_root());
+    #[test]
+    fn source_size_and_removal_include_wal_and_shm_files() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("source.mbtiles");
+        let wal = path.with_extension("mbtiles-wal");
+        let shm = path.with_extension("mbtiles-shm");
+        std::fs::write(&path, [1u8; 3]).unwrap();
+        std::fs::write(&wal, [2u8; 5]).unwrap();
+        std::fs::write(&shm, [3u8; 7]).unwrap();
+
+        assert_eq!(Store::source_disk_size(&path), 15);
+        assert_eq!(Store::remove_source_files(&path).unwrap(), 15);
+        assert!(!path.exists());
+        assert!(!wal.exists());
+        assert!(!shm.exists());
+    }
+
+    #[test]
+    fn clear_all_removes_orphan_wal_and_shm_files() {
+        let _lock = CACHE_TEST_LOCK.lock().unwrap();
+        let dir = tempdir().unwrap();
+        let _restore = ConfigRestore(get_config());
+        set_config(CacheConfig {
+            enabled: true,
+            root_dir: dir.path().to_path_buf(),
+            max_total_bytes: 1024,
+        });
+        let wal = dir.path().join("orphan.mbtiles-wal");
+        let shm = dir.path().join("orphan.mbtiles-shm");
+        std::fs::write(&wal, [1u8; 5]).unwrap();
+        std::fs::write(&shm, [2u8; 7]).unwrap();
+
+        let store = Store::new();
+        assert_eq!(store.clear(None).unwrap(), 12);
+        assert!(!wal.exists());
+        assert!(!shm.exists());
+    }
+
+    #[test]
+    fn write_path_prunes_cache_when_capacity_check_is_due() {
+        let _lock = CACHE_TEST_LOCK.lock().unwrap();
+        let dir = tempdir().unwrap();
+        let _restore = ConfigRestore(get_config());
+        set_config(CacheConfig {
+            enabled: true,
+            root_dir: dir.path().to_path_buf(),
+            max_total_bytes: 1024,
+        });
+        let store = Store::new();
+        let source = SourceKey::new("auto prune source");
+        let path = Store::path_for(&source);
+        store.auto_prune.lock().unwrap().last_check = Instant::now() - AUTO_PRUNE_CHECK_INTERVAL;
+        store
+            .put(
+                &source,
+                TileCoord { z: 1, x: 0, y: 0 },
+                StoredTile {
+                    bytes: vec![7; 4096],
+                    content_type: "image/png".into(),
+                },
+                Some(SourceInfo {
+                    display_name: "Auto prune".into(),
+                    url_template: "https://example.invalid/{z}/{x}/{y}".into(),
+                    format: "png".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        assert!(!path.exists());
+        assert!(store.stats().unwrap().is_empty());
+    }
+
+    #[test]
+    fn active_download_source_is_pruned_only_after_unregister() {
+        let _lock = CACHE_TEST_LOCK.lock().unwrap();
+        let dir = tempdir().unwrap();
+        let _restore = ConfigRestore(get_config());
+        set_config(CacheConfig {
+            enabled: true,
+            root_dir: dir.path().to_path_buf(),
+            max_total_bytes: 1024,
+        });
+        let store = Store::new();
+        let source = SourceKey::new("active source prune test");
+        let coord = TileCoord { z: 1, x: 0, y: 0 };
+        let path = Store::path_for(&source);
+        active_downloads::register(source.as_str(), &[coord]);
+        store.auto_prune.lock().unwrap().last_check = Instant::now() - AUTO_PRUNE_CHECK_INTERVAL;
+        let put_result = store.put(
+            &source,
+            coord,
+            StoredTile {
+                bytes: vec![7; 4096],
+                content_type: "image/png".into(),
+            },
+            Some(SourceInfo {
+                display_name: "Active source".into(),
+                url_template: "https://example.invalid/{z}/{x}/{y}".into(),
+                format: "png".into(),
+                ..Default::default()
+            }),
+        );
+        let existed_while_active = path.exists();
+        active_downloads::unregister(source.as_str());
+        put_result.unwrap();
+        assert!(existed_while_active);
+
+        store.request_capacity_check();
+
+        assert!(!path.exists());
     }
 }

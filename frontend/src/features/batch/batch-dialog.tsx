@@ -33,7 +33,6 @@ import {
   requestOsmDownloadApproval,
 } from '@/features/sources/osm-download-policy'
 import {
-  bboxAreaKm2,
   collectPropertyKeys,
   deduplicateFilenames,
   extractFeaturePolygon,
@@ -41,6 +40,7 @@ import {
   recommendNameField,
   sanitizeFilename,
 } from './batch-utils'
+import { featureAreaKm2 } from '@/lib/geo-area'
 import type { DownloadRequest } from '@/types/api'
 
 const INDEX_FIELD = '__index__'
@@ -285,14 +285,14 @@ export function BatchDialog() {
 
   // === Panel 阶段 UI ===
   if (open && stage === 'panel' && features) {
-    const totalArea = features.reduce((acc, f) => {
-      const bb = featureBbox(f)
-      return acc + (bb ? bboxAreaKm2(bb) : 0)
-    }, 0)
-    const selectedArea = Array.from(selected).reduce((acc, i) => {
-      const bb = featureBbox(features[i])
-      return acc + (bb ? bboxAreaKm2(bb) : 0)
-    }, 0)
+    const areas = features.map(featureAreaKm2)
+    const totalArea = areas.every((area) => area != null)
+      ? areas.reduce<number>((sum, area) => sum + (area ?? 0), 0)
+      : null
+    const selectedAreas = Array.from(selected).map((index) => areas[index])
+    const selectedArea = selectedAreas.every((area) => area != null)
+      ? selectedAreas.reduce<number>((sum, area) => sum + (area ?? 0), 0)
+      : null
 
     return (
       <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -337,8 +337,8 @@ export function BatchDialog() {
               {t('batch.selected', {
                 selected: selected.size,
                 total: features.length,
-                selectedArea: selectedArea.toFixed(2),
-                totalArea: totalArea.toFixed(2),
+                selectedArea: selectedArea == null ? '—' : selectedArea.toFixed(2),
+                totalArea: totalArea == null ? '—' : totalArea.toFixed(2),
               })}
             </span>
             <div className="flex gap-1">
@@ -380,8 +380,7 @@ export function BatchDialog() {
 
           <div className="flex-1 overflow-y-auto rounded-md border">
             {features.map((f, i) => {
-              const bb = featureBbox(f)
-              const area = bb ? bboxAreaKm2(bb) : 0
+              const area = areas[i]
               const display =
                 nameField === INDEX_FIELD
                   ? String(i + 1).padStart(3, '0')
@@ -413,7 +412,9 @@ export function BatchDialog() {
                   <span className="flex-1 truncate" title={display}>
                     {display}
                   </span>
-                  <span className="text-muted-foreground">{area.toFixed(2)} km²</span>
+                  <span className="text-muted-foreground">
+                    {area == null ? '—' : `${area.toFixed(2)} km²`}
+                  </span>
                 </label>
               )
             })}

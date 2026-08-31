@@ -4,21 +4,30 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use dashmap::DashSet;
+use dashmap::{DashMap, DashSet};
 
 use super::TileCoord;
 
 type CoordKey = (String, u8, u32, u32);
 
 static ACTIVE: OnceLock<DashSet<CoordKey>> = OnceLock::new();
+static ACTIVE_SOURCES: OnceLock<DashMap<String, usize>> = OnceLock::new();
 static BROWSE_FILLED: AtomicU64 = AtomicU64::new(0);
 
 fn active_set() -> &'static DashSet<CoordKey> {
     ACTIVE.get_or_init(DashSet::new)
 }
 
+fn active_sources() -> &'static DashMap<String, usize> {
+    ACTIVE_SOURCES.get_or_init(DashMap::new)
+}
+
 /// 下载器启动时注册待下载坐标。
 pub fn register(source: &str, coords: &[TileCoord]) {
+    active_sources()
+        .entry(source.to_string())
+        .and_modify(|count| *count += 1)
+        .or_insert(1);
     let set = active_set();
     for c in coords {
         set.insert((source.to_string(), c.z, c.x, c.y));
@@ -27,8 +36,23 @@ pub fn register(source: &str, coords: &[TileCoord]) {
 
 /// 下载器结束时注销该 source 的所有坐标。
 pub fn unregister(source: &str) {
-    let set = active_set();
-    set.retain(|k| k.0 != source);
+    let mut remove_coordinates = false;
+    if let Some(mut count) = active_sources().get_mut(source) {
+        if *count <= 1 {
+            drop(count);
+            active_sources().remove(source);
+            remove_coordinates = true;
+        } else {
+            *count -= 1;
+        }
+    }
+    if remove_coordinates {
+        active_set().retain(|key| key.0 != source);
+    }
+}
+
+pub fn is_source_active(source: &str) -> bool {
+    active_sources().get(source).is_some_and(|count| *count > 0)
 }
 
 /// Store::put 成功后调用：如果该坐标正在被下载，移除并返回 true。
@@ -68,12 +92,43 @@ impl DownloadGuard {
     pub fn new(source: &str, coords: &[TileCoord]) -> Self {
         register(source, coords);
         reset_browse_filled();
-        Self { source: source.to_string() }
+        Self {
+            source: source.to_string(),
+        }
     }
 }
 
 impl Drop for DownloadGuard {
     fn drop(&mut self) {
         unregister(&self.source);
+        // 下载结束后，刚刚仍受保护的 source 已可以参与容量淘汰。
+        if !is_source_active(&self.source) {
+            std::thread::spawn(|| super::Store::global().request_capacity_check());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_downloads_keep_source_and_coordinates_active_until_the_last_task_ends() {
+        let source = "active-download-overlap-test";
+        let first = TileCoord { z: 3, x: 1, y: 2 };
+        let second = TileCoord { z: 3, x: 4, y: 5 };
+
+        register(source, &[first]);
+        register(source, &[second]);
+        unregister(source);
+
+        assert!(is_source_active(source));
+        assert!(is_still_pending(source, first));
+        assert!(is_still_pending(source, second));
+
+        unregister(source);
+        assert!(!is_source_active(source));
+        assert!(!is_still_pending(source, first));
+        assert!(!is_still_pending(source, second));
     }
 }

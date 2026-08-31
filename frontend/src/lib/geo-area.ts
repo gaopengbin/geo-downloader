@@ -10,6 +10,9 @@ import type {
 
 export type AreaGeometry = Polygon | MultiPolygon
 
+const EARTH_RADIUS_METERS = 6_371_008.8
+const DEG_TO_RAD = Math.PI / 180
+
 function polygonCoordinates(geometry: Geometry): Position[][][] {
   if (geometry.type === 'Polygon') return [geometry.coordinates]
   if (geometry.type === 'MultiPolygon') return geometry.coordinates
@@ -61,6 +64,64 @@ export function extractAreaFeatures(geojson: GeoJsonObject): Feature<AreaGeometr
 export function outerRingsFromAreaGeometry(geometry: AreaGeometry): Position[][] {
   if (geometry.type === 'Polygon') return [geometry.coordinates[0]]
   return geometry.coordinates.map((polygon) => polygon[0])
+}
+
+function validPosition(position: Position): boolean {
+  return (
+    position.length >= 2 &&
+    Number.isFinite(position[0]) &&
+    Number.isFinite(position[1]) &&
+    position[0] >= -180 &&
+    position[0] <= 180 &&
+    position[1] >= -90 &&
+    position[1] <= 90
+  )
+}
+
+function ringAreaSquareMeters(ring: Position[]): number | null {
+  if (ring.length < 3 || ring.some((position) => !validPosition(position))) return null
+  let sum = 0
+  for (let index = 0; index < ring.length; index += 1) {
+    const current = ring[index]
+    const next = ring[(index + 1) % ring.length]
+    let deltaLongitude = (next[0] - current[0]) * DEG_TO_RAD
+    if (deltaLongitude > Math.PI) deltaLongitude -= 2 * Math.PI
+    if (deltaLongitude < -Math.PI) deltaLongitude += 2 * Math.PI
+    sum += deltaLongitude * (
+      2 +
+      Math.sin(current[1] * DEG_TO_RAD) +
+      Math.sin(next[1] * DEG_TO_RAD)
+    )
+  }
+  return Math.abs(sum * EARTH_RADIUS_METERS * EARTH_RADIUS_METERS / 2)
+}
+
+function polygonAreaSquareMeters(polygon: Position[][]): number | null {
+  if (polygon.length === 0) return null
+  const outer = ringAreaSquareMeters(polygon[0])
+  if (outer == null) return null
+  let holes = 0
+  for (const ring of polygon.slice(1)) {
+    const area = ringAreaSquareMeters(ring)
+    if (area == null) return null
+    holes += area
+  }
+  return Math.max(0, outer - holes)
+}
+
+/** Calculate the actual spherical area of Polygon/MultiPolygon geometry. */
+export function featureAreaKm2(feature: Feature): number | null {
+  const geometry = extractAreaGeometry(feature.geometry)
+  if (!geometry) return null
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates
+  let total = 0
+  for (const polygon of polygons) {
+    const area = polygonAreaSquareMeters(polygon)
+    if (area == null) return null
+    total += area
+  }
+  const squareKilometers = total / 1_000_000
+  return Number.isFinite(squareKilometers) ? squareKilometers : null
 }
 
 interface GeometrySummary {

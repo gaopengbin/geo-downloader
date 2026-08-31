@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { FeatureCollection } from 'geojson'
+import type { Feature, FeatureCollection, Polygon } from 'geojson'
 
 import {
   extractAreaFeatures,
+  featureAreaKm2,
   outerRingsFromAreaGeometry,
   regionAreaErrorMessage,
 } from './geo-area.ts'
+
+function polygonFeature(coordinates: Polygon['coordinates']): Feature<Polygon> {
+  return { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates } }
+}
 
 test('extracts polygons recursively from a mixed geometry collection', () => {
   const input: FeatureCollection = {
@@ -96,4 +101,25 @@ test('distinguishes point-only files from line files', () => {
   }
 
   assert.match(regionAreaErrorMessage(input), /点要素/)
+})
+
+test('calculates spherical polygon area instead of bounding-box area', () => {
+  const triangle = polygonFeature([[[0, 0], [1, 0], [0, 1], [0, 0]]])
+  const area = featureAreaKm2(triangle)
+  assert.ok(area != null)
+  assert.ok(area > 6_000 && area < 6_300)
+})
+
+test('subtracts polygon holes', () => {
+  const outer = polygonFeature([[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]])
+  const withHole = polygonFeature([
+    [[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]],
+    [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5], [0.5, 0.5]],
+  ])
+  assert.ok((featureAreaKm2(withHole) ?? Infinity) < (featureAreaKm2(outer) ?? 0))
+})
+
+test('rejects projected coordinates masquerading as longitude and latitude', () => {
+  const projected = polygonFeature([[[500_000, 3_800_000], [500_100, 3_800_000], [500_000, 3_800_100]]])
+  assert.equal(featureAreaKm2(projected), null)
 })

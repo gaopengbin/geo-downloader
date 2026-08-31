@@ -120,6 +120,7 @@ pub fn run() {
             commands::get_districts,
             commands::get_admin_boundary,
             commands::geocode_search,
+            commands::authorize_shapefile_sidecars,
             // 下载范围书签
             commands::list_region_bookmarks,
             commands::create_region_bookmark,
@@ -194,6 +195,10 @@ pub fn run() {
                     );
                 }
             }
+
+            // 启动后检查一次历史缓存占用。容量检查与迁移互斥，并在后台执行，
+            // 不阻塞主窗口创建。
+            std::thread::spawn(|| tile_cache::Store::global().request_capacity_check());
 
             // 启动时异步清理上次运行残留的 tif-dl-* 临时目录（仅清 >24h 老的，
             // 避免误删用户当前还在用的"完成但有缺块（CompletedWithGaps）"任务的 temp）

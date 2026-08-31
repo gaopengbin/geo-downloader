@@ -22,7 +22,140 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
+use tauri_plugin_fs::FsExt;
+
+const SHAPEFILE_SIDECAR_EXTENSIONS: [&str; 5] = ["shp", "shx", "dbf", "prj", "cpg"];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShapefileSidecarFile {
+    path: String,
+    name: String,
+    extension: String,
+}
+
+fn discover_shapefile_sidecars(path: &Path) -> Result<Vec<PathBuf>, String> {
+    if !path.is_file()
+        || !path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("shp"))
+    {
+        return Err("请选择有效的 .shp 文件".to_string());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "无法读取 Shapefile 所在目录".to_string())?;
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Shapefile 文件名无效".to_string())?;
+    let mut sidecars = std::fs::read_dir(parent)
+        .map_err(|error| format!("无法读取 Shapefile 所在目录: {error}"))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|candidate| candidate.is_file())
+        .filter(|candidate| {
+            candidate
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .is_some_and(|candidate_stem| candidate_stem.eq_ignore_ascii_case(stem))
+                && candidate
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|extension| {
+                        SHAPEFILE_SIDECAR_EXTENSIONS
+                            .iter()
+                            .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+                    })
+        })
+        .collect::<Vec<_>>();
+    sidecars.sort_by_key(|candidate| {
+        let extension = candidate
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        SHAPEFILE_SIDECAR_EXTENSIONS
+            .iter()
+            .position(|allowed| extension.eq_ignore_ascii_case(allowed))
+            .unwrap_or(usize::MAX)
+    });
+    Ok(sidecars)
+}
+
+#[tauri::command]
+pub fn authorize_shapefile_sidecars(
+    window: WebviewWindow,
+    path: String,
+) -> Result<Vec<ShapefileSidecarFile>, String> {
+    let selected = PathBuf::from(path);
+    let scope = window.fs_scope();
+    if !scope.is_allowed(&selected) {
+        return Err("请通过文件选择器重新选择 Shapefile".to_string());
+    }
+    discover_shapefile_sidecars(&selected)?
+        .into_iter()
+        .map(|sidecar| {
+            scope
+                .allow_file(&sidecar)
+                .map_err(|error| format!("无法授权读取 {}: {error}", sidecar.display()))?;
+            let name = sidecar
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let extension = sidecar
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            Ok(ShapefileSidecarFile {
+                path: sidecar.to_string_lossy().to_string(),
+                name,
+                extension,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod shapefile_sidecar_tests {
+    use super::discover_shapefile_sidecars;
+
+    #[test]
+    fn discovers_only_same_basename_sidecars_case_insensitively() {
+        let directory = tempfile::tempdir().unwrap();
+        let selected = directory.path().join("区域.SHP");
+        for name in [
+            "区域.SHP",
+            "区域.ShX",
+            "区域.dbf",
+            "区域.PRJ",
+            "区域.cpg",
+            "区域.txt",
+            "其他.prj",
+        ] {
+            std::fs::write(directory.path().join(name), name.as_bytes()).unwrap();
+        }
+
+        let files = discover_shapefile_sidecars(&selected).unwrap();
+        let names = files
+            .iter()
+            .filter_map(|path| path.file_name()?.to_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["区域.SHP", "区域.ShX", "区域.dbf", "区域.PRJ", "区域.cpg"]);
+    }
+
+    #[test]
+    fn rejects_non_shapefile_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let selected = directory.path().join("区域.geojson");
+        std::fs::write(&selected, b"{}").unwrap();
+        assert!(discover_shapefile_sidecars(&selected).is_err());
+    }
+}
 
 async fn history_blocking<T, F>(operation: F) -> Result<T, String>
 where
@@ -2832,6 +2965,7 @@ pub fn save_settings(mut settings: AppSettings) -> Result<(), String> {
     crate::tile_cache::set_max_total_bytes(
         settings.tile_cache_max_size_mb.saturating_mul(1024 * 1024),
     );
+    std::thread::spawn(|| crate::tile_cache::Store::global().request_capacity_check());
     Ok(())
 }
 

@@ -97,14 +97,18 @@ function formatMeters(m: number): string {
 }
 
 // 近似计算选区面积（km²）
-function estimateAreaKm2(b: MapBounds): number {
-  if (!b) return 0
+function estimateAreaKm2(b: MapBounds): number | null {
+  if (
+    !b ||
+    ![b.north, b.south, b.east, b.west].every(Number.isFinite) ||
+    b.north > 90 || b.south < -90 || b.east > 180 || b.west < -180
+  ) return null
   const dLat = Math.abs(b.north - b.south)
   const dLng = Math.abs(b.east - b.west)
   const meanLat = (b.north + b.south) / 2
   // 1° lat ≈ 111.32 km, 1° lng ≈ 111.32 * cos(lat) km
   const km = dLat * 111.32 * (dLng * 111.32 * Math.cos((meanLat * Math.PI) / 180))
-  return km
+  return Number.isFinite(km) && km >= 0 ? km : null
 }
 
 const createDownloadSchema = (t: TFunction) => z.object({
@@ -653,7 +657,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   const bounds = useSelectionStore((s) => s.bounds)
 
   const showGcj02 = !isDemMode && GCJ02_SOURCES.has(source)
-  const areaKm2 = bounds ? estimateAreaKm2(bounds) : 0
+  const areaKm2 = bounds ? estimateAreaKm2(bounds) : null
 
   // 自动估算：bounds / zoom / format 等参数变化后 400ms 防抖触发
   useEffect(() => {
@@ -745,8 +749,10 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                   <Info className="size-3.5" /> {t('download.area')}
                 </span>
                 <span className="font-mono">
-                  <span className="font-semibold text-foreground">{areaKm2.toFixed(2)}</span>
-                  <span className="ml-0.5 text-muted-foreground">km²</span>
+                  <span className="font-semibold text-foreground">
+                    {areaKm2 == null ? '—' : areaKm2.toFixed(2)}
+                  </span>
+                  {areaKm2 != null && <span className="ml-0.5 text-muted-foreground">km²</span>}
                   {polygon && polygon.length > 0 && (
                     <span className="ml-2 text-muted-foreground">
                       {t('download.vertices', { count: polygon[0]?.length ?? 0 })}

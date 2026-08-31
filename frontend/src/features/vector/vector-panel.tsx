@@ -149,7 +149,7 @@ export function VectorPanel() {
       try {
         let geojson: GeoJsonObject
         try {
-          geojson = await parseRegionFile(file)
+          geojson = (await parseRegionFile(file)).geojson
         } catch (e) {
           if (e instanceof UnsupportedRegionFileError) {
             toast.error(e.message)

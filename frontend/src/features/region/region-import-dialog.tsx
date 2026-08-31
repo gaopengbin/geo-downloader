@@ -5,11 +5,13 @@ import { useTranslation } from 'react-i18next'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -20,34 +22,36 @@ import {
 } from '@/components/ui/select'
 import { useSelectionStore, type ImportedFeature, type LatLngRing, type MapBounds } from '@/store/selection-store'
 import {
-  bboxAreaKm2,
   collectPropertyKeys,
   extractFeaturePolygon,
-  featureBbox,
   recommendNameField,
 } from '@/features/batch/batch-utils'
+import { featureAreaKm2 } from '@/lib/geo-area'
 import {
   telemetryCountBucket,
   telemetryImportFormat,
   trackTelemetry,
 } from '@/features/telemetry/telemetry-client'
-import { updateRangeSelection } from '@/features/region/range-selection'
+import { updateOrderedRangeSelection } from '@/features/region/range-selection'
+import type { RegionCrsInfo } from '@/lib/geo-import'
 
 const INDEX_FIELD = '__index__'
 
 interface Props {
   features: Feature[] | null
   filename: string
+  crs?: RegionCrsInfo | null
   onClose: () => void
 }
 
-export function RegionImportDialog({ features, filename, onClose }: Props) {
+export function RegionImportDialog({ features, filename, crs, onClose }: Props) {
   if (!features) return null
 
   return (
     <RegionImportDialogContent
       features={features}
       filename={filename}
+      crs={crs}
       onClose={onClose}
     />
   )
@@ -56,10 +60,12 @@ export function RegionImportDialog({ features, filename, onClose }: Props) {
 function RegionImportDialogContent({
   features,
   filename,
+  crs,
   onClose,
 }: {
   features: Feature[]
   filename: string
+  crs?: RegionCrsInfo | null
   onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -75,6 +81,8 @@ function RegionImportDialogContent({
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(features.map((_, i) => i)),
   )
+  const [search, setSearch] = useState('')
+  const [sortMode, setSortMode] = useState<'original' | 'name-asc' | 'area-asc' | 'area-desc'>('original')
   const [shiftSelecting, setShiftSelecting] = useState(false)
   const selectionAnchorRef = useRef<number | null>(null)
 
@@ -97,15 +105,6 @@ function RegionImportDialogContent({
     }
   }, [])
 
-  const totalArea = useMemo(
-    () =>
-      features.reduce((acc, f) => {
-        const bb = featureBbox(f)
-        return acc + (bb ? bboxAreaKm2(bb) : 0)
-      }, 0),
-    [features],
-  )
-
   const total = features.length
   const featureName = (i: number): string => {
     const fallback = t('regionImport.featureName', { index: String(i + 1).padStart(3, '0') })
@@ -116,9 +115,34 @@ function RegionImportDialogContent({
     return String(v)
   }
 
+  const areas = useMemo(() => features.map(featureAreaKm2), [features])
+  const totalArea = areas.every((area) => area != null)
+    ? areas.reduce<number>((sum, area) => sum + (area ?? 0), 0)
+    : null
+  const normalizedSearch = search.trim().toLocaleLowerCase()
+  const visibleIndices = features
+    .map((_, index) => index)
+    .filter((index) => !normalizedSearch || featureName(index).toLocaleLowerCase().includes(normalizedSearch))
+    .sort((left, right) => {
+      if (sortMode === 'name-asc') return featureName(left).localeCompare(featureName(right))
+      if (sortMode === 'area-asc' || sortMode === 'area-desc') {
+        const leftArea = areas[left]
+        const rightArea = areas[right]
+        if (leftArea == null) return rightArea == null ? left - right : 1
+        if (rightArea == null) return -1
+        return sortMode === 'area-asc' ? leftArea - rightArea : rightArea - leftArea
+      }
+      return left - right
+    })
+
   const toggle = (i: number, shiftKey = false) => {
     setSelected((prev) =>
-      updateRangeSelection(prev, i, shiftKey ? selectionAnchorRef.current : null),
+      updateOrderedRangeSelection(
+        prev,
+        i,
+        shiftKey ? selectionAnchorRef.current : null,
+        visibleIndices,
+      ),
     )
     if (!shiftKey || selectionAnchorRef.current == null) {
       selectionAnchorRef.current = i
@@ -143,10 +167,10 @@ function RegionImportDialogContent({
     toggle(i, event.shiftKey)
   }
 
-  const selectedArea = Array.from(selected).reduce((acc, i) => {
-    const bb = featureBbox(features[i])
-    return acc + (bb ? bboxAreaKm2(bb) : 0)
-  }, 0)
+  const selectedAreas = Array.from(selected).map((index) => areas[index])
+  const selectedArea = selectedAreas.every((area) => area != null)
+    ? selectedAreas.reduce<number>((sum, area) => sum + (area ?? 0), 0)
+    : null
 
   const onConfirm = () => {
     if (selected.size === 0) return
@@ -212,9 +236,24 @@ function RegionImportDialogContent({
               count: total,
             })}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            {t('regionImport.description', { count: total })}
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-3">
+        {crs && (
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
+            <span className="font-medium">{t('regionImport.crs')}：</span>
+            <span>{crs.label}</span>
+            {crs.sidecars.length > 0 && (
+              <span className="ml-2 text-muted-foreground">
+                {t('regionImport.sidecars', { count: crs.sidecars.length })}
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-[minmax(0,1fr)_10rem] gap-3">
           <div className="space-y-1.5">
             <Label className="text-xs">{t('regionImport.nameField')}</Label>
             <Select value={nameField} onValueChange={setNameField}>
@@ -231,7 +270,30 @@ function RegionImportDialogContent({
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-end gap-1">
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t('regionImport.sort')}</Label>
+            <Select value={sortMode} onValueChange={(value) => setSortMode(value as typeof sortMode)}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="original">{t('regionImport.sortOriginal')}</SelectItem>
+                <SelectItem value="name-asc">{t('regionImport.sortName')}</SelectItem>
+                <SelectItem value="area-desc">{t('regionImport.sortAreaDesc')}</SelectItem>
+                <SelectItem value="area-asc">{t('regionImport.sortAreaAsc')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <Input
+            className="h-8 flex-1 text-xs"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder={t('regionImport.searchPlaceholder')}
+          />
+          <div className="flex gap-1">
             <Button size="sm" variant="outline" onClick={selectAll} type="button">
               {t('regionImport.selectAll')}
             </Button>
@@ -249,10 +311,11 @@ function RegionImportDialogContent({
             {t('regionImport.selected', {
               selected: selected.size,
               total,
-              selectedArea: selectedArea.toFixed(2),
-              totalArea: totalArea.toFixed(2),
+              selectedArea: selectedArea == null ? '—' : selectedArea.toFixed(2),
+              totalArea: totalArea == null ? '—' : totalArea.toFixed(2),
             })}
           </span>
+          <span>{t('regionImport.visible', { count: visibleIndices.length })}</span>
         </div>
 
         <div className="flex-1 overflow-auto rounded-md border">
@@ -266,9 +329,8 @@ function RegionImportDialogContent({
               </tr>
             </thead>
             <tbody>
-              {features.map((f, i) => {
-                const bb = featureBbox(f)
-                const area = bb ? bboxAreaKm2(bb) : 0
+              {visibleIndices.map((i) => {
+                const area = areas[i]
                 const checked = selected.has(i)
                 return (
                   <tr
@@ -298,11 +360,18 @@ function RegionImportDialogContent({
                       {featureName(i)}
                     </td>
                     <td className="px-2 py-1 text-right text-muted-foreground">
-                      {area.toFixed(2)}
+                      {area == null ? '—' : area.toFixed(2)}
                     </td>
                   </tr>
                 )
               })}
+              {visibleIndices.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">
+                    {t('regionImport.noMatches')}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

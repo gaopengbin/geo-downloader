@@ -70,6 +70,10 @@ export function featureBbox(feature: Feature): Bounds | null {
 
 export function bboxAreaKm2(b: Bounds): number {
   const R = 6371
+  if (
+    ![b.north, b.south, b.east, b.west].every(Number.isFinite) ||
+    b.north > 90 || b.south < -90 || b.east > 180 || b.west < -180
+  ) return 0
   const latMid = ((b.north + b.south) / 2) * Math.PI / 180
   const dLat = (b.north - b.south) * Math.PI / 180
   const dLng = (b.east - b.west) * Math.PI / 180
