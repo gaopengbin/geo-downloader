@@ -11,7 +11,10 @@ $nginxRoot = 'C:\nginx-1.30.2'
 $serviceRoot = $ServiceRoot
 $script = Join-Path $serviceRoot 'server.mjs'
 $tokenFile = Join-Path $nginxRoot 'geod-telemetry-admin-token.txt'
-$databasePath = Join-Path $nginxRoot 'data\geod-telemetry.sqlite'
+$dataRoot = Join-Path $nginxRoot 'data'
+$runtimeRoot = Join-Path $dataRoot 'geod-telemetry-runtime'
+$databasePath = Join-Path $runtimeRoot 'geod-telemetry-v2.sqlite'
+$previousDatabasePath = Join-Path $dataRoot 'geod-telemetry-v2.sqlite'
 $nginxConf = Join-Path $nginxRoot 'conf\nginx.conf'
 $nginxExe = Join-Path $nginxRoot 'nginx.exe'
 
@@ -23,7 +26,7 @@ if ([string]::IsNullOrWhiteSpace($adminToken)) {
 }
 
 New-Item -ItemType Directory -Force -Path $serviceRoot | Out-Null
-New-Item -ItemType Directory -Force -Path (Split-Path $databasePath) | Out-Null
+New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
 if (-not (Test-Path -LiteralPath $tokenFile -PathType Leaf)) {
   Set-Content -LiteralPath $tokenFile -Value $adminToken -NoNewline -Encoding UTF8
 }
@@ -101,6 +104,18 @@ for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
 }
 if ($activeListener) {
   throw 'The previous telemetry listener did not release port 9091.'
+}
+
+$backupRoot = Join-Path $runtimeRoot 'backups'
+New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+if (Test-Path -LiteralPath $databasePath -PathType Leaf) {
+  $backupPath = Join-Path $backupRoot (
+    'geod-telemetry-v2-before-deploy-{0}.sqlite' -f (Get-Date -Format 'yyyyMMddHHmmss')
+  )
+  Copy-Item -LiteralPath $databasePath -Destination $backupPath -Force
+} elseif (Test-Path -LiteralPath $previousDatabasePath -PathType Leaf) {
+  Copy-Item -LiteralPath $previousDatabasePath -Destination $databasePath -Force
+  Write-Host "Migrated telemetry database to $databasePath"
 }
 
 $legacyWatchdogMarker = 'services\geod-telemetry\server.mjs'

@@ -79,7 +79,8 @@ export function loadConfig(env = process.env) {
     host: env.HOST || '127.0.0.1',
     port: envInteger(env.PORT, 9091, 0, 65535),
     databasePath:
-      env.TELEMETRY_DB_PATH || 'C:/nginx-1.30.2/data/geod-telemetry-v2.sqlite',
+      env.TELEMETRY_DB_PATH ||
+      'C:/nginx-1.30.2/data/geod-telemetry-runtime/geod-telemetry-v2.sqlite',
     legacyDatabasePath:
       env.LEGACY_TELEMETRY_DB_PATH || 'C:/nginx-1.30.2/data/geod-telemetry.sqlite',
     adminTokenFile:

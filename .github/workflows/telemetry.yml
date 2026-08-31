@@ -3,12 +3,15 @@ name: GeoD Telemetry Service
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  deploy:
+  validate-and-dispatch:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Test collector
         uses: actions/setup-node@v4
@@ -23,40 +26,20 @@ jobs:
           npm ci --no-audit --no-fund
           npm test
 
-      - name: Upload collector
+      - name: Dispatch production deployment
         env:
-          SSHPASS: ${{ secrets.MIRROR_PASSWORD }}
+          GH_TOKEN: ${{ secrets.DASHBOARD_DEPLOY_TOKEN }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-
-          sshpass -e ssh -o StrictHostKeyChecking=no \
-            "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}" \
-            "powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\services\geod-telemetry' | Out-Null; New-Item -ItemType Directory -Force -Path 'C:\nginx-1.30.2\tools' | Out-Null\""
-
-          for file in package.json package-lock.json server.mjs; do
-            sshpass -e scp -o StrictHostKeyChecking=no \
-              "services/telemetry/$file" \
-              "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}:/C:/nginx-1.30.2/services/geod-telemetry/$file"
-          done
-
-          sshpass -e scp -o StrictHostKeyChecking=no \
-            scripts/restart-telemetry.ps1 \
-            "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}:/C:/nginx-1.30.2/tools/restart-telemetry.ps1"
-
-      - name: Restart collector
-        env:
-          SSHPASS: ${{ secrets.MIRROR_PASSWORD }}
-          TELEMETRY_ADMIN_TOKEN: ${{ secrets.QR_ADMIN_TOKEN }}
-        run: |
-          ADMIN_TOKEN_B64="$(printf %s "$TELEMETRY_ADMIN_TOKEN" | base64 -w0)"
-          sshpass -e ssh -o StrictHostKeyChecking=no \
-            "${{ secrets.MIRROR_USER }}@${{ secrets.MIRROR_HOST }}" \
-            "powershell -NoProfile -ExecutionPolicy Bypass -File C:/nginx-1.30.2/tools/restart-telemetry.ps1 -AdminTokenBase64 $ADMIN_TOKEN_B64"
-
-      - name: Verify public endpoints
-        run: |
-          curl --fail --silent --show-error \
-            https://laogao.xyz/geod-telemetry/health
-          curl --fail --silent --show-error \
-            https://laogao.xyz/geod-telemetry/admin/ > /dev/null
+          gh api \
+            --method POST \
+            repos/gaopengbin/gaopengbin-dashboard/dispatches \
+            --input - <<'JSON'
+          {
+            "event_type": "deploy",
+            "client_payload": {
+              "project": "geo-downloader",
+              "target": "telemetry",
+              "ref": "${{ github.sha }}"
+            }
+          }
+          JSON
