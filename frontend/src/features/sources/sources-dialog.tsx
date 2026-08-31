@@ -28,7 +28,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Separator } from '@/components/ui/separator'
 import {
   Select,
   SelectContent,
@@ -382,7 +381,7 @@ function CustomPanel({
             </Button>
             <Button onClick={handleSave} disabled={pending}>
               <Save className="mr-1 size-4" />
-              确认
+              保存
             </Button>
           </div>
         </div>
@@ -508,7 +507,7 @@ function OverridesPanel({
                     </Button>
                     <Button onClick={handleSave} disabled={pending}>
                       <Save className="mr-1 size-4" />
-                      确认
+                      保存
                     </Button>
                   </div>
                 </div>
@@ -614,7 +613,8 @@ export function SourcesDialog() {
     enabled: open,
   })
 
-  // 本地编辑态：保存按钮触发后才写后端
+  // Keep an optimistic local copy so the edited row updates immediately while
+  // the settings file is being written.
   const [draft, setDraft] = useState<AppSettings | null>(null)
   const [syncedFrom, setSyncedFrom] = useState<AppSettings | undefined>(undefined)
   if (settingsQuery.data !== syncedFrom) {
@@ -623,29 +623,26 @@ export function SourcesDialog() {
     setDraft(settingsQuery.data ?? null)
   }
 
-  const dirty = useMemo(() => {
-    if (!draft || !settingsQuery.data) return false
-    return (
-      JSON.stringify(draft.custom_sources ?? []) !==
-        JSON.stringify(settingsQuery.data.custom_sources ?? []) ||
-      JSON.stringify(draft.source_overrides ?? []) !==
-        JSON.stringify(settingsQuery.data.source_overrides ?? []) ||
-      (draft.default_source ?? '') !== (settingsQuery.data.default_source ?? '')
-    )
-  }, [draft, settingsQuery.data])
-
   const mutation = useMutation({
     mutationFn: (next: AppSettings) => saveSettings(next),
-    onSuccess: () => {
+    onSuccess: (_data, saved) => {
       toast.success('图源配置已保存')
+      queryClient.setQueryData<AppSettings>(['settings'], saved)
       queryClient.invalidateQueries({ queryKey: ['settings'] })
       queryClient.invalidateQueries({ queryKey: ['tile-sources-merged'] })
+      queryClient.invalidateQueries({ queryKey: ['builtin-sources'] })
     },
     onError: (err: unknown) => {
+      setDraft(settingsQuery.data ?? null)
       const msg = err instanceof Error ? err.message : String(err)
       toast.error(`保存失败：${msg}`)
     },
   })
+
+  function persistSettings(next: AppSettings) {
+    setDraft(next)
+    mutation.mutate(next)
+  }
 
   const loading = settingsQuery.isLoading || builtinsQuery.isLoading || mergedQuery.isLoading
   const fetchError = settingsQuery.error ?? builtinsQuery.error ?? mergedQuery.error
@@ -725,7 +722,7 @@ export function SourcesDialog() {
             <TabsContent value="custom">
               <CustomPanel
                 settings={draft}
-                onMutate={setDraft}
+                onMutate={persistSettings}
                 pending={mutation.isPending}
               />
             </TabsContent>
@@ -733,7 +730,7 @@ export function SourcesDialog() {
               <OverridesPanel
                 settings={draft}
                 builtins={builtinsQuery.data}
-                onMutate={setDraft}
+                onMutate={persistSettings}
                 pending={mutation.isPending}
               />
             </TabsContent>
@@ -741,32 +738,10 @@ export function SourcesDialog() {
               <DefaultSourcePanel
                 settings={draft}
                 merged={mergedQuery.data}
-                onMutate={setDraft}
+                onMutate={persistSettings}
                 pending={mutation.isPending}
               />
             </TabsContent>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">
-                {dirty ? '有未保存的修改' : '已与服务端同步'}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  onClick={() => setDraft(settingsQuery.data ?? null)}
-                  disabled={!dirty || mutation.isPending}
-                >
-                  撤销
-                </Button>
-                <Button
-                  onClick={() => draft && mutation.mutate(draft)}
-                  disabled={!dirty || mutation.isPending}
-                >
-                  {mutation.isPending && <Loader2 className="mr-2 size-4 animate-spin" />}
-                  保存
-                </Button>
-              </div>
-            </div>
           </Tabs>
         ) : null}
       </DialogContent>
