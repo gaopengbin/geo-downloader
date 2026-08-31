@@ -541,8 +541,8 @@ const zhCN = {
   },
   regionImport: {
     featureName: '要素 {{index}}',
-      title: '导入区域 — {{filename}}（{{count}} 个要素）',
-      description: '检查并选择要导入的 {{count}} 个区域要素。',
+    title: '导入区域 — {{filename}}（{{count}} 个要素）',
+    description: '检查并选择要导入的 {{count}} 个区域要素。',
     uploadedFile: '上传文件',
     nameField: '显示名称字段',
     crs: '坐标系',

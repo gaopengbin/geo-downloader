@@ -541,8 +541,8 @@ const enUS = {
   },
   regionImport: {
     featureName: 'Feature {{index}}',
-      title: 'Import Area — {{filename}} ({{count}} features)',
-      description: 'Review and select from {{count}} imported area features.',
+    title: 'Import Area — {{filename}} ({{count}} features)',
+    description: 'Review and select from {{count}} imported area features.',
     uploadedFile: 'Uploaded file',
     nameField: 'Display name field',
     crs: 'Coordinate system',
