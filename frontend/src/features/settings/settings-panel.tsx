@@ -33,6 +33,7 @@ import { SourcesDialog } from '@/features/sources/sources-dialog'
 import { AboutDialog } from '@/features/about/about-dialog'
 import { useAssistantStore } from '@/features/assistant/assistant-store'
 import { TelemetrySettingsSection } from '@/features/telemetry/telemetry-settings-section'
+import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import {
   deleteAssistantApiKey,
   getAssistantSecretStatus,
@@ -247,6 +248,15 @@ export function SettingsPanel() {
       if (!values.ai_assistant_enabled) {
         useAssistantStore.getState().setOpen(false)
       }
+      const wasEnabled = settingsQuery.data?.ai_assistant_enabled === true
+      if (values.ai_assistant_enabled !== wasEnabled) {
+        void trackTelemetry('assistant_setting_changed', {
+          action: values.ai_assistant_enabled ? 'enabled' : 'disabled',
+        })
+      }
+      if (values.deepseek_api_key.trim()) {
+        void trackTelemetry('assistant_setting_changed', { action: 'key_saved' })
+      }
       reset({ ...values, deepseek_api_key: '' })
     },
     onError: (err: unknown) => {
@@ -266,6 +276,7 @@ export function SettingsPanel() {
       setValue('ai_assistant_enabled', false, { shouldDirty: true })
       queryClient.invalidateQueries({ queryKey: ['assistant-secret-status'] })
       useAssistantStore.getState().setOpen(false)
+      void trackTelemetry('assistant_setting_changed', { action: 'key_removed' })
       toast.success(t('settings.ai.removed'))
     },
     onError: (err: unknown) => {
@@ -292,6 +303,7 @@ export function SettingsPanel() {
       shouldDirty: true,
       shouldTouch: true,
     })
+    void trackTelemetry('assistant_setting_changed', { action: 'consent_accepted' })
     setAiConsentOpen(false)
   }
 

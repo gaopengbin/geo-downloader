@@ -1,11 +1,12 @@
 import { toast } from 'sonner'
 
+import { trackTelemetry, type TelemetryAssistantTarget } from '@/features/telemetry/telemetry-client'
 import { useAppStore, type AppMode, type SidebarTab } from '@/store/app-store'
 
 export const ASSISTANT_ACTION_EVENT = 'geod:assistant-action'
 
 interface AssistantNavigationAction {
-  id: string
+  id: TelemetryAssistantTarget
   label: string
   tab?: SidebarTab
   mode?: AppMode
@@ -231,5 +232,6 @@ export function executeAssistantActionHref(href: string) {
   }, 60)
 
   toast.success(`已定位到${action.label}`)
+  void trackTelemetry('assistant_navigation', { target: action.id })
   return true
 }

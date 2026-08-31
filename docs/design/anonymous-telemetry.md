@@ -19,10 +19,26 @@ GeoD telemetry is opt-in and disabled until the user explicitly chooses
 - `mode_changed`
 - `sidebar_tab_changed`
 - `graticule_changed`
+- `selection_changed`
+- `region_imported`
+- `bookmark_action`
+- `download_task_created`
+- `task_action`
+- `measurement_used`
+- `onboarding_event`
+- `assistant_setting_changed`
+- `assistant_panel_action`
+- `assistant_request`
+- `assistant_navigation`
 
 The client does not accept arbitrary event names or properties. Do not add URLs,
 file paths, filenames, search text, coordinates, selection bounds, tokens,
 API keys, or downloaded content to this schema.
+
+Assistant telemetry records only allowlisted feature actions and coarse result,
+duration, diagnostic-attachment, source-count, and navigation-target buckets. It
+never records prompts, responses, knowledge excerpts, model endpoints, API keys,
+or raw error messages.
 
 ## Collector contract
 

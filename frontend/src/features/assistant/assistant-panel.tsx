@@ -28,6 +28,11 @@ import {
   createAssistantMessage,
   useAssistantStore,
 } from '@/features/assistant/assistant-store'
+import {
+  telemetryCountBucket,
+  telemetryDurationBucket,
+  trackTelemetry,
+} from '@/features/telemetry/telemetry-client'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app-store'
 
@@ -66,6 +71,7 @@ export function AssistantPanel() {
 
   useEffect(() => {
     if (!open) return
+    void trackTelemetry('assistant_panel_action', { action: 'opened' })
     const controller = new AbortController()
     void checkAssistantHealth()
       .then((health) => setConnection({ status: 'ready', health }))
@@ -93,6 +99,7 @@ export function AssistantPanel() {
   const attachDiagnostics = async () => {
     const context = await collectAssistantDiagnostics(mode, tab)
     setDiagnosticContext(context)
+    void trackTelemetry('assistant_panel_action', { action: 'diagnostics_attached' })
     toast.success('已附加当前运行环境')
   }
 
@@ -105,6 +112,12 @@ export function AssistantPanel() {
     const content = draft.trim()
     if (!content || streaming) return
     if (connection.status !== 'ready' || !connection.health.configured) {
+      void trackTelemetry('assistant_request', {
+        outcome: 'blocked',
+        diagnostics_attached: Boolean(diagnosticContext),
+        source_count: '0',
+        duration: 'under_3s',
+      })
       toast.error('请先在设置的开发者选项中填写 DeepSeek API Key')
       return
     }
@@ -120,6 +133,9 @@ export function AssistantPanel() {
     const controller = new AbortController()
     requestRef.current = controller
     let receivedContent = false
+    let sourceCount = 0
+    const startedAt = performance.now()
+    let outcome: 'success' | 'empty' | 'cancelled' | 'error' = 'success'
 
     try {
       await streamAssistant({
@@ -131,24 +147,34 @@ export function AssistantPanel() {
           appendMessage(assistantMessage.id, delta)
         },
         onSources: (sources) => {
+          sourceCount = sources.length
           setMessageSources(assistantMessage.id, sources)
         },
       })
       if (!receivedContent) {
+        outcome = 'empty'
         failMessage(assistantMessage.id, '模型没有返回可显示的内容，请重试。')
       } else {
         setDiagnosticContext(null)
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
+        outcome = 'cancelled'
         if (!receivedContent) failMessage(assistantMessage.id, '已停止生成。')
       } else {
+        outcome = 'error'
         failMessage(
           assistantMessage.id,
           `请求失败：${error instanceof Error ? error.message : String(error)}`,
         )
       }
     } finally {
+      void trackTelemetry('assistant_request', {
+        outcome,
+        diagnostics_attached: Boolean(diagnosticContext),
+        source_count: telemetryCountBucket(sourceCount),
+        duration: telemetryDurationBucket(performance.now() - startedAt),
+      })
       requestRef.current = null
       setStreaming(false)
     }
@@ -178,7 +204,10 @@ export function AssistantPanel() {
             title="清空会话"
             aria-label="清空会话"
             disabled={streaming || messages.length === 0}
-            onClick={clearMessages}
+            onClick={() => {
+              clearMessages()
+              void trackTelemetry('assistant_panel_action', { action: 'cleared' })
+            }}
           >
             <Trash2 className="size-3.5" />
           </Button>
@@ -189,7 +218,10 @@ export function AssistantPanel() {
             className="size-8"
             title="关闭"
             aria-label="关闭助手"
-            onClick={() => setOpen(false)}
+            onClick={() => {
+              setOpen(false)
+              void trackTelemetry('assistant_panel_action', { action: 'closed' })
+            }}
           >
             <X className="size-4" />
           </Button>
@@ -214,7 +246,12 @@ export function AssistantPanel() {
                   key={suggestion}
                   type="button"
                   className="block w-full rounded-md border px-3 py-2.5 text-left text-sm transition-colors hover:border-primary/40 hover:bg-primary/5"
-                  onClick={() => setDraft(suggestion)}
+                  onClick={() => {
+                    setDraft(suggestion)
+                    void trackTelemetry('assistant_panel_action', {
+                      action: 'suggestion_selected',
+                    })
+                  }}
                 >
                   {suggestion}
                 </button>
@@ -283,7 +320,12 @@ export function AssistantPanel() {
               type="button"
               className="text-muted-foreground hover:text-foreground"
               aria-label="移除诊断信息"
-              onClick={() => setDiagnosticContext(null)}
+              onClick={() => {
+                setDiagnosticContext(null)
+                void trackTelemetry('assistant_panel_action', {
+                  action: 'diagnostics_removed',
+                })
+              }}
             >
               <X className="size-3.5" />
             </button>

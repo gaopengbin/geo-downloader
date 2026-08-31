@@ -40,10 +40,51 @@ interface TelemetryEventMap {
     tour: TelemetryTour
     action: 'started' | 'completed' | 'dismissed'
   }
+  assistant_setting_changed: {
+    action: 'consent_accepted' | 'enabled' | 'disabled' | 'key_saved' | 'key_removed'
+  }
+  assistant_panel_action: {
+    action:
+      | 'opened'
+      | 'closed'
+      | 'cleared'
+      | 'suggestion_selected'
+      | 'diagnostics_attached'
+      | 'diagnostics_removed'
+  }
+  assistant_request: {
+    outcome: 'success' | 'empty' | 'cancelled' | 'error' | 'blocked'
+    diagnostics_attached: boolean
+    source_count: TelemetryCountBucket
+    duration: TelemetryDurationBucket
+  }
+  assistant_navigation: {
+    target: TelemetryAssistantTarget
+  }
 }
 
 export type TelemetryCountBucket = '0' | '1' | '2-10' | '11-100' | '100+'
 export type TelemetryImportFormat = 'geojson' | 'shapefile' | 'kml' | 'kmz' | 'unknown'
+export type TelemetryDurationBucket = 'under_3s' | '3-10s' | '10-30s' | '30s+'
+export type TelemetryAssistantTarget =
+  | 'download'
+  | 'download-center'
+  | 'settings'
+  | 'settings-cache'
+  | 'settings-tokens'
+  | 'settings-proxy'
+  | 'settings-download'
+  | 'settings-advanced'
+  | 'settings-sources'
+  | 'imagery-sources'
+  | 'imagery-download'
+  | 'imagery-output'
+  | 'dem-download'
+  | 'wayback-download'
+  | 'tiles3d-download'
+  | 'mvt-download'
+  | 'osm-download'
+  | 'map'
 type TelemetryOutputFormat =
   | 'geotiff'
   | 'png'
@@ -89,6 +130,13 @@ export function telemetryCountBucket(value: number): TelemetryCountBucket {
   if (value <= 10) return '2-10'
   if (value <= 100) return '11-100'
   return '100+'
+}
+
+export function telemetryDurationBucket(value: number): TelemetryDurationBucket {
+  if (!Number.isFinite(value) || value < 3000) return 'under_3s'
+  if (value < 10000) return '3-10s'
+  if (value < 30000) return '10-30s'
+  return '30s+'
 }
 
 export function telemetryImportFormat(filename: string): TelemetryImportFormat {
@@ -193,6 +241,18 @@ function sanitizeProperties<TName extends TelemetryEventName>(
     case 'onboarding_event': {
       const value = properties as TelemetryEventMap['onboarding_event']
       return { ...value }
+    }
+    case 'assistant_setting_changed':
+    case 'assistant_panel_action': {
+      return { action: (properties as { action: string }).action }
+    }
+    case 'assistant_request': {
+      const value = properties as TelemetryEventMap['assistant_request']
+      return { ...value }
+    }
+    case 'assistant_navigation': {
+      const value = properties as TelemetryEventMap['assistant_navigation']
+      return { target: value.target }
     }
   }
 }

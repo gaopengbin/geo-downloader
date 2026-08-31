@@ -49,6 +49,43 @@ test('accepts GeoD events and rejects unrelated properties', () => {
   )
 })
 
+test('accepts privacy-safe assistant events and rejects message content', () => {
+  const [normalized] = validateEnvelope({
+    schema_version: 1,
+    events: [event({
+      event: 'assistant_request',
+      properties: {
+        outcome: 'success',
+        diagnostics_attached: true,
+        source_count: '2-10',
+        duration: '3-10s',
+      },
+    })],
+  })
+  assert.deepEqual(normalized.properties, {
+    outcome: 'success',
+    diagnostics_attached: true,
+    source_count: '2-10',
+    duration: '3-10s',
+  })
+  assert.throws(
+    () => validateEnvelope({
+      schema_version: 1,
+      events: [event({
+        event: 'assistant_request',
+        properties: {
+          outcome: 'success',
+          diagnostics_attached: false,
+          source_count: '0',
+          duration: 'under_3s',
+          prompt: 'private user content',
+        },
+      })],
+    }),
+    /assistant_request properties are invalid/,
+  )
+})
+
 test('serves only GeoD health, event ingestion, and protected statistics', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'geod-telemetry-'))
   const tokenPath = path.join(directory, 'admin-token.txt')

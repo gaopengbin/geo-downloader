@@ -22,6 +22,10 @@ const EVENT_NAMES = new Set([
   'task_action',
   'measurement_used',
   'onboarding_event',
+  'assistant_setting_changed',
+  'assistant_panel_action',
+  'assistant_request',
+  'assistant_navigation',
 ])
 const PLATFORMS = new Set(['windows', 'macos', 'linux', 'web', 'unknown'])
 const MODES = new Set(['imagery', 'dem', 'wayback', 'tiles3d', 'vector', 'mvt'])
@@ -46,6 +50,23 @@ const ONBOARDING_TOURS = new Set([
   'main', 'region', 'download_center', 'imagery', 'mvt', 'osm', 'tiles3d', 'wayback',
 ])
 const ONBOARDING_ACTIONS = new Set(['started', 'completed', 'dismissed'])
+const ASSISTANT_SETTING_ACTIONS = new Set([
+  'consent_accepted', 'enabled', 'disabled', 'key_saved', 'key_removed',
+])
+const ASSISTANT_PANEL_ACTIONS = new Set([
+  'opened', 'closed', 'cleared', 'suggestion_selected',
+  'diagnostics_attached', 'diagnostics_removed',
+])
+const ASSISTANT_REQUEST_OUTCOMES = new Set([
+  'success', 'empty', 'cancelled', 'error', 'blocked',
+])
+const DURATION_BUCKETS = new Set(['under_3s', '3-10s', '10-30s', '30s+'])
+const ASSISTANT_NAVIGATION_TARGETS = new Set([
+  'download', 'download-center', 'settings', 'settings-cache', 'settings-tokens',
+  'settings-proxy', 'settings-download', 'settings-advanced', 'settings-sources',
+  'imagery-sources', 'imagery-download', 'imagery-output', 'dem-download',
+  'wayback-download', 'tiles3d-download', 'mvt-download', 'osm-download', 'map',
+])
 
 function envInteger(value, fallback, minimum, maximum) {
   const parsed = Number.parseInt(value ?? '', 10)
@@ -173,6 +194,44 @@ function validateProperties(eventName, properties) {
       !ONBOARDING_ACTIONS.has(properties.action)
     ) throw invalid('onboarding_event properties are invalid')
     return { tour: properties.tour, action: properties.action }
+  }
+
+  if (eventName === 'assistant_setting_changed') {
+    if (!exactKeys(properties, ['action']) || !ASSISTANT_SETTING_ACTIONS.has(properties.action)) {
+      throw invalid('assistant_setting_changed properties are invalid')
+    }
+    return { action: properties.action }
+  }
+
+  if (eventName === 'assistant_panel_action') {
+    if (!exactKeys(properties, ['action']) || !ASSISTANT_PANEL_ACTIONS.has(properties.action)) {
+      throw invalid('assistant_panel_action properties are invalid')
+    }
+    return { action: properties.action }
+  }
+
+  if (eventName === 'assistant_request') {
+    if (
+      !exactKeys(properties, ['diagnostics_attached', 'duration', 'outcome', 'source_count']) ||
+      !ASSISTANT_REQUEST_OUTCOMES.has(properties.outcome) ||
+      typeof properties.diagnostics_attached !== 'boolean' ||
+      !COUNT_BUCKETS.has(properties.source_count) ||
+      !DURATION_BUCKETS.has(properties.duration)
+    ) throw invalid('assistant_request properties are invalid')
+    return {
+      outcome: properties.outcome,
+      diagnostics_attached: properties.diagnostics_attached,
+      source_count: properties.source_count,
+      duration: properties.duration,
+    }
+  }
+
+  if (eventName === 'assistant_navigation') {
+    if (
+      !exactKeys(properties, ['target']) ||
+      !ASSISTANT_NAVIGATION_TARGETS.has(properties.target)
+    ) throw invalid('assistant_navigation properties are invalid')
+    return { target: properties.target }
   }
 
   if (eventName !== 'graticule_changed' ||
