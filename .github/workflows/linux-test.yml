@@ -1,0 +1,60 @@
+name: Linux compatibility test
+
+on:
+  push:
+    branches: [codex/fix-linux82]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm install --no-audit --no-fund
+        working-directory: frontend
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall -y --locked tauri-cli@^2
+      - name: Build Linux packages
+        run: cargo tauri build --bundles deb,appimage
+      - name: Smoke test AppImage without rendering overrides
+        shell: bash
+        run: |
+          mkdir -p test-artifacts
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' -print -quit)
+          test -n "$APPIMAGE"
+          chmod +x "$APPIMAGE"
+          set +e
+          env -u WEBKIT_DISABLE_DMABUF_RENDERER APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a timeout 20s "$APPIMAGE" > test-artifacts/startup.log 2>&1
+          STATUS=$?
+          set -e
+          cat test-artifacts/startup.log
+          test "$STATUS" -eq 124
+      - name: Collect test packages
+        run: |
+          cp src-tauri/target/release/bundle/appimage/*.AppImage test-artifacts/GeoDownloader_issue82_linux_amd64.AppImage
+          cp src-tauri/target/release/bundle/deb/*.deb test-artifacts/GeoDownloader_issue82_linux_amd64.deb
+          printf 'Issue #82 Linux compatibility test\nCommit: %s\nRun without WEBKIT_DISABLE_DMABUF_RENDERER overrides.\nCheck window, map zoom and window resize.\n' "$GITHUB_SHA" > test-artifacts/README.txt
+          cd test-artifacts
+          sha256sum *.AppImage *.deb > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: geod-linux-issue82
+          path: test-artifacts/
+          retention-days: 14
