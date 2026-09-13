@@ -1,0 +1,15 @@
+[package]
+name = "geod-cli"
+version = "0.1.1"
+edition = "2021"
+license = "MIT"
+description = "Headless GeoD data acquisition and GeoStyle handoff"
+
+[[bin]]
+name = "geod"
+path = "src/main.rs"
+
+[dependencies]
+geod-core = { path = "../geod-core" }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }

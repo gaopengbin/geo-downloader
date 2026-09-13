@@ -2,7 +2,7 @@
 
 use crate::config::{self, TileSource, USER_AGENTS};
 use crate::merger::TileSource as MergerTileSource;
-use crate::task::PauseControl;
+use crate::pause_control::PauseControl;
 use crate::tile::TileCoord;
 use crate::tile_cache::{
     self as tcache, active_downloads, SourceInfo, SourceKey, StoredTile,
@@ -18,6 +18,34 @@ use std::time::Duration;
 use rand::seq::SliceRandom;
 use futures::stream::{self, StreamExt};
 use tokio_util::sync::CancellationToken;
+
+/// Bounds compressed raster/vector tile payloads before they can exhaust memory.
+/// This also applies to decoded HTTP content (for example a gzip response).
+const MAX_TILE_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+async fn bounded_tile_body(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let too_large = || format!("TILE_TOO_LARGE: tile response exceeds {max_bytes} bytes");
+    if response.content_length().is_some_and(|length| length > max_bytes as u64) {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("读取失败: {}", e.without_url()))?
+    {
+        // Check before extending, including responses with no Content-Length or
+        // chunked transfer encoding. Never reserve based on untrusted headers.
+        if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+            return Err(too_large());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
 
 /// 下载进度
 #[derive(Debug, Clone)]
@@ -244,12 +272,12 @@ impl TileDownloader {
                     Ok(resp) => {
                         let status = resp.status();
                         if status.is_success() {
-                            match resp.bytes().await {
+                            match bounded_tile_body(resp, MAX_TILE_RESPONSE_BYTES).await {
                                 Ok(bytes) => match tokio::fs::write(file_path, &bytes).await {
                                     Ok(_) => Ok(()),
                                     Err(e) => Err((format!("写入失败: {}", e), false)),
                                 },
-                                Err(e) => Err((format!("读取失败: {}", e), false)),
+                                Err(e) => Err((e, false)),
                             }
                         } else if status.as_u16() == 404 {
                             // 瓦片不存在（该区域/缩放级别无数据），跳过不重试
@@ -311,7 +339,7 @@ impl TileDownloader {
     where
         F: FnMut(DownloadProgress),
     {
-        let concurrency = concurrency.clamp(10, 100);
+        let concurrency = concurrency.clamp(1, 100);
         let total = tiles.len() as u32;
         let mut completed = 0u32;
         let mut failed = 0u32;
@@ -615,9 +643,9 @@ impl TileDownloader {
         const MAX_RETRY_ROUNDS: usize = 3;
         let retry_delays_secs: [u64; 3] = [5, 15, 30];
         let retry_concurrencies: [usize; 3] = [
-            (concurrency / 2).max(5),
-            (concurrency / 4).max(3),
-            (concurrency / 6).max(2),
+            (concurrency / 2).max(5).min(concurrency),
+            (concurrency / 4).max(3).min(concurrency),
+            (concurrency / 6).max(2).min(concurrency),
         ];
 
         for round in 0..MAX_RETRY_ROUNDS {
@@ -795,6 +823,62 @@ fn tile_quadkey(x: u32, y: u32, z: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn tile_response(wire_response: Vec<u8>) -> reqwest::Response {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            socket.write_all(&wire_response).await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.get(format!("http://{address}/tile")).send(),
+        ).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap();
+        response
+    }
+
+    #[tokio::test]
+    async fn rejects_large_declared_body_without_waiting_for_or_allocating_it() {
+        // The fixture sends headers only. A read-before-length-check would fail
+        // with a truncated HTTP body, rather than the intended resource error.
+        let response = tile_response(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            MAX_TILE_RESPONSE_BYTES + 1,
+        ).into_bytes()).await;
+        let error = bounded_tile_body(response, MAX_TILE_RESPONSE_BYTES).await.unwrap_err();
+        assert!(error.starts_with("TILE_TOO_LARGE:"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn rejects_chunked_body_that_exceeds_limit_without_content_length() {
+        let response = tile_response(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\nabcd\r\n4\r\nefgh\r\n0\r\n\r\n".to_vec(),
+        ).await;
+        assert_eq!(response.content_length(), None);
+        let error = bounded_tile_body(response, 6).await.unwrap_err();
+        assert!(error.starts_with("TILE_TOO_LARGE:"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn accepts_exact_limit_and_rejects_oversized_connection_delimited_body() {
+        let response = tile_response(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd".to_vec(),
+        ).await;
+        assert_eq!(bounded_tile_body(response, 4).await.unwrap(), b"abcd");
+        let response = tile_response(
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nabcdefgh".to_vec(),
+        ).await;
+        assert_eq!(response.content_length(), None);
+        let error = bounded_tile_body(response, 6).await.unwrap_err();
+        assert!(error.starts_with("TILE_TOO_LARGE:"), "{error}");
+    }
 
     #[test]
     fn osm_standard_requests_identify_geod_without_fake_referer() {

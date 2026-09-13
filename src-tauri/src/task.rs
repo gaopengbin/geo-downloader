@@ -4,9 +4,9 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use tokio::sync::Notify;
+pub use crate::pause_control::PauseControl;
 use tokio_util::sync::CancellationToken;
 
 /// 任务状态
@@ -65,41 +65,6 @@ pub struct TaskLog {
     pub timestamp: String,
     pub level: String,
     pub message: String,
-}
-
-/// 暂停控制句柄
-#[derive(Clone)]
-pub struct PauseControl {
-    pub flag: Arc<AtomicBool>,
-    pub notify: Arc<Notify>,
-}
-
-impl PauseControl {
-    fn new() -> Self {
-        Self {
-            flag: Arc::new(AtomicBool::new(false)),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.flag.load(Ordering::Relaxed)
-    }
-
-    /// 如果当前处于暂停状态，等待恢复
-    pub async fn wait_if_paused(&self) {
-        loop {
-            // 先登记 waiter（enable）再检查 flag，避免 toggle_pause 的 notify_waiters()
-            // 在「检查 flag」与「await」之间触发导致丢失唤醒 → 暂停永久卡死。
-            let notified = self.notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if !self.flag.load(Ordering::Relaxed) {
-                return;
-            }
-            notified.await;
-        }
-    }
 }
 
 /// 内部任务条目（包含取消令牌）

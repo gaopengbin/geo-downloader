@@ -42,6 +42,8 @@ GeoD 已收录于社区维护的 [OSM Apps Catalog](https://osm-apps.org/?app=13
 
 ## 下载安装
 
+**命令行调用 / AI 工具接入：** [GeoD CLI Windows x64 公开预览版](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.1.1) 提供独立安装程序和便携 ZIP，安装后可运行 `geod plan/fetch/inspect`。数据获取不依赖桌面端。详见 [CLI 使用文档](docs/geod-cli.md)；[浏览器在线体验](https://geod.laogao.xyz/geod/cli) 仅提供带水印预览。
+
 前往 [Latest Release](https://github.com/gaopengbin/geo-downloader/releases/latest) 下载最新稳定版。GeoD 免费提供 Windows、macOS 和 Linux 安装包：
 
 | 平台 | 安装包 | 下载入口 |

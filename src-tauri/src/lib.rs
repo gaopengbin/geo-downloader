@@ -20,6 +20,8 @@ pub mod budget;
 pub mod fs_util;
 pub mod dem;
 pub mod tile_cache;
+pub mod cache_access;
+pub mod pause_control;
 pub mod tile_pack;
 pub mod cache_migration;
 pub mod source_analyzer;
