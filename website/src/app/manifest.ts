@@ -11,7 +11,7 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#2563eb",
     icons: [
       {
-        src: "/geod/icon.png",
+        src: "/geod-site/icon.png",
         sizes: "512x512",
         type: "image/png",
       },

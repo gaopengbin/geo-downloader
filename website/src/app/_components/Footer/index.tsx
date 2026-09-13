@@ -1,4 +1,5 @@
 import urls from "@/lib/urls";
+import { CLI_EXPERIENCE_URL } from "@/lib/site";
 import { Github } from "lucide-react";
 import styles from "./styles.module.css";
 import Logo from "../Logo";
@@ -15,6 +16,7 @@ const linkCategories: {
       { id: "Overview", label: "产品介绍", href: "/" },
       { id: "Features", label: "核心能力", href: "/#features" },
       { id: "Screenshots", label: "产品界面", href: "/#screenshots" },
+      { id: "Cli", label: "CLI 在线体验", href: CLI_EXPERIENCE_URL },
       { id: "Download", label: "立即下载", href: "/#download" },
     ],
   },
@@ -100,6 +102,10 @@ const Footer: React.FC<FooterProps> = ({ className, ...rest }) => {
         <section className={styles.footerSectionSocial}>
           <p className={styles.footerSectionSocialCopy}>
             © {new Date().getFullYear()} GeoD / GeoDownloader
+            {" · "}
+            <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">
+              豫ICP备2024091391号-1
+            </a>
           </p>
           <a
             href={urls.getGithubUrl()}
