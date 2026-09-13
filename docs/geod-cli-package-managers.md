@@ -4,7 +4,16 @@
 
 ## npm 安装
 
-需要 Windows x64 和 Node.js 18+（包含 npm）。可以直接安装 GitHub Release 中的 npm 包：
+需要 Windows x64 和 Node.js 18+（包含 npm）。`geod-cli@0.1.1` 已发布到 [npm 注册表](https://www.npmjs.com/package/geod-cli)：
+
+```powershell
+npm install -g geod-cli
+if ($LASTEXITCODE -ne 0) { throw 'GeoD CLI 安装失败' }
+geod --version
+geod --help
+```
+
+如果使用的 npm 镜像尚未同步，可以给安装命令添加 `--registry=https://registry.npmjs.org`。也可以直接安装 GitHub Release 中的同一份 npm 包：
 
 ```powershell
 npm install -g "https://github.com/gaopengbin/geo-downloader/releases/download/geod-cli-v0.1.1/geod-cli-0.1.1.tgz"
@@ -15,7 +24,7 @@ geod --help
 
 npm 会在自己的全局命令目录创建 `geod`。如果当前终端找不到命令，请重新打开终端，并检查 `npm prefix -g` 对应的目录是否在用户 PATH 中。此方式不创建独立安装器的 Windows 卸载记录。
 
-这条 URL 安装命令不要求登录 npm 账户。短包名 `npm install -g geod-cli` 的可用状态以 npm 注册表上架结果和 Release 说明为准。
+以上两种安装方式均不要求登录 npm 账户。需要固定版本时使用 `npm install -g geod-cli@0.1.1`。
 
 卸载：
 
@@ -44,7 +53,7 @@ if ($LASTEXITCODE -ne 0) { throw '成果校验失败' }
 
 ## WinGet
 
-包标识为 `GeoD.CLI`，独立于 GeoD 桌面版。清单位于 [distribution/winget](../distribution/winget/)。收录前不能把 `winget install --id GeoD.CLI --exact` 视为已可用；微软社区源审核合并并同步索引后才能使用。
+包标识为 `GeoD.CLI`，独立于 GeoD 桌面版。清单位于 [distribution/winget](../distribution/winget/)，已提交 [收录申请 #434088](https://github.com/microsoft/winget-pkgs/pull/434088)。当前尚未收录，不能把 `winget install --id GeoD.CLI --exact` 视为已可用；微软社区源审核合并并同步索引后才能使用。
 
 ## 安装内容与校验
 
