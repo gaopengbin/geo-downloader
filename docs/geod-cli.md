@@ -2,9 +2,11 @@
 
 GeoD CLI 0.1.1 是 Windows x64 独立命令行工具，提供“参数请求 → 数据包 → 可选 GeoStyle 导入与渲染”链路。AI 可以运行命令、解析 JSON，再把 GeoTIFF、GeoJSON 交给后续程序处理。
 
-数据获取不需要安装 GeoD 桌面端、Rust、Node.js 或 GDAL。浏览器排版成图另需兼容的 GeoStyle 服务、Node.js 22+ 和 Chrome/Edge，安装包不包含该服务。
+原生安装版和便携版获取数据不需要安装 GeoD 桌面端、Rust、Node.js 或 GDAL；npm 安装方式需要 Node.js。浏览器排版成图另需兼容的 GeoStyle 服务、Node.js 22+ 和 Chrome/Edge，安装包不包含该服务。
 
 ## 安装与首次运行
+
+需要命令行安装时，见 [npm 与 WinGet 安装说明](geod-cli-package-managers.md)。npm 包内置原生程序，不会在安装脚本中额外下载二进制。
 
 从 [GeoD CLI 0.1.1 Releases](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.1.1) 下载：
 
@@ -28,7 +30,7 @@ geod inspect --bundle $out
 
 上述示例只获取 DataV 河南行政区边界，输出 `data.geojson` 和 `manifest.json`，不需要模型或付费 AI。自定义安装目录或便携版请调整 `$example`。下载需要网络，`plan` 成功不代表上游可用。
 
-这是首个公开预览版，本次仅发布 Windows x64；Linux/macOS 预编译包、npm、crates.io 和 MCP 安装包不属于本次发布。CLI 同步执行，没有后台服务、中断续传或自动更新。软件不附带地图数据，也不授予第三方数据的转售权。
+这是首个公开预览版，本次仅发布 Windows x64；Linux/macOS 预编译包、crates.io 和 MCP 安装包不属于本次发布。CLI 同步执行，没有后台服务、中断续传或自动更新。软件不附带地图数据，也不授予第三方数据的转售权。
 
 ## 跑通河南概览
 
