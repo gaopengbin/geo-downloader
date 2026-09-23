@@ -25,12 +25,15 @@ async function body(req, form = false) {
   return form ? Object.fromEntries(new URLSearchParams(text)) : JSON.parse(text);
 }
 
-export async function createOAuth({ file, publicHost, accountApi = 'http://127.0.0.1:9092/v1/auth/me' }) {
+export async function createOAuth({ file, publicHost, accountApi = 'https://geod.laogao.xyz/api/account' }) {
   const issuer = `https://${publicHost}/geod-mcp`;
   const resource = `${issuer}/mcp`;
   const metadataUrl = `https://${publicHost}/.well-known/oauth-protected-resource/geod-mcp/mcp`;
   const accountUrl = new URL(accountApi);
-  if (accountUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(accountUrl.hostname) || accountUrl.pathname !== '/v1/auth/me') throw new Error('GEOD_ACCOUNT_API_URL must be a loopback account profile URL');
+  if (accountUrl.pathname !== '/api/account' || accountUrl.search || accountUrl.hash || accountUrl.username || accountUrl.password ||
+    !(accountUrl.href === 'https://geod.laogao.xyz/api/account' ||
+      (accountUrl.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(accountUrl.hostname))))
+    throw new Error('GEOD_ACCOUNT_API_URL must point to the GeoD account API');
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   let state = { clients: {}, transactions: {}, codes: {}, access: {}, refresh: {}, usage: {} };
   try { state = { ...state, ...JSON.parse(await readFile(file, 'utf8')) }; } catch (cause) { if (cause.code !== 'ENOENT') throw cause; }
@@ -43,6 +46,12 @@ export async function createOAuth({ file, publicHost, accountApi = 'http://127.0
     });
     return pending;
   };
+  // The previous hosted release issued tokens from an unrelated product's account database.
+  // Keep registered Agent clients, but never accept or refresh those legacy tokens.
+  if (state.identityProvider !== 'geod-studio-v1') {
+    Object.assign(state, { identityProvider: 'geod-studio-v1', transactions: {}, codes: {}, access: {}, refresh: {}, usage: {} });
+    await save();
+  }
   const clean = () => {
     const time = now();
     for (const key of ['transactions', 'codes', 'access', 'refresh'])
@@ -60,19 +69,42 @@ export async function createOAuth({ file, publicHost, accountApi = 'http://127.0
     state.usage[userId] = { date, count: current?.date === date ? current.count + 1 : 1 };
     await save();
   };
-  const page = (txId, clientName) => `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>授权 GeoD MCP</title><style>body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#17212b;max-width:440px;margin:5vh auto;padding:24px}main{background:white;padding:28px;border:1px solid #ddd;border-radius:14px}h1{font-size:24px}input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border:1px solid #bbb;border-radius:8px;font:inherit}button{background:#164c88;color:white;cursor:pointer}button:disabled{opacity:.6}.sub{background:#fff;color:#164c88}small{color:#556}#message{min-height:24px;color:#9b2226}</style><main><h1>授权 GeoD MCP</h1><p><strong>${escapeHtml(clientName)}</strong> 请求调用 GeoD 的规划、下载与成果读取工具。每个账号每天最多 3 次下载任务。</p><input id="email" type="email" placeholder="邮箱" autocomplete="email"><input id="password" type="password" placeholder="密码" autocomplete="current-password"><div id="login"><button id="loginBtn">登录并授权</button><button id="registerBtn" class="sub">注册账号</button></div><div id="register" hidden><input id="displayName" placeholder="称呼"><button id="codeBtn" class="sub">发送邮箱验证码</button><input id="code" inputmode="numeric" placeholder="邮箱验证码"><button id="createBtn">注册并授权</button><button id="backBtn" class="sub">返回登录</button></div><p id="message" role="status"></p><small>授权后将返回你的 Agent。GeoD 不保存你的账号密码；授权令牌只用于 GeoD MCP。</small></main><script>
-const tx=${JSON.stringify(txId)},api='/platform-api/v1/auth/';let challengeId='';const $=id=>document.getElementById(id),msg=t=>$('message').textContent=t;
-async function post(url,data){const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});const j=await r.json();if(!r.ok)throw Error(j.error?.message||j.error_description||'请求失败');return j}
-async function approve(token){const j=await post('/geod-mcp/oauth/approve',{transaction:tx,platform_token:token});location.assign(j.redirect)}
+  const page = (txId, clientName) => `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>授权 GeoD MCP</title><style>body{font:16px system-ui,sans-serif;background:#f7f8fa;color:#17212b;max-width:440px;margin:5vh auto;padding:24px}main{background:white;padding:28px;border:1px solid #ddd;border-radius:14px}h1{font-size:24px}input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border:1px solid #bbb;border-radius:8px;font:inherit}button{background:#164c88;color:white;cursor:pointer}button:disabled{opacity:.6}.sub{background:#fff;color:#164c88}small{color:#556}#message{min-height:24px;color:#9b2226}</style><main><h1>授权 GeoD MCP</h1><p><strong>${escapeHtml(clientName)}</strong> 请求调用 GeoD 的规划、下载与成果读取工具。每个账号每天最多 3 次下载任务。</p><input id="email" type="email" placeholder="邮箱" autocomplete="email"><input id="password" type="password" placeholder="密码" autocomplete="current-password" minlength="12"><div id="login"><button id="loginBtn">登录并授权</button><button id="registerBtn" class="sub">注册账号</button></div><div id="register" hidden><button id="codeBtn" class="sub">发送邮箱验证码</button><input id="code" inputmode="numeric" placeholder="邮箱验证码"><button id="createBtn">注册并授权</button><button id="backBtn" class="sub">返回登录</button></div><p id="message" role="status"></p><small>授权后将返回你的 Agent。GeoD 不保存你的账号密码；授权令牌只用于 GeoD MCP。</small></main><script>
+const tx=${JSON.stringify(txId)},api='/geod-mcp/oauth/account/';let challengeId='';const $=id=>document.getElementById(id),msg=t=>$('message').textContent=t;
+async function post(url,data,method='POST'){const r=await fetch(url,{method,headers:{'content-type':'application/json'},body:JSON.stringify(data),credentials:'same-origin'});const j=await r.json();if(!r.ok)throw Error(j.error?.message||j.error_description||'请求失败');return j}
+async function approve(){const j=await post('/geod-mcp/oauth/approve',{transaction:tx});location.assign(j.redirect)}
 async function run(fn){msg('处理中…');try{await fn()}catch(e){msg(e.message)}}
-$('loginBtn').onclick=()=>run(async()=>{const j=await post(api+'login',{email:$('email').value,password:$('password').value});await approve(j.token)});
+$('loginBtn').onclick=()=>run(async()=>{await post(api+'login',{email:$('email').value,password:$('password').value});await approve()});
 $('registerBtn').onclick=()=>{$('login').hidden=true;$('register').hidden=false;msg('')};$('backBtn').onclick=()=>{$('register').hidden=true;$('login').hidden=false;msg('')};
-$('codeBtn').onclick=()=>run(async()=>{const j=await post(api+'email-code',{email:$('email').value,purpose:'register'});challengeId=j.challenge_id;msg('验证码已发送，请查收邮箱')});
-$('createBtn').onclick=()=>run(async()=>{if(!challengeId)throw Error('请先发送验证码');const j=await post(api+'register',{email:$('email').value,password:$('password').value,display_name:$('displayName').value,challenge_id:challengeId,code:$('code').value});await approve(j.token)});
+$('codeBtn').onclick=()=>run(async()=>{const j=await post(api+'verification',{channel:'email',target:$('email').value,purpose:'register'});challengeId=j.challengeId;msg('验证码已发送，请查收邮箱')});
+$('createBtn').onclick=()=>run(async()=>{if(!challengeId)throw Error('请先发送验证码');await post(api+'verification',{channel:'email',target:$('email').value,purpose:'register',challengeId,code:$('code').value,password:$('password').value},'PUT');await approve()});
 </script></html>`;
 
   async function handle(req, res, url) {
     const pathname = url.pathname;
+    if (pathname === '/oauth/account/login' && req.method === 'POST' ||
+        pathname === '/oauth/account/verification' && ['POST', 'PUT'].includes(req.method)) {
+      if (req.headers.origin !== `https://${publicHost}` && !String(req.headers.host || '').startsWith('127.0.0.1:')) {
+        error(res, 403, 'access_denied', 'Invalid origin'); return true;
+      }
+      try {
+        const input = await body(req);
+        const upstream = await fetch(`${accountUrl.href}${pathname.slice('/oauth/account'.length)}`, {
+          method: req.method,
+          headers: {
+            'content-type': 'application/json', origin: accountUrl.origin, 'sec-fetch-site': 'same-origin',
+            'x-forwarded-for': String(req.headers['x-real-ip'] || req.socket.remoteAddress || '127.0.0.1'),
+          },
+          body: JSON.stringify(input), signal: AbortSignal.timeout(10000),
+        });
+        const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
+        const cookie = upstream.headers.getSetCookie().find(value => value.startsWith('geostyle_session='));
+        if (cookie) headers['set-cookie'] = cookie.replace(/; Path=\/([;]|$)/i, '; Path=/geod-mcp/oauth/$1');
+        res.writeHead(upstream.status, headers);
+        res.end(await upstream.text());
+      } catch { error(res, 503, 'temporarily_unavailable', 'GeoD account service unavailable'); }
+      return true;
+    }
     if (pathname === '/.well-known/oauth-protected-resource/geod-mcp/mcp' && req.method === 'GET') {
       json(res, 200, { resource, authorization_servers: [issuer], scopes_supported: ['geod:tools'], bearer_methods_supported: ['header'] }); return true;
     }
@@ -106,10 +138,12 @@ $('createBtn').onclick=()=>run(async()=>{if(!challengeId)throw Error('请先发�
       if (req.headers.origin !== `https://${publicHost}` && !String(req.headers.host || '').startsWith('127.0.0.1:')) { error(res, 403, 'access_denied', 'Invalid origin'); return true; }
       try {
         const input = await body(req), tx = state.transactions[digest(input.transaction || '')];
-        if (!tx || tx.expires <= now() || typeof input.platform_token !== 'string') { error(res, 400, 'invalid_request', 'Authorization page expired'); return true; }
-        const profile = await fetch(accountUrl, { headers: { authorization: `Bearer ${input.platform_token}`, origin: `https://${publicHost}` }, signal: AbortSignal.timeout(5000) });
+        if (!tx || tx.expires <= now()) { error(res, 400, 'invalid_request', 'Authorization page expired'); return true; }
+        const session = String(req.headers.cookie || '').split(';').map(item => item.trim()).find(item => /^geostyle_session=[A-Za-z0-9_-]{43}$/.test(item));
+        if (!session) { error(res, 401, 'access_denied', 'Sign in with a GeoD account'); return true; }
+        const profile = await fetch(accountUrl, { headers: { cookie: session }, signal: AbortSignal.timeout(5000) });
         const value = await profile.json();
-        if (!profile.ok || !/^[a-f0-9-]{36}$/i.test(value.user?.id || '')) { error(res, 401, 'access_denied', 'Account login is invalid'); return true; }
+        if (!profile.ok || !/^user-[a-f0-9-]{36}$/i.test(value.user?.id || '')) { error(res, 401, 'access_denied', 'GeoD account login is invalid'); return true; }
         delete state.transactions[digest(input.transaction)];
         const code = secret();
         state.codes[digest(code)] = { ...tx, userId: value.user.id, resource, expires: now() + 300 };

@@ -43,7 +43,7 @@ export async function createGeoDHttpServer(env = process.env) {
   const pendingUsers = new Map();
   let globalJobs = 0;
   const userEntry = userId => {
-    if (!/^[a-f0-9-]{36}$/i.test(userId)) throw new Error('Invalid user ID');
+    if (!/^user-[a-f0-9-]{36}$/i.test(userId)) throw new Error('Invalid user ID');
     if (userServices.has(userId)) return Promise.resolve(userServices.get(userId));
     if (pendingUsers.has(userId)) return pendingUsers.get(userId);
     const pending = (async () => {
@@ -95,7 +95,7 @@ export async function createGeoDHttpServer(env = process.env) {
       void oauth.handle(req, res, parsed).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }).catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
       return;
     }
-    const artifactMatch = /^\/artifacts\/(?:(?<user>[a-f0-9-]{36})\/)?(?<job>[a-zA-Z0-9_-]{1,160})\/(?<artifact>[a-zA-Z0-9_-]{1,160})$/.exec(pathname);
+    const artifactMatch = /^\/artifacts\/(?:(?<user>user-[a-f0-9-]{36})\/)?(?<job>[a-zA-Z0-9_-]{1,160})\/(?<artifact>[a-zA-Z0-9_-]{1,160})$/.exec(pathname);
     if (!artifactMatch && (pathname !== '/mcp' || !['POST', 'GET', 'DELETE'].includes(req.method))) { res.writeHead(404); res.end(); return; }
     if (artifactMatch) {
       if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
