@@ -16,6 +16,19 @@ export const metadata: Metadata = {
 };
 
 const cliInstall = "npm install -g geod-cli@0.1.1\ngeod --help";
+const cliRequest = `{
+  "schemaVersion": "1.0",
+  "name": "河南边界",
+  "bounds": [110.3, 31.3, 116.7, 36.5],
+  "vector": {
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/410000_full.json",
+    "source": "https://geo.datav.aliyun.com/areas_v3/bound/410000_full.json",
+    "attribution": "Alibaba Cloud DataV administrative boundaries",
+    "layers": ["boundary"]
+  },
+  "limits": { "timeoutSeconds": 180 }
+}`;
+const cliWorkflow = "geod plan --request .\\henan-boundary.json\nif ($LASTEXITCODE -ne 0) { throw '请求校验失败' }\n$bundle = Join-Path (Get-Location) ('henan-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))\ngeod fetch --request .\\henan-boundary.json --out $bundle\nif ($LASTEXITCODE -ne 0) { throw '获取失败' }\ngeod inspect --bundle $bundle\nif ($LASTEXITCODE -ne 0) { throw '成果校验失败' }";
 const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg --workspace "C:\\path\\to\\your\\workspace"';
 const remoteUrl = "https://laogao.xyz/geod-mcp/mcp";
 const remoteConfig = `{
@@ -81,8 +94,29 @@ export default function ToolsPage() {
                   <Download size={17} aria-hidden="true" /> 下载 Windows 安装包与便携版
                 </a>
                 <a href="https://www.npmjs.com/package/geod-cli" target="_blank" rel="noopener noreferrer">npm 包 <ArrowUpRight size={15} aria-hidden="true" /></a>
-                <a href="https://github.com/gaopengbin/geo-downloader/blob/geod-cli-v0.1.1/docs/geod-cli.md" target="_blank" rel="noopener noreferrer">命令与示例 <ArrowUpRight size={15} aria-hidden="true" /></a>
+                <a href="#cli-guide">命令与示例 <ArrowRight size={15} aria-hidden="true" /></a>
               </div>
+            </section>
+
+            <section id="cli-guide" className={styles.toolSection} aria-labelledby="cli-guide-title">
+              <div className={styles.sectionHeading}>
+                <span className={styles.icon}><Download size={23} strokeWidth={1.8} aria-hidden="true" /></span>
+                <div>
+                  <span className={styles.kicker}>CLI / QUICK START</span>
+                  <h2 id="cli-guide-title">独立运行下载任务</h2>
+                </div>
+              </div>
+              <p className={styles.description}>
+                将下面的请求保存为 <code>henan-boundary.json</code>，在同一目录依次执行规划、获取和校验。
+                示例只获取 DataV 的河南行政区 GeoJSON；影像下载可在请求中加入 <code>imagery</code> 配置。
+                输出目录必须是尚不存在的新目录。
+              </p>
+              <CodeBlock text={cliRequest} label="henan-boundary.json" />
+              <CodeBlock text={cliWorkflow} label="PowerShell · 下载与校验" />
+              <p className={styles.description}>
+                下载成功后，目录中会生成数据文件和 <code>manifest.json</code>。请检查其中的来源、范围、质量及警告；
+                <code>plan</code> 的估算结果不能证明数据源当前可用。
+              </p>
             </section>
 
             <section id="mcp" className={styles.toolSection} aria-labelledby="mcp-title">
@@ -96,7 +130,7 @@ export default function ToolsPage() {
               </div>
               <p className={styles.description}>
                 Agent 可以先调用 <code>geod_plan</code> 估算，再用 <code>geod_fetch</code> 启动任务，
-                查看进度并读取预览和数据文件。GeoD MCP 提供影像下载能力，不提供 GeoStyle 制图工具。
+                查看进度并读取预览和数据文件。它围绕影像与边界数据的获取、校验和交付运行。
               </p>
               <div className={styles.methodGrid}>
                 <article className={styles.method}>

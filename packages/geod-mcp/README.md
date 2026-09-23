@@ -1,12 +1,12 @@
 # GeoD MCP 0.1.1
 
-GeoD MCP wraps the GeoD CLI imagery download workflow for AI agents: plan a bounded download, start it, follow progress, inspect the actual result, and read or download verified files. It does not install or require GeoStyle, and it does not expose a map styling or rendering tool. The CLI can also acquire a prepared administrative GeoJSON boundary to clip imagery; this is part of the download request.
+GeoD MCP wraps the GeoD CLI imagery download workflow for AI agents: plan a bounded download, start it, follow progress, inspect the actual result, and read or download verified files. The CLI can also acquire a prepared administrative GeoJSON boundary to clip imagery; this is part of the download request.
 
 ## Let an agent connect it
 
 Copy this prompt into Codex, WorkBuddy, Doubao Work, or another MCP-capable agent:
 
-> Connect the GeoD imagery download MCP to this agent. If you are running on my Windows x64 computer with Node.js 22+, install the [GeoD MCP 0.1.1 package](https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz) in my current workspace with `npx --yes --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz geod-mcp install codex --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz --workspace "<absolute path of my workspace>"`; use `workbuddy` instead of `codex` in WorkBuddy. If you are cloud-hosted, add `https://laogao.xyz/geod-mcp/mcp` as a Streamable HTTP MCP server and let me complete my own account authorization in the browser. Do not ask for the publisher's computer path or token. After connecting, actually call `geod_capabilities` and `geod_plan` with an example request. Report the tool results or the exact blocker. This connection is for downloading imagery, not GeoStyle rendering.
+> Connect the GeoD imagery download MCP to this agent. If you are running on my Windows x64 computer with Node.js 22+, install the [GeoD MCP 0.1.1 package](https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz) in my current workspace with `npx --yes --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz geod-mcp install codex --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz --workspace "<absolute path of my workspace>"`; use `workbuddy` instead of `codex` in WorkBuddy. If you are cloud-hosted, add `https://laogao.xyz/geod-mcp/mcp` as a Streamable HTTP MCP server and let me complete my own account authorization in the browser. Do not ask for the publisher's computer path or token. After connecting, actually call `geod_capabilities` and `geod_plan` with an example request. Report the tool results or the exact blocker.
 
 The local package runs on the recipient's computer. The HTTPS endpoint runs on the hosted service and uses per-user OAuth authorization backed by the independent GeoD account at `geod.laogao.xyz`; email registration and password login use that same account. WeChat chat generator accounts and payment records are separate. A client must support remote Streamable HTTP MCP and OAuth to use that endpoint. Doubao Work client integration still needs an in-product test.
 
@@ -80,4 +80,4 @@ This starts a stdio MCP server. It emits protocol messages on stdout and waits f
 
 ## Verification
 
-From this source checkout, run `npm test` for local protocol, download, artifact, cancellation, OAuth and boundary tests. `npm run test:live` downloads real example imagery and reads its preview through MCP; it requires network access to the example sources. No GeoStyle service or browser is needed.
+From this source checkout, run `npm test` for local protocol, download, artifact, cancellation, OAuth and boundary tests. `npm run test:live` downloads real example imagery and reads its preview through MCP; it requires network access to the example sources.

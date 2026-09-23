@@ -100,8 +100,10 @@
 .codeBlock pre {
   margin: 0;
   padding: 18px;
-  overflow-x: auto;
+  overflow: auto;
+  border-radius: 0;
   color: #e1ecfa;
+  background: transparent;
   font: 12px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace;
   white-space: pre;
 }

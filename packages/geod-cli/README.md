@@ -22,11 +22,11 @@ geod fetch --request request.json --out ./geod-output
 geod inspect --bundle ./geod-output
 ```
 
-See the [request format, examples and CLI guide](https://github.com/gaopengbin/geo-downloader/blob/geod-cli-v0.1.1/docs/geod-cli.md).
+See the [CLI quick start](https://geod.laogao.xyz/tools#cli-guide) for a standalone download and verification example.
 
 Version 0.1.1 includes the released Windows x64 `geod.exe` directly in this npm package. Installation does not fetch a binary from GitHub, run a postinstall script, or require Rust, Tauri, GDAL or a separate Visual C++ runtime installation. The Node launcher passes arguments directly to the executable, preserves the current directory and native stdout/stderr, and returns its exit code (including cancellation code 130).
 
-macOS, Linux and Windows ARM64 are not supported by this package version. The npm launcher requires Node.js; the separately published [portable ZIP and Windows installer](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.1.1) run without Node.js. Fetching map data requires access to the sources in the request and remains subject to their terms and availability. This package does not include map data, an AI service or the GeoStyle rendering server.
+macOS, Linux and Windows ARM64 are not supported by this package version. The npm launcher requires Node.js; the separately published [portable ZIP and Windows installer](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.1.1) run without Node.js. Fetching map data requires access to the sources in the request and remains subject to their terms and availability. This package does not include map data or an AI service.
 
 ## Package integrity
 

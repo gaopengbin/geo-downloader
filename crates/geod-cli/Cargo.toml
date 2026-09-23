@@ -3,7 +3,7 @@ name = "geod-cli"
 version = "0.1.1"
 edition = "2021"
 license = "MIT"
-description = "Headless GeoD data acquisition and GeoStyle handoff"
+description = "Headless imagery and boundary data acquisition"
 
 [[bin]]
 name = "geod"

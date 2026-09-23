@@ -5,14 +5,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const HELP: &str = r#"Headless geodata acquisition
+const HELP: &str = r#"Download and inspect imagery and boundary data
 
   geod plan --request job.json
   geod fetch --request job.json --out ./outputs/map
   geod inspect --bundle ./outputs/map
-  geod geostyle-import --bundle ./outputs/map --url http://127.0.0.1:3000
-      [--token-env GEOSTYLE_GEOD_IMPORT_TOKEN] [--style map.openstyle.json]
-
 Results are JSON on stdout; progress is JSON lines on stderr. --json is accepted.
 fetch is synchronous and never overwrites an existing output directory.
 Bounds are WGS84 [west,south,east,north]. Raster grids are EPSG:3857.
