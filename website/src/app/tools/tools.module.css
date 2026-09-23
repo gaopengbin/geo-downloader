@@ -235,6 +235,59 @@
   background: linear-gradient(130deg, rgb(24 53 107 / 0.9), rgb(8 16 38 / 0.96));
 }
 
+.installPrompt {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  margin-top: 22px;
+  overflow: hidden;
+  border: 1px solid rgb(147 197 253 / 0.22);
+  border-radius: 12px;
+  background: rgb(3 10 25 / 0.8);
+}
+
+.installPrompt p {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  padding: 18px 20px;
+  color: #e1ecfa;
+  font-size: 13px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+
+.installPrompt .copyControl {
+  flex: 0 0 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  min-width: 134px;
+  padding: 10px 14px;
+  border-left: 1px solid rgb(147 197 253 / 0.16);
+  background: rgb(37 99 235 / 0.12);
+}
+
+.installPrompt .copyButton {
+  border: 0;
+  color: #f8fafc;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.installPrompt .copyButton:hover,
+.installPrompt .copyButton:focus-visible {
+  border: 0;
+  background: rgb(37 99 235 / 0.32);
+}
+
+.installNote {
+  margin-top: 12px !important;
+  color: #91a6c3 !important;
+  font-size: 12px !important;
+}
+
 @media (max-width: 760px) {
   .toolsPage {
     padding-top: 98px;
@@ -255,6 +308,17 @@
 
   .method {
     padding: 18px;
+  }
+
+  .installPrompt {
+    flex-direction: column;
+  }
+
+  .installPrompt .copyControl {
+    min-height: 48px;
+    flex-direction: row;
+    border-top: 1px solid rgb(147 197 253 / 0.16);
+    border-left: 0;
   }
 }
 

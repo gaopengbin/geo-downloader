@@ -6,6 +6,7 @@ import Footer from "../_components/Footer";
 import Header from "../_components/Header";
 import page from "../geod-page.module.css";
 import CodeBlock from "../tools/CodeBlock";
+import CopyText from "../tools/CopyText";
 import styles from "../tools/tools.module.css";
 
 export const metadata: Metadata = {
@@ -25,8 +26,9 @@ const remoteConfig = `{
 }`;
 const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
+const agentInstall = "npx -y geod-agent@latest install";
 const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.3.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
-const agentPrompt = `请给当前 Agent 接入 GeoD 影像下载工具，并安装使用说明 Skill：${skillUrl}。先读取 Skill，再安装到这个 Agent 支持的 Skills 位置；如果不能安装 Skill，就读取全文作为本次会话的操作指南。MCP 使用 Streamable HTTP 地址 ${remoteUrl}，按客户端支持的 OAuth 流程让我用自己的 GeoD 账号在浏览器中授权，不要索取密码或验证码。接入后实际调用 geod_capabilities 和 geod_plan 验证；geod_plan 只规划，不要启动下载。最后报告 Skill 和 MCP 的安装位置及验证结果；若客户端不支持某一步，请说明具体阻碍。`;
+const agentPrompt = `请运行 ${agentInstall}，为当前 Agent 安装 GeoD Skill 和远程影像下载 MCP；若需选择客户端，使用 install codex 或 install workbuddy。安装后加载 Skill，引导我用自己的 GeoD 账号授权，再调用 geod_capabilities、geod_plan 验证，不要启动下载。无法运行命令时参照 https://geod.laogao.xyz/mcp 手动接入。`;
 
 export default function McpPage() {
   return (
@@ -48,10 +50,14 @@ export default function McpPage() {
 
           <div className={styles.content}>
             <section id="prompt" className={styles.promptSection} aria-labelledby="prompt-title">
-              <span className={styles.kicker}>COPY / PASTE</span>
-              <h2 id="prompt-title">一句话让 Agent 接入</h2>
-              <p>把下面这段发给你的 Agent。它会先配置 GeoD Skill，再接入 MCP 并验证工具。</p>
-              <CodeBlock text={agentPrompt} label="GeoD MCP · HTTPS 接入提示词" />
+              <span className={styles.kicker}>INSTALL / AGENT SKILL</span>
+              <h2 id="prompt-title">安装 GeoD Skill</h2>
+              <p>复制这段话给本地 Agent。安装器会配置 Skill 和 HTTPS MCP，再引导你使用自己的 GeoD 账号授权。</p>
+              <div className={styles.installPrompt}>
+                <p>{agentPrompt}</p>
+                <CopyText text={agentPrompt} label="复制给 Agent" />
+              </div>
+              <p className={styles.installNote}>需要 Node.js 20+；云端 Agent 无法运行本机命令时，可使用下方的 HTTPS MCP 地址和 Skill 文件。</p>
             </section>
 
             <section id="connect" className={styles.toolSection} aria-labelledby="connect-title">
@@ -61,7 +67,7 @@ export default function McpPage() {
                   <span className={styles.kicker}>CONNECT / AGENT TOOLS</span>
                   <h2 id="connect-title">选择 MCP 接入方式</h2>
                 </div>
-                <span className={styles.version}>0.1.3 · HTTPS 或本机</span>
+                <span className={styles.version}>MCP 0.1.3 · HTTPS 或本机</span>
               </div>
               <p className={styles.description}>
                 Agent 可以先调用 <code>geod_plan</code> 估算，再用 <code>geod_fetch</code> 启动任务，
@@ -71,7 +77,7 @@ export default function McpPage() {
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>推荐 · 通过账号授权</div>
                   <h3>HTTPS MCP</h3>
-                  <p>添加远端地址与 GeoD Skill，并在浏览器中使用自己的 GeoD 账号授权。客户端需要支持 Streamable HTTP 与 OAuth。</p>
+                  <p>使用安装器 <code>{agentInstall}</code>，或手动添加远端地址与 GeoD Skill，并在浏览器中使用自己的 GeoD 账号授权。客户端需要支持 Streamable HTTP 与 OAuth。</p>
                   <CodeBlock text={remoteUrl} label="MCP 服务地址" />
                   <a href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></a>
                   <CodeBlock text={remoteConfig} label="支持 mcpServers 的客户端示例" />
@@ -86,6 +92,9 @@ export default function McpPage() {
                 </article>
               </div>
               <div className={styles.linkRow}>
+                <a href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
+                  GeoD Agent 安装器 <ArrowUpRight size={16} aria-hidden="true" />
+                </a>
                 <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.3" target="_blank" rel="noopener noreferrer">
                   查看 MCP 安装包与校验值 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
