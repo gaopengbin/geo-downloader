@@ -127,6 +127,10 @@ export function createServer(service) {
     return withinWireLimit(result, artifact.path);
   }, safeError));
 
+  if (typeof service.artifactLink === 'function') register('geod_artifact_link', 'Download a GeoD artifact',
+    'Create a signed HTTPS download URL for a completed registered artifact, including files too large for inline MCP reads. The link expires in ten minutes; share it only with the intended recipient.',
+    toolSchemas.getArtifact, readOnly, ({ jobId, artifactId }) => service.artifactLink(jobId, artifactId));
+
   // SDK v2 registers dynamic resources via registerResource + ResourceTemplate.
   // Artifacts are discovered through completed job results rather than an
   // unbounded global resources/list enumeration.

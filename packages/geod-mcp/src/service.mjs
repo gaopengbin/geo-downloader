@@ -59,7 +59,7 @@ export class GeoDService {
       limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: 4096, maxPixels: 67108864 },
       workflow: this.renderEnabled
         ? ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_render', 'geod_job_status until completed', 'geod_get_artifact']
-        : ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact'],
+        : ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', 'geod_artifact_link for downloads'],
       behavior: { localPaths: 'workspace or configured output directory only', jobsSurviveClientTimeout: true, downloadsResumeAfterRestart: false, clipping: 'imagery.clipToLayer selects a polygon layer; PNG/GeoTIFF outside pixels become transparent; vectors unchanged' },
       examples: this.examples };
   }
@@ -295,6 +295,16 @@ export class GeoDService {
   }
 
   async readArtifact(jobId, artifactId) {
+    const { artifact, file } = await this.artifactFile(jobId, artifactId);
+    if (artifact.bytes > MAX_INLINE) throw fail('ARTIFACT_TOO_LARGE', this.env.GEOD_TRANSPORT === 'streamable-http'
+      ? 'Artifact exceeds 8 MiB inline limit. Use geod_artifact_link to download it.'
+      : `Artifact exceeds 8 MiB inline limit. Use its local path: ${file}`);
+    const data = await readFile(file);
+    if (data.length !== artifact.bytes || sha256(data) !== artifact.sha256) throw fail('ARTIFACT_CHANGED', 'Artifact bytes no longer match the completed job');
+    return { artifact: structuredClone(artifact), data };
+  }
+
+  async artifactFile(jobId, artifactId) {
     if (!ID.test(artifactId)) throw fail('INVALID_ARTIFACT_ID', 'Invalid artifact ID');
     const job = await this.getJob(jobId);
     if (job.record.status !== 'completed') throw fail('JOB_NOT_COMPLETE', 'Artifacts are available after the job completes');
@@ -302,10 +312,8 @@ export class GeoDService {
     if (!artifact) throw fail('ARTIFACT_NOT_FOUND', 'Artifact ID is not registered for this job');
     const file = await this.scopedPath(artifact.path, [job.dir]);
     const size = (await stat(file)).size;
-    if (size > MAX_INLINE) throw fail('ARTIFACT_TOO_LARGE', `Artifact exceeds 8 MiB inline limit. Use its local path: ${file}`);
-    const data = await readFile(file);
-    if (data.length !== artifact.bytes || sha256(data) !== artifact.sha256) throw fail('ARTIFACT_CHANGED', 'Artifact bytes no longer match the completed job');
-    return { artifact: structuredClone(artifact), data };
+    if (size !== artifact.bytes) throw fail('ARTIFACT_CHANGED', 'Artifact size no longer matches the completed job');
+    return { artifact: structuredClone(artifact), file };
   }
 
   async close() {

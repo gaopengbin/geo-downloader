@@ -33,7 +33,7 @@ For a client accepting the `mcpServers` JSON format:
 }
 ```
 
-The hosted service currently exposes planning, acquisition, job status/cancellation, bundle inspection, and registered artifact reading. It does not expose `geod_render`: the server has no production GeoStyle renderer or browser. The local stdio package still offers rendering when GeoStyle and a browser are available. Large GeoTIFF artifacts exceed the MCP inline size limit and remain on the hosted server; smaller JSON/GeoJSON artifacts are readable through `geod_get_artifact`. Remote client integration in Doubao Work still needs an in-product test.
+The hosted service currently exposes planning, acquisition, job status/cancellation, bundle inspection, and registered artifact reading. It does not expose `geod_render`: the server has no production GeoStyle renderer or browser. The local stdio package still offers rendering when GeoStyle and a browser are available. Small JSON/GeoJSON artifacts are readable through `geod_get_artifact`. For a large GeoTIFF or other file, call hosted-only `geod_artifact_link` with its `jobId` and `artifactId`; it returns a signed HTTPS download link valid for ten minutes. Remote client integration in Doubao Work still needs an in-product test.
 
 The owner can verify the live endpoint without printing the token:
 
@@ -118,6 +118,7 @@ The sample uses NASA Blue Marble overview imagery and DataV boundaries. It is no
 | `geod_inspect` | Validate a local bundle and file hashes |
 | `geod_render` | Import to GeoStyle and capture real browser rendering |
 | `geod_get_artifact` | Read registered image/data artifacts |
+| `geod_artifact_link` | Hosted HTTP only: signed download URL for any registered artifact |
 
 Completed artifacts also expose `geod://artifacts/{jobId}/{artifactId}` resources. Each includes a local path, media type, byte count and SHA-256. PNG/JPEG/WebP/GIF can be returned as native MCP images. GeoTIFF is intended for file-based analysis; it is not mislabeled as a display image. Inline file reads are capped at 8 MiB, with an additional 9,000,000-byte serialized MCP response limit to account for Base64 and JSON expansion. Oversized responses return an explicit error and the artifact path; the original file remains available for local processing. Use the small preview artifact when a full map is too large to display inline.
 
