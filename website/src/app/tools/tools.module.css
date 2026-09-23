@@ -1,3 +1,24 @@
+.toolsPage {
+  padding-top: 104px;
+}
+
+.compactHead {
+  gap: 12px;
+  padding: 18px 0 22px;
+}
+
+.compactHead .heroPrimary {
+  border-color: #3b82f6;
+  color: #fff;
+  background: #2563eb;
+}
+
+.compactHead .heroPrimary:hover,
+.compactHead .heroPrimary:focus-visible {
+  border-color: #60a5fa;
+  background: #1d4ed8;
+}
+
 .content {
   display: grid;
   gap: 28px;
@@ -100,12 +121,14 @@
 .codeBlock pre {
   margin: 0;
   padding: 18px;
-  overflow: auto;
+  max-width: 100%;
+  overflow: visible;
+  overflow-wrap: anywhere;
   border-radius: 0;
   color: #e1ecfa;
   background: transparent;
   font: 12px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace;
-  white-space: pre;
+  white-space: pre-wrap;
 }
 
 .copyControl {
@@ -212,12 +235,11 @@
   background: linear-gradient(130deg, rgb(24 53 107 / 0.9), rgb(8 16 38 / 0.96));
 }
 
-.promptSection .codeBlock pre {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 @media (max-width: 760px) {
+  .toolsPage {
+    padding-top: 98px;
+  }
+
   .sectionHeading {
     align-items: flex-start;
     flex-wrap: wrap;

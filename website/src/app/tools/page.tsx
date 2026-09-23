@@ -58,28 +58,35 @@ export default function ToolsPage() {
     <>
       <Background sticky />
       <Header />
-      <main className={page.page}>
+      <main className={`${page.page} ${styles.toolsPage}`}>
         <div className={page.container}>
-          <header className={page.head}>
+          <header className={`${page.head} ${styles.compactHead}`}>
             <span className={page.eyebrow}>GEOD / DEVELOPER TOOLS</span>
             <h1 className={page.title}>GeoD CLI 与 MCP</h1>
             <p className={page.lead}>
-              用命令行运行影像下载任务，或让 Agent 调用 GeoD 工具规划、下载并读取真实成果。
-              这里的 CLI 与 MCP 聚焦影像及边界数据，桌面版的其他功能请从首页下载。
+              复制提示词，让 Agent 接入 GeoD 影像下载；也可以安装 CLI，自行规划、下载并校验成果。
             </p>
             <div className={page.toolbar}>
+              <a className={styles.heroPrimary} href="#prompt">复制接入提示词</a>
               <a href="#cli">查看 CLI</a>
-              <a href="#mcp">接入 MCP</a>
+              <a href="#mcp">MCP 安装方式</a>
               <Link href="/">返回官网首页</Link>
             </div>
           </header>
 
           <div className={styles.content}>
+            <section id="prompt" className={styles.promptSection} aria-labelledby="prompt-title">
+              <span className={styles.kicker}>01 / COPY & PASTE</span>
+              <h2 id="prompt-title">一句话让 Agent 接入</h2>
+              <p>把下面这段发给你自己的 Agent。它会根据运行环境选择本机安装或远端服务，并实际调用工具验证。</p>
+              <CodeBlock text={agentPrompt} label="GeoD MCP 接入提示词" />
+            </section>
+
             <section id="cli" className={styles.toolSection} aria-labelledby="cli-title">
               <div className={styles.sectionHeading}>
                 <span className={styles.icon}><Terminal size={23} strokeWidth={1.8} aria-hidden="true" /></span>
                 <div>
-                  <span className={styles.kicker}>01 / SCRIPTABLE DOWNLOADS</span>
+                  <span className={styles.kicker}>02 / SCRIPTABLE DOWNLOADS</span>
                   <h2 id="cli-title">GeoD CLI</h2>
                 </div>
                 <span className={styles.version}>0.1.1 · Windows x64 公开预览版</span>
@@ -123,7 +130,7 @@ export default function ToolsPage() {
               <div className={styles.sectionHeading}>
                 <span className={styles.icon}><Bot size={23} strokeWidth={1.8} aria-hidden="true" /></span>
                 <div>
-                  <span className={styles.kicker}>02 / AGENT TOOLS</span>
+                  <span className={styles.kicker}>03 / AGENT TOOLS</span>
                   <h2 id="mcp-title">GeoD MCP</h2>
                 </div>
                 <span className={styles.version}>0.1.1 · 本机或 HTTPS</span>
@@ -157,12 +164,6 @@ export default function ToolsPage() {
               </div>
             </section>
 
-            <section className={styles.promptSection} aria-labelledby="prompt-title">
-              <span className={styles.kicker}>COPY / PASTE</span>
-              <h2 id="prompt-title">一句话让 Agent 接入</h2>
-              <p>把下面这段发给你自己的 Agent。它会根据运行环境选择本机安装或远端服务，并实际调用工具验证。</p>
-              <CodeBlock text={agentPrompt} label="GeoD MCP 接入提示词" />
-            </section>
           </div>
         </div>
       </main>

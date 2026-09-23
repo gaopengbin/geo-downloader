@@ -363,7 +363,7 @@ export default async function SDKPage() {
               <small>安装公开预览版，查看命令、示例和使用边界。</small>
               <span className={styles.resourceArrow} aria-hidden="true"><ArrowRight size={18} strokeWidth={1.8} /></span>
             </Link>
-            <Link className={cn(styles.card, styles.resourceCard)} href="/tools#mcp">
+            <Link className={cn(styles.card, styles.resourceCard)} href="/tools#prompt">
               <span className={styles.cardEyebrow}>GEOD MCP · LOCAL / HTTPS</span>
               <strong>让 Agent 接入 GeoD</strong>
               <small>复制接入提示词，按本机或云端运行方式连接。</small>

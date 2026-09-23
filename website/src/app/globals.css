@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar {
+  display: none;
+}
+
 body {
   --transparentColor: transparent;
   --activeBaseColor: #2563eb;
@@ -89,12 +98,6 @@ h2 {
 
 .primary-title {
   color: #c64563;
-}
-
-pre {
-  background: #a9a9a9;
-  overflow: scroll;
-  border-radius: 5px;
 }
 
 @layer base {
