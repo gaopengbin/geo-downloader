@@ -4,11 +4,12 @@ Local stdio MCP for acquiring real geographic data with GeoD CLI 0.1.1 and rende
 
 ## Install in one command
 
-On Windows x64 with Node.js 22+, run one of these commands in the workspace GeoD may access:
+On Windows x64 with Node.js 22+, run one of these commands in the workspace GeoD may access. Version 0.1.0 is publicly available as a GitHub Release tarball; npm registry publication is pending account authorization.
 
 ```powershell
-npx --yes geod-mcp@0.1.0 install codex
-npx --yes geod-mcp@0.1.0 install workbuddy
+$pkg = 'https://github.com/gaopengbin/geo-downloader/releases/download/geod-mcp-v0.1.0/geod-mcp-0.1.0.tgz'
+npx --yes --package $pkg geod-mcp install codex --package $pkg
+npx --yes --package $pkg geod-mcp install workbuddy --package $pkg
 ```
 
 Use `--workspace C:\path\to\your\workspace` to choose another folder. The command installs the package under `%LOCALAPPDATA%\GeoD\Agent`, starts it, verifies `geod_capabilities` and `geod_plan`, and writes the selected client's configuration. Codex also receives a `geod-agent` skill. Restart a client session if it does not discover a newly registered MCP server.

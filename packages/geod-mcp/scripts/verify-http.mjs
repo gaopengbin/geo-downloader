@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
@@ -41,7 +42,15 @@ try {
     assert.equal(status?.status, 'completed', JSON.stringify(status?.error || status));
     const manifest = (await client.callTool({ name: 'geod_get_artifact', arguments: { jobId: started.jobId, artifactId: 'manifest' } })).structuredContent;
     assert.equal(manifest.artifact.id, 'manifest');
-    summary.fetch = { status: status.status, jobId: started.jobId, artifactIds: status.artifacts.map(item => item.id) };
+    const vectors = status.artifacts.find(item => item.id === 'vectors');
+    assert.ok(vectors);
+    const link = (await client.callTool({ name: 'geod_artifact_link', arguments: { jobId: started.jobId, artifactId: 'vectors' } })).structuredContent;
+    assert.equal(link.ok, true);
+    const download = await fetch(link.url);
+    assert.equal(download.status, 200);
+    const bytes = Buffer.from(await download.arrayBuffer());
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), vectors.sha256);
+    summary.fetch = { status: status.status, jobId: started.jobId, artifactIds: status.artifacts.map(item => item.id), signedDownloadVerified: true };
   }
   process.stdout.write(`${JSON.stringify(summary)}\n`);
 } finally {
