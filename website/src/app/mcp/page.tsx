@@ -28,7 +28,7 @@ const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
 const agentInstall = "npx -y geod-agent@latest install";
 const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.3.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
-const agentPrompt = `请运行 ${agentInstall}，为当前 Agent 安装 GeoD Skill 和远程影像下载 MCP；若需选择客户端，使用 install codex 或 install workbuddy。安装后加载 Skill，引导我用自己的 GeoD 账号授权，再调用 geod_capabilities、geod_plan 验证，不要启动下载。无法运行命令时参照 https://geod.laogao.xyz/mcp 手动接入。`;
+const agentPrompt = `请给当前 Agent 接入 GeoD 影像下载：如果是本机 Codex 或 WorkBuddy，运行 ${agentInstall} codex 或 ${agentInstall} workbuddy；其他 Agent 先读取 ${skillUrl} 作为使用说明，再把 ${remoteUrl} 添加为 Streamable HTTP MCP。请通过客户端打开授权页，让我用自己的 GeoD 账号登录；若没有弹出授权页，报告客户端的具体错误和 MCP 注册状态，不要归因于我未登录。授权成功后调用 geod_capabilities、geod_plan 验证，不要启动下载。`;
 
 export default function McpPage() {
   return (
@@ -52,12 +52,12 @@ export default function McpPage() {
             <section id="prompt" className={styles.promptSection} aria-labelledby="prompt-title">
               <span className={styles.kicker}>INSTALL / AGENT SKILL</span>
               <h2 id="prompt-title">安装 GeoD Skill</h2>
-              <p>复制这段话给本地 Agent。安装器会配置 Skill 和 HTTPS MCP，再引导你使用自己的 GeoD 账号授权。</p>
+              <p>复制这段话给当前 Agent。Codex、WorkBuddy 可自动安装，其他客户端按自身方式添加远程 MCP 和 Skill。</p>
               <div className={styles.installPrompt}>
                 <p>{agentPrompt}</p>
                 <CopyText text={agentPrompt} label="复制给 Agent" />
               </div>
-              <p className={styles.installNote}>需要 Node.js 20+；云端 Agent 无法运行本机命令时，可使用下方的 HTTPS MCP 地址和 Skill 文件。</p>
+              <p className={styles.installNote}>自动安装需要 Node.js 20+；Marvis 等其他客户端可直接接入下方的 HTTPS MCP 地址并读取 Skill。</p>
             </section>
 
             <section id="connect" className={styles.toolSection} aria-labelledby="connect-title">
