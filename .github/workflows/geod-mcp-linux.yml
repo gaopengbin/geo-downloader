@@ -38,7 +38,7 @@ jobs:
           mkdir -p dist/geod-mcp-linux/{bin,src,examples,scripts}
           cp target/release/geod dist/geod-mcp-linux/bin/geod
           cp packages/geod-mcp/src/*.mjs dist/geod-mcp-linux/src/
-          cp packages/geod-mcp/examples/*.json dist/geod-mcp-linux/examples/
+          cp examples/geod-cli/*.json dist/geod-mcp-linux/examples/
           cp scripts/geod-render.mjs dist/geod-mcp-linux/scripts/
           cp packages/geod-mcp/deploy-linux/package.json dist/geod-mcp-linux/package.json
           cp -a packages/geod-mcp/deploy-linux/node_modules dist/geod-mcp-linux/node_modules
