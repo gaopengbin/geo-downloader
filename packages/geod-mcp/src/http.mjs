@@ -40,10 +40,13 @@ export async function createGeoDHttpServer(env = process.env) {
   const nodeHandler = toNodeHandler(handler);
   const oauth = env.GEOD_MCP_OAUTH_STATE_FILE ? await createOAuth({ file: env.GEOD_MCP_OAUTH_STATE_FILE, publicHost, accountApi: env.GEOD_ACCOUNT_API_URL }) : null;
   const userServices = new Map();
+  const pendingUsers = new Map();
   let globalJobs = 0;
-  const userEntry = async userId => {
+  const userEntry = userId => {
     if (!/^[a-f0-9-]{36}$/i.test(userId)) throw new Error('Invalid user ID');
-    if (userServices.has(userId)) return userServices.get(userId);
+    if (userServices.has(userId)) return Promise.resolve(userServices.get(userId));
+    if (pendingUsers.has(userId)) return pendingUsers.get(userId);
+    const pending = (async () => {
     const workspace = path.join(service.workspace, 'users', userId);
     await mkdir(workspace, { recursive: true, mode: 0o700 });
     const userService = new GeoDService({ ...env, GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_RENDER_ENABLED: '0', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1' });
@@ -71,6 +74,10 @@ export async function createGeoDHttpServer(env = process.env) {
     const entry = { service: userService, handler: clientHandler, nodeHandler: toNodeHandler(clientHandler) };
     userServices.set(userId, entry);
     return entry;
+    })();
+    pendingUsers.set(userId, pending);
+    void pending.finally(() => pendingUsers.delete(userId)).catch(() => {});
+    return pending;
   };
   const server = createHttpServer((req, res) => {
     const parsed = new URL(req.url || '/', 'http://localhost');
