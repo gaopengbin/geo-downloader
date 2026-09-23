@@ -16,7 +16,7 @@ test('HTTP MCP requires bearer auth and serves real GeoD tools', async () => {
   const token = randomBytes(32).toString('hex');
   const tokenFile = path.join(workspace, 'token.txt');
   await writeFile(tokenFile, `${token}\n`);
-  const { server, service } = await createGeoDHttpServer({ GEOD_MCP_TOKEN_FILE: tokenFile, GEOD_MCP_PORT: '19473', GEOD_WORKSPACE: workspace, GEOD_BIN: geodBin, GEOD_MAX_CONCURRENT_JOBS: '1' });
+  const { server, service } = await createGeoDHttpServer({ GEOD_MCP_TOKEN_FILE: tokenFile, GEOD_MCP_PORT: '19473', GEOD_WORKSPACE: workspace, GEOD_BIN: geodBin, GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_RENDER_ENABLED: '0' });
   await new Promise(resolve => server.listen(19473, '127.0.0.1', resolve));
   const url = new URL('http://127.0.0.1:19473/mcp');
   let client;
@@ -29,9 +29,11 @@ test('HTTP MCP requires bearer auth and serves real GeoD tools', async () => {
     await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));
     const tools = await client.listTools();
     assert.ok(tools.tools.some(tool => tool.name === 'geod_plan'));
+    assert.ok(!tools.tools.some(tool => tool.name === 'geod_render'));
     const capabilities = (await client.callTool({ name: 'geod_capabilities', arguments: {} })).structuredContent;
     assert.equal(capabilities.transport, 'streamable-http');
     assert.equal(capabilities.cli.available, true);
+    assert.equal(capabilities.geostyle.renderEnabled, false);
   } finally {
     await client?.close();
     await new Promise(resolve => server.close(resolve));

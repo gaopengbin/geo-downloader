@@ -75,7 +75,9 @@ export function createServer(service) {
     catch { return { code: 'GEOD_ERROR', message: 'GeoD could not complete this operation.' }; }
   };
   const server = new McpServer({ name: 'geod-mcp', version: '0.1.0' }, {
-    instructions: 'GeoD acquires real geographic data and renders existing bundles through GeoStyle. Start with geod_capabilities and geod_plan. geod_fetch and geod_render return background job IDs immediately; poll geod_job_status and then use geod_get_artifact for images or data. Always inspect quality/warnings before claiming complete geographic coverage. Province overviews should use prepared boundary GeoJSON and bounded imagery, not province-wide Overpass extraction.',
+    instructions: service.renderEnabled === false
+      ? 'GeoD acquires real geographic data. Start with geod_capabilities and geod_plan. geod_fetch returns a background job ID; poll geod_job_status and use geod_get_artifact for available data. GeoStyle rendering is unavailable on this hosted server. Always inspect quality/warnings before claiming complete geographic coverage.'
+      : 'GeoD acquires real geographic data and renders existing bundles through GeoStyle. Start with geod_capabilities and geod_plan. geod_fetch and geod_render return background job IDs immediately; poll geod_job_status and then use geod_get_artifact for images or data. Always inspect quality/warnings before claiming complete geographic coverage. Province overviews should use prepared boundary GeoJSON and bounded imagery, not province-wide Overpass extraction.',
   });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   const createJob = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
@@ -107,7 +109,7 @@ export function createServer(service) {
     'Inspect and validate an existing local GeoD bundle, including manifest, file integrity, layer profiles, provenance and quality.',
     toolSchemas.inspect, readOnly, ({ bundleDir }, ctx) => service.inspect(bundleDir, { signal: ctx.mcpReq.signal }));
 
-  register('geod_render', 'Render a GeoD map',
+  if (service.renderEnabled !== false) register('geod_render', 'Render a GeoD map',
     'Start a GeoStyle render job from an existing bundle. Optionally provide an OpenStyle 0.6 object bound to actual data layers and fields; otherwise use the inspection baseline. Returns a jobId immediately. Poll status, then read the PNG/evidence artifacts. This does not invoke an LLM.',
     toolSchemas.render, createJob, (args) => service.startRender(args));
 

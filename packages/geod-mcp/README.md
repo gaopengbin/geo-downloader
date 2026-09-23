@@ -13,7 +13,33 @@ npx --yes geod-mcp@0.1.0 install workbuddy
 
 Use `--workspace C:\path\to\your\workspace` to choose another folder. The command installs the package under `%LOCALAPPDATA%\GeoD\Agent`, starts it, verifies `geod_capabilities` and `geod_plan`, and writes the selected client's configuration. Codex also receives a `geod-agent` skill. Restart a client session if it does not discover a newly registered MCP server.
 
-WorkBuddy's configuration is verified on disk and the MCP tools are called independently; a WorkBuddy client session has not yet been tested. This package is a local Windows stdio server. A cloud-only client needs a separately hosted, authenticated remote MCP endpoint.
+WorkBuddy's configuration is verified on disk and the MCP tools are called independently; a WorkBuddy client session has not yet been tested. This npm package is a local Windows stdio server. A hosted endpoint is also available below.
+
+## Hosted HTTPS MCP
+
+The hosted Streamable HTTP endpoint is `https://laogao.xyz/geod-mcp/mcp`. Add it to an MCP client that supports remote HTTP and set its `Authorization` request header to `Bearer <your-token>`. The token is stored locally for the owner at `G:\code\tif-downloader\output\geod-mcp-remote-token.txt`; keep it private. The server itself stores the token under `/srv/laogao/secrets` and only listens on loopback behind HTTPS Nginx.
+
+For a client accepting the `mcpServers` JSON format:
+
+```json
+{
+  "mcpServers": {
+    "geod": {
+      "type": "http",
+      "url": "https://laogao.xyz/geod-mcp/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+    }
+  }
+}
+```
+
+The hosted service currently exposes planning, acquisition, job status/cancellation, bundle inspection, and registered artifact reading. It does not expose `geod_render`: the server has no production GeoStyle renderer or browser. The local stdio package still offers rendering when GeoStyle and a browser are available. Large GeoTIFF artifacts exceed the MCP inline size limit and remain on the hosted server; smaller JSON/GeoJSON artifacts are readable through `geod_get_artifact`. Remote client integration in Doubao Work still needs an in-product test.
+
+The owner can verify the live endpoint without printing the token:
+
+```powershell
+node packages/geod-mcp/scripts/verify-http.mjs https://laogao.xyz/geod-mcp/mcp G:\code\tif-downloader\output\geod-mcp-remote-token.txt --fetch
+```
 
 ## Build from this source checkout
 
@@ -34,7 +60,7 @@ The same installed stdio entrypoint can be registered in [WorkBuddy's user or pr
 powershell -NoProfile -File "$env:LOCALAPPDATA\GeoD\Agent\node_modules\geod-mcp\scripts\install-workbuddy.ps1" -Workspace (Get-Location).Path
 ```
 
-The script verifies real MCP tool calls, preserves other JSON servers, refuses to replace a different `geod` entry, and backs up an existing configuration before writing. WorkBuddy is not installed on this verification machine, so client discovery and tool invocation there remain unverified. Cloud-hosted agents such as a remote Doubao Work session need a separately deployed, authenticated remote MCP endpoint; this local Windows stdio package is not such an endpoint.
+The script verifies real MCP tool calls, preserves other JSON servers, refuses to replace a different `geod` entry, and backs up an existing configuration before writing. WorkBuddy is not installed on this verification machine, so client discovery and tool invocation there remain unverified. Cloud-hosted agents can use the hosted HTTPS endpoint above if they support Streamable HTTP and custom Authorization headers.
 
 ## Run from this checkout
 
@@ -121,4 +147,4 @@ npm run test:live
 
 Run these verification commands from the source checkout (tests and live-smoke are not distributed in the production ZIP). The test suite uses the official SDK client and real stdio processes, a local tile/GeoJSON server, transparent polygon-hole assertions, artifact/resource readback, cancellation, path boundaries and restart behavior. The live smoke script in the source checkout downloads the real Sichuan example, renders through GeoStyle, reads the native MCP image block back, and writes it to `output/geod-mcp-verification-*/sichuan-via-mcp.png`. It requires the release CLI, network sources, the GeoStyle server and Chrome/Edge.
 
-Protocol integration uses the [official TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) server/client packages, pinned to 2.0.0. The server supports the SDK's stdio negotiation and legacy opening mode. A remote HTTP MCP service and OAuth are not included.
+Protocol integration uses the [official TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) server/client packages, pinned to 2.0.0. The local server supports stdio negotiation and legacy opening mode. The hosted endpoint uses Streamable HTTP with an owner Bearer token; OAuth login is not available.

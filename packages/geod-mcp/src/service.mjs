@@ -29,6 +29,7 @@ export class GeoDService {
     this.maxJobs = Number(env.GEOD_MAX_CONCURRENT_JOBS || 2);
     if (!Number.isInteger(this.maxJobs) || this.maxJobs < 1 || this.maxJobs > 4) throw fail('CONFIG_ERROR', 'GEOD_MAX_CONCURRENT_JOBS must be 1..4');
     this.env = { ...process.env, ...env };
+    this.renderEnabled = env.GEOD_RENDER_ENABLED !== '0';
     this.jobs = new Map();
     this.closed = false;
     this.activeCalls = new Set();
@@ -54,9 +55,11 @@ export class GeoDService {
     await this.ready;
     return { ok: true, name: 'GeoD MCP', version: '0.1.0', transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
       cli: { path: this.bin, available: existsSync(this.bin) },
-      geostyle: { url: this.geostyleUrl.href, renderScriptAvailable: existsSync(this.renderScript), requiresRunningServer: true },
+      geostyle: { url: this.geostyleUrl.href, renderEnabled: this.renderEnabled, renderScriptAvailable: existsSync(this.renderScript), requiresRunningServer: true },
       limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: 4096, maxPixels: 67108864 },
-      workflow: ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_render', 'geod_job_status until completed', 'geod_get_artifact'],
+      workflow: this.renderEnabled
+        ? ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_render', 'geod_job_status until completed', 'geod_get_artifact']
+        : ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact'],
       behavior: { localPaths: 'workspace or configured output directory only', jobsSurviveClientTimeout: true, downloadsResumeAfterRestart: false, clipping: 'imagery.clipToLayer selects a polygon layer; PNG/GeoTIFF outside pixels become transparent; vectors unchanged' },
       examples: this.examples };
   }
@@ -225,6 +228,7 @@ export class GeoDService {
   }
 
   async startRender({ bundleDir, openStyle, renderer = 'openlayers', width = 1600, height = 1200 }) {
+    if (!this.renderEnabled) throw fail('RENDER_UNAVAILABLE', 'GeoStyle rendering is not enabled on this server');
     await this.ready;
     const bundle = await this.scopedPath(bundleDir);
     if (!['openlayers', 'maplibre'].includes(renderer) || ![width, height].every(v => Number.isInteger(v) && v >= 256 && v <= 4096)) throw fail('INVALID_RENDER', 'Renderer must be openlayers/maplibre and dimensions 256..4096');
