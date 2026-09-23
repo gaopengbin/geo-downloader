@@ -33,17 +33,22 @@ This prompt uses the public npm package on the recipient's own computer. It does
 
 ## Hosted HTTPS MCP
 
-The hosted Streamable HTTP endpoint is `https://laogao.xyz/geod-mcp/mcp`. It is currently a private preview: access requires an owner-issued token in the `Authorization: Bearer <your-token>` request header. Public users cannot obtain a token automatically yet. Do not put the owner's token or local token-file path into a prompt shared with other users. The server only listens on loopback behind HTTPS Nginx.
+The hosted Streamable HTTP endpoint is `https://laogao.xyz/geod-mcp/mcp`. Users authorize their own account through the browser when the MCP client starts OAuth. The login page supports email/password and email-verified registration. The server issues GeoD-specific tokens; the user never needs the site owner's token or access to the owner's computer. It listens on loopback behind HTTPS Nginx.
 
-For a client accepting the `mcpServers` JSON format:
+Copy this prompt into a cloud agent such as Doubao Work, or another client that supports remote Streamable HTTP MCP and OAuth:
+
+> Add a remote MCP server named `geod` at `https://laogao.xyz/geod-mcp/mcp` using Streamable HTTP. Let me complete the GeoD account login/authorization in the browser; do not ask me to paste a password or token into chat. Then call `geod_capabilities` and `geod_plan` with one of the provided examples, and report the actual tool results. If this client cannot complete OAuth, tell me the exact client limitation instead of claiming the server is connected.
+
+The hosted server restricts users to their own jobs and files. Public accounts can use NASA GIBS imagery and DataV administrative GeoJSON with at most 64 tiles, 4 million pixels, 180 seconds and three fetch jobs per day; the server permits one active public fetch at a time. Other sources and larger workloads require the local Windows package or a separate approved deployment.
+
+For a client accepting the `mcpServers` JSON format with OAuth discovery:
 
 ```json
 {
   "mcpServers": {
     "geod": {
       "type": "http",
-      "url": "https://laogao.xyz/geod-mcp/mcp",
-      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+      "url": "https://laogao.xyz/geod-mcp/mcp"
     }
   }
 }
@@ -51,7 +56,7 @@ For a client accepting the `mcpServers` JSON format:
 
 The hosted service currently exposes planning, acquisition, job status/cancellation, bundle inspection, and registered artifact reading. It does not expose `geod_render`: the server has no production GeoStyle renderer or browser. The local stdio package still offers rendering when GeoStyle and a browser are available. Small JSON/GeoJSON artifacts are readable through `geod_get_artifact`. For a large GeoTIFF or other file, call hosted-only `geod_artifact_link` with its `jobId` and `artifactId`; it returns a signed HTTPS download link valid for ten minutes. Remote client integration in Doubao Work still needs an in-product test.
 
-The owner can verify the live endpoint without printing the token, using the owner-only token file on the deployment workstation:
+The owner can verify the legacy owner access without printing the token, using the owner-only token file on the deployment workstation:
 
 ```powershell
 node packages/geod-mcp/scripts/verify-http.mjs https://laogao.xyz/geod-mcp/mcp C:\path\to\your-private-token.txt --fetch
@@ -76,7 +81,7 @@ The same installed stdio entrypoint can be registered in [WorkBuddy's user or pr
 powershell -NoProfile -File "$env:LOCALAPPDATA\GeoD\Agent\node_modules\geod-mcp\scripts\install-workbuddy.ps1" -Workspace (Get-Location).Path
 ```
 
-The script verifies real MCP tool calls, preserves other JSON servers, refuses to replace a different `geod` entry, and backs up an existing configuration before writing. WorkBuddy is not installed on this verification machine, so client discovery and tool invocation there remain unverified. Cloud-hosted agents can use the hosted HTTPS endpoint above only with an owner-issued token and support for Streamable HTTP and custom Authorization headers.
+The script verifies real MCP tool calls, preserves other JSON servers, refuses to replace a different `geod` entry, and backs up an existing configuration before writing. WorkBuddy is not installed on this verification machine, so client discovery and tool invocation there remain unverified. Cloud-hosted agents need Streamable HTTP MCP and OAuth support for the hosted HTTPS endpoint above.
 
 ## Run from this checkout
 
@@ -164,4 +169,4 @@ npm run test:live
 
 Run these verification commands from the source checkout (tests and live-smoke are not distributed in the production ZIP). The test suite uses the official SDK client and real stdio processes, a local tile/GeoJSON server, transparent polygon-hole assertions, artifact/resource readback, cancellation, path boundaries and restart behavior. The live smoke script in the source checkout downloads the real Sichuan example, renders through GeoStyle, reads the native MCP image block back, and writes it to `output/geod-mcp-verification-*/sichuan-via-mcp.png`. It requires the release CLI, network sources, the GeoStyle server and Chrome/Edge.
 
-Protocol integration uses the [official TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) server/client packages, pinned to 2.0.0. The local server supports stdio negotiation and legacy opening mode. The hosted endpoint uses Streamable HTTP with an owner Bearer token; OAuth login is not available.
+Protocol integration uses the [official TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) server/client packages, pinned to 2.0.0. The local server supports stdio negotiation and legacy opening mode. The hosted endpoint uses Streamable HTTP with OAuth authorization for each account; legacy owner Bearer access remains available for operations.
