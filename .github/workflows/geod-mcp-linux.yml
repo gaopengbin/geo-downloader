@@ -11,7 +11,6 @@ on:
       - 'crates/geod-core/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'scripts/geod-render.mjs'
 
 permissions:
   contents: read
@@ -39,7 +38,6 @@ jobs:
           cp target/release/geod dist/geod-mcp-linux/bin/geod
           cp packages/geod-mcp/src/*.mjs dist/geod-mcp-linux/src/
           cp examples/geod-cli/*.json dist/geod-mcp-linux/examples/
-          cp scripts/geod-render.mjs dist/geod-mcp-linux/scripts/
           cp packages/geod-mcp/deploy-linux/package.json dist/geod-mcp-linux/package.json
           cp -a packages/geod-mcp/deploy-linux/node_modules dist/geod-mcp-linux/node_modules
           ./dist/geod-mcp-linux/bin/geod --help | grep 'GeoD CLI 0.1.1'

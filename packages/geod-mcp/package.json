@@ -1,19 +1,48 @@
 {
   "name": "geod-mcp",
-  "version": "0.1.0",
-  "description": "Local GeoD MCP tools for bounded geodata acquisition and GeoStyle rendering",
+  "version": "0.1.1",
+  "description": "GeoD CLI imagery download tools for local and remote MCP clients",
   "type": "module",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/gaopengbin/geo-downloader.git", "directory": "packages/geod-mcp" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gaopengbin/geo-downloader.git",
+    "directory": "packages/geod-mcp"
+  },
   "homepage": "https://github.com/gaopengbin/geo-downloader",
   "bugs": "https://github.com/gaopengbin/geo-downloader/issues",
-  "keywords": ["geod", "mcp", "agent", "gis", "geotiff", "geojson"],
-  "publishConfig": { "access": "public" },
-  "engines": { "node": ">=22" },
-  "os": ["win32"],
-  "cpu": ["x64"],
-  "files": ["bin/", "src/", "scripts/", "examples/", "skill/", "README.md", "LICENSE"],
-  "bin": { "geod-mcp": "bin/geod-mcp.mjs" },
+  "keywords": [
+    "geod",
+    "mcp",
+    "agent",
+    "gis",
+    "geotiff",
+    "geojson"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/",
+    "examples/",
+    "skill/",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "geod-mcp": "bin/geod-mcp.mjs"
+  },
   "scripts": {
     "start": "node src/index.mjs",
     "test": "node --test test/*.test.mjs",
@@ -25,5 +54,7 @@
     "geod-cli": "0.1.1",
     "zod": "4.4.2"
   },
-  "devDependencies": { "@modelcontextprotocol/client": "2.0.0" }
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
+  }
 }

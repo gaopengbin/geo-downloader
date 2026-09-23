@@ -50,12 +50,5 @@ export const toolSchemas = {
   jobStatus: z.strictObject({ jobId: identifier }),
   cancelJob: z.strictObject({ jobId: identifier }),
   inspect: z.strictObject({ bundleDir: localPath }),
-  render: z.strictObject({
-    bundleDir: localPath,
-    openStyle: z.record(z.string(), z.unknown()).optional().describe('Optional OpenStyle 0.6 JSON object. GeoStyle validates real layer and field bindings. Omit for the GeoD inspection baseline.'),
-    renderer: z.enum(['openlayers', 'maplibre']).optional(),
-    width: z.number().int().min(256).max(4096).optional(),
-    height: z.number().int().min(256).max(4096).optional(),
-  }),
   getArtifact: z.strictObject({ jobId: identifier, artifactId: identifier }),
 };

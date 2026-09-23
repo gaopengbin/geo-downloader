@@ -226,7 +226,6 @@ test('official MCP v2 stdio client completes GeoD jobs and reads native artifact
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([, value]) => typeof value === 'string')),
         GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'output'), GEOD_BIN: geodBin,
-        GEOSTYLE_URL: 'http://127.0.0.1:3100',
       },
     });
     transport.stderr.on('data', (chunk) => serverLogs.push(chunk.toString()));
@@ -254,7 +253,8 @@ test('official MCP v2 stdio client completes GeoD jobs and reads native artifact
   await t.test('tools/list and capabilities expose the promised callable interface', async () => {
     const list = await client.listTools();
     const names = list.tools.map((tool) => tool.name);
-    for (const name of ['geod_capabilities', 'geod_plan', 'geod_fetch', 'geod_job_status', 'geod_cancel_job', 'geod_inspect', 'geod_render', 'geod_get_artifact']) assert.ok(names.includes(name), `missing ${name}`);
+    for (const name of ['geod_capabilities', 'geod_plan', 'geod_fetch', 'geod_job_status', 'geod_cancel_job', 'geod_inspect', 'geod_get_artifact']) assert.ok(names.includes(name), `missing ${name}`);
+    assert.ok(!names.includes('geod_render'));
     structured(await client.callTool({ name: 'geod_capabilities', arguments: {} }));
   });
 
@@ -406,7 +406,7 @@ test('legacy 2025-11-25 clients negotiate and call tools over raw JSON-RPC stdio
     cwd: packageRoot, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env, GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'output'),
-      GEOD_BIN: geodBin, GEOSTYLE_URL: 'http://127.0.0.1:3100',
+      GEOD_BIN: geodBin,
     },
   });
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });

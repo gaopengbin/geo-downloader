@@ -49,7 +49,7 @@ try {
   assert.ok(names.includes('geod_capabilities') && names.includes('geod_plan'));
   const capabilities = (await call('tools/call', { name: 'geod_capabilities', arguments: {} })).structuredContent;
   assert.equal(capabilities.cli.available, true);
-  assert.equal(capabilities.geostyle.renderScriptAvailable, true);
+  assert.ok(!names.includes('geod_render'));
   const example = await call('resources/read', { uri: 'geod://examples/henan' });
   const request = JSON.parse(example.contents[0].text);
   const plan = await call('tools/call', { name: 'geod_plan', arguments: { request } });

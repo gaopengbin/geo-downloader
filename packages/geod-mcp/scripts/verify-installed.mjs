@@ -18,13 +18,13 @@ try {
   const capabilities = (await client.callTool({ name: 'geod_capabilities', arguments: {} })).structuredContent;
   assert.equal(capabilities.cli.available, true);
   assert.ok(capabilities.cli.path.includes('node_modules'));
-  assert.equal(capabilities.geostyle.renderScriptAvailable, true);
+  assert.ok(!tools.includes('geod_render'));
   const resource = await client.readResource({ uri: 'geod://examples/henan' });
   const request = JSON.parse(resource.contents[0].text);
   const planResult = await client.callTool({ name: 'geod_plan', arguments: { request } });
   assert.equal(planResult.isError, undefined, JSON.stringify(planResult));
   assert.equal(planResult.structuredContent.ok, true);
-  console.log(JSON.stringify({ ok: true, tools: tools.length, cli: capabilities.cli.path, renderScript: capabilities.geostyle.renderScriptAvailable, example: request.name, plan: planResult.structuredContent.ok }));
+  console.log(JSON.stringify({ ok: true, tools: tools.length, cli: capabilities.cli.path, example: request.name, plan: planResult.structuredContent.ok }));
 } finally {
   await client.close();
   const relative = path.relative(path.resolve(os.tmpdir()), workspace);

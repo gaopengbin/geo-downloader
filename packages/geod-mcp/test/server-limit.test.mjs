@@ -10,7 +10,7 @@ async function connect(t, { data, mimeType, capabilities = { examples: [] } }) {
     capabilities: () => capabilities,
     plan: () => ({ ok: true }), startFetch: () => ({ jobId: 'test-job', status: 'queued' }),
     jobStatus: () => ({ jobId: 'test-job', status: 'completed' }), cancelJob: () => ({ status: 'cancelled' }),
-    inspect: () => ({ ok: true }), startRender: () => ({ jobId: 'test-job', status: 'queued' }),
+    inspect: () => ({ ok: true }),
     readArtifact: () => ({ artifact, data }),
   };
   const server = createServer(service);

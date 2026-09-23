@@ -49,7 +49,7 @@ export async function createGeoDHttpServer(env = process.env) {
     const pending = (async () => {
     const workspace = path.join(service.workspace, 'users', userId);
     await mkdir(workspace, { recursive: true, mode: 0o700 });
-    const userService = new GeoDService({ ...env, GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_RENDER_ENABLED: '0', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1' });
+    const userService = new GeoDService({ ...env, GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1' });
     await userService.ready;
     const startJob = userService.startJob.bind(userService);
     userService.startJob = async (kind, worker) => {

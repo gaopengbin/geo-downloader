@@ -15,7 +15,6 @@ Copy-Item -LiteralPath (Join-Path $sourcePath 'src') -Destination $packagePath -
 Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $packagePath
 foreach ($folder in @('bin', 'scripts', 'examples', 'docs')) { New-Item -ItemType Directory -Path (Join-Path $packagePath $folder) | Out-Null }
 Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $packagePath 'bin\geod.exe')
-Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\geod-render.mjs') -Destination (Join-Path $packagePath 'scripts\geod-render.mjs')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\geod-cli.md') -Destination (Join-Path $packagePath 'docs')
 Get-ChildItem -LiteralPath (Join-Path $repoRoot 'examples\geod-cli') -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $packagePath 'examples') }
 Push-Location $packagePath
@@ -23,7 +22,7 @@ try {
     & npm.cmd ci --omit=dev --ignore-scripts --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'Production dependency installation failed.' }
 } finally { Pop-Location }
-$config = @{ mcpServers = @{ geod = @{ command = 'node'; args = @((Join-Path $packagePath 'src\index.mjs')); env = @{ GEOD_WORKSPACE = $packagePath; GEOSTYLE_URL = 'http://127.0.0.1:3100' } } } }
+$config = @{ mcpServers = @{ geod = @{ command = 'node'; args = @((Join-Path $packagePath 'src\index.mjs')); env = @{ GEOD_WORKSPACE = $packagePath } } } }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path $packagePath 'mcp.config.json'), ($config | ConvertTo-Json -Depth 6), $utf8)
 Compress-Archive -LiteralPath $packagePath -DestinationPath $archivePath

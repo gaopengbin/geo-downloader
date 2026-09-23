@@ -23,13 +23,9 @@ export class GeoDService {
     this.workspace = path.resolve(env.GEOD_WORKSPACE || process.cwd());
     this.outputDir = path.resolve(env.GEOD_OUTPUT_DIR || path.join(this.workspace, 'output/geod-mcp'));
     this.bin = path.resolve(env.GEOD_BIN || [path.join(packageRoot, 'bin/geod.exe'), installedCliRoot && path.join(installedCliRoot, 'native/geod.exe'), path.join(repoRoot, 'target/release/geod.exe'), path.join(repoRoot, 'target/release/geod')].find(candidate => candidate && existsSync(candidate)) || path.join(packageRoot, 'bin/geod.exe'));
-    this.renderScript = path.resolve(env.GEOD_RENDER_SCRIPT || [path.join(packageRoot, 'scripts/geod-render.mjs'), path.join(repoRoot, 'scripts/geod-render.mjs')].find(existsSync) || path.join(packageRoot, 'scripts/geod-render.mjs'));
-    this.geostyleUrl = new URL(env.GEOSTYLE_URL || 'http://127.0.0.1:3100');
-    if (!['http:', 'https:'].includes(this.geostyleUrl.protocol) || this.geostyleUrl.username || this.geostyleUrl.password || this.geostyleUrl.search || this.geostyleUrl.hash) throw fail('CONFIG_ERROR', 'GEOSTYLE_URL must be an HTTP(S) base URL without credentials, query or fragment');
     this.maxJobs = Number(env.GEOD_MAX_CONCURRENT_JOBS || 2);
     if (!Number.isInteger(this.maxJobs) || this.maxJobs < 1 || this.maxJobs > 4) throw fail('CONFIG_ERROR', 'GEOD_MAX_CONCURRENT_JOBS must be 1..4');
     this.env = { ...process.env, ...env };
-    this.renderEnabled = env.GEOD_RENDER_ENABLED !== '0';
     this.jobs = new Map();
     this.closed = false;
     this.activeCalls = new Set();
@@ -53,13 +49,10 @@ export class GeoDService {
 
   async capabilities() {
     await this.ready;
-    return { ok: true, name: 'GeoD MCP', version: '0.1.0', transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
+    return { ok: true, name: 'GeoD MCP', version: '0.1.1', transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
       cli: { path: this.bin, available: existsSync(this.bin) },
-      geostyle: { url: this.geostyleUrl.href, renderEnabled: this.renderEnabled, renderScriptAvailable: existsSync(this.renderScript), requiresRunningServer: true },
       limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: this.env.GEOD_PUBLIC_MCP === '1' ? 64 : 4096, maxPixels: this.env.GEOD_PUBLIC_MCP === '1' ? 4194304 : 67108864 },
-      workflow: this.renderEnabled
-        ? ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_render', 'geod_job_status until completed', 'geod_get_artifact']
-        : ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', 'geod_artifact_link for downloads'],
+      workflow: ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', ...(typeof this.artifactLink === 'function' ? ['geod_artifact_link for large downloads'] : [])],
       behavior: { localPaths: 'workspace or configured output directory only', jobsSurviveClientTimeout: true, downloadsResumeAfterRestart: false, clipping: 'imagery.clipToLayer selects a polygon layer; PNG/GeoTIFF outside pixels become transparent; vectors unchanged' },
       examples: this.examples };
   }
@@ -92,8 +85,6 @@ export class GeoDService {
 
   error(error) {
     let message = String(error?.message || error).slice(0, 3000);
-    const token = this.env.GEOSTYLE_GEOD_IMPORT_TOKEN;
-    if (token) message = message.split(token).join('[redacted]');
     message = message.replace(/https?:\/\/[^\s"<>]+/g, raw => { try { const url = new URL(raw); url.username = ''; url.password = ''; if (url.search) url.search = '?[redacted]'; return url.href; } catch { return '[url]'; } });
     return { code: error?.code || 'GEOD_MCP_ERROR', message };
   }
@@ -236,42 +227,6 @@ export class GeoDService {
       await this.addArtifact(job, 'manifest', result.manifestPath, 'application/json');
       for (const asset of result.manifest.assets) await this.addArtifact(job, asset.id, path.join(bundleDir, asset.path), asset.mimeType);
       return result;
-    });
-  }
-
-  async startRender({ bundleDir, openStyle, renderer = 'openlayers', width = 1600, height = 1200 }) {
-    if (!this.renderEnabled) throw fail('RENDER_UNAVAILABLE', 'GeoStyle rendering is not enabled on this server');
-    await this.ready;
-    const bundle = await this.scopedPath(bundleDir);
-    if (!['openlayers', 'maplibre'].includes(renderer) || ![width, height].every(v => Number.isInteger(v) && v >= 256 && v <= 4096)) throw fail('INVALID_RENDER', 'Renderer must be openlayers/maplibre and dimensions 256..4096');
-    const styleText = openStyle === undefined ? undefined : JSON.stringify(openStyle);
-    if (styleText && Buffer.byteLength(styleText) > 2 * 1024 * 1024) throw fail('STYLE_TOO_LARGE', 'OpenStyle exceeds 2 MiB');
-    return this.startJob('render', async job => {
-      const options = { signal: job.controller.signal, progress: update => { job.record.progress = update; } };
-      job.record.progress = { phase: 'validating-bundle' };
-      await this.inspect(bundle, options);
-      const args = ['geostyle-import', '--bundle', bundle, '--url', this.geostyleUrl.href];
-      if (this.env.GEOSTYLE_GEOD_IMPORT_TOKEN) args.push('--token-env', 'GEOSTYLE_GEOD_IMPORT_TOKEN');
-      if (styleText) { const file = path.join(job.dir, 'requested.openstyle.json'); await writeFile(file, styleText, { flag: 'wx' }); args.push('--style', file); }
-      job.record.progress = { phase: 'importing-geostyle' };
-      const imported = await this.run(this.bin, args, { ...options, timeout: 100_000 });
-      if (!/^geod-[a-f0-9]+$/.test(imported.geostyle?.id)) throw fail('INVALID_GEOSTYLE_RESPONSE', 'GeoStyle returned an invalid bundle ID');
-      const base = this.geostyleUrl.href.replace(/\/$/, '');
-      const url = new URL(`${base}/render/geod/${imported.geostyle.id}`);
-      url.searchParams.set('renderer', renderer);
-      job.record.progress = { phase: 'rendering' };
-      const rendered = await this.run(process.execPath, [this.renderScript, '--url', url.href, '--out', path.join(job.dir, 'map.png'), '--width', String(width), '--height', String(height)], { ...options, timeout: 150_000, ipc: true });
-      await this.addArtifact(job, 'map', rendered.image, 'image/png');
-      await this.addArtifact(job, 'render-evidence', rendered.evidence, 'application/json');
-      if (rendered.openStyle) await this.addArtifact(job, 'openstyle', rendered.openStyle, 'application/json');
-      const evidence = JSON.parse(await readFile(rendered.evidence, 'utf8'));
-      const match = /^data:image\/(webp|png);base64,([A-Za-z0-9+/=]+)$/.exec(evidence.evidence?.screenshot?.dataUrl || '');
-      if (match && match[2].length < MAX_INLINE) {
-        const preview = path.join(job.dir, `preview.${match[1]}`);
-        await writeFile(preview, Buffer.from(match[2], 'base64'), { flag: 'wx' });
-        await this.addArtifact(job, 'preview', preview, `image/${match[1]}`);
-      }
-      return { ...rendered, bundleDir: bundle, geostyle: imported.geostyle, quality: evidence.quality, observation: evidence.observation };
     });
   }
 

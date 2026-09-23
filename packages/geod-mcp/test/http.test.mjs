@@ -34,7 +34,7 @@ test('HTTP MCP requires bearer auth and serves real GeoD tools', async () => {
     const capabilities = (await client.callTool({ name: 'geod_capabilities', arguments: {} })).structuredContent;
     assert.equal(capabilities.transport, 'streamable-http');
     assert.equal(capabilities.cli.available, true);
-    assert.equal(capabilities.geostyle.renderEnabled, false);
+    assert.equal(capabilities.geostyle, undefined);
     const jobId = randomUUID();
     const jobDir = path.join(workspace, 'output', 'geod-mcp', jobId);
     await mkdir(jobDir, { recursive: true });
