@@ -20,6 +20,7 @@
     "test:live": "node scripts/live-smoke.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "geod-cli": "0.1.1",
     "zod": "4.4.2"

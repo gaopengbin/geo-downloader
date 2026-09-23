@@ -52,7 +52,7 @@ export class GeoDService {
 
   async capabilities() {
     await this.ready;
-    return { ok: true, name: 'GeoD MCP', version: '0.1.0', transport: 'stdio', workspace: this.workspace, outputDir: this.outputDir,
+    return { ok: true, name: 'GeoD MCP', version: '0.1.0', transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
       cli: { path: this.bin, available: existsSync(this.bin) },
       geostyle: { url: this.geostyleUrl.href, renderScriptAvailable: existsSync(this.renderScript), requiresRunningServer: true },
       limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: 4096, maxPixels: 67108864 },
