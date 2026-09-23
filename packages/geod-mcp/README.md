@@ -23,9 +23,17 @@ Use `--workspace C:\path\to\your\workspace` to choose another folder. The comman
 
 WorkBuddy's configuration is verified on disk and the MCP tools are called independently; a WorkBuddy client session has not yet been tested. This npm package is a local Windows stdio server. A hosted endpoint is also available below.
 
+## Ask an agent to install it
+
+Copy this prompt into Codex or WorkBuddy on the computer where you want GeoD to run:
+
+> Connect GeoD MCP to this client for my current workspace. First check that this computer is Windows x64 with Node.js 22 or newer. Run `npx --yes geod-mcp@0.1.0 install codex --workspace "<absolute path of my current workspace>"`; if you are WorkBuddy, replace `codex` with `workbuddy`. Refresh the client session if needed, then actually call `geod_capabilities` and `geod_plan` to verify the connection. Report the tool results or the exact blocker. Do not claim success from a configuration file alone.
+
+This prompt uses the public npm package on the recipient's own computer. It does not require access to the publisher's machine or credentials. Clients without a Windows terminal need a remote MCP connection instead.
+
 ## Hosted HTTPS MCP
 
-The hosted Streamable HTTP endpoint is `https://laogao.xyz/geod-mcp/mcp`. Add it to an MCP client that supports remote HTTP and set its `Authorization` request header to `Bearer <your-token>`. The token is stored locally for the owner at `G:\code\tif-downloader\output\geod-mcp-remote-token.txt`; keep it private. The server itself stores the token under `/srv/laogao/secrets` and only listens on loopback behind HTTPS Nginx.
+The hosted Streamable HTTP endpoint is `https://laogao.xyz/geod-mcp/mcp`. It is currently a private preview: access requires an owner-issued token in the `Authorization: Bearer <your-token>` request header. Public users cannot obtain a token automatically yet. Do not put the owner's token or local token-file path into a prompt shared with other users. The server only listens on loopback behind HTTPS Nginx.
 
 For a client accepting the `mcpServers` JSON format:
 
@@ -43,10 +51,10 @@ For a client accepting the `mcpServers` JSON format:
 
 The hosted service currently exposes planning, acquisition, job status/cancellation, bundle inspection, and registered artifact reading. It does not expose `geod_render`: the server has no production GeoStyle renderer or browser. The local stdio package still offers rendering when GeoStyle and a browser are available. Small JSON/GeoJSON artifacts are readable through `geod_get_artifact`. For a large GeoTIFF or other file, call hosted-only `geod_artifact_link` with its `jobId` and `artifactId`; it returns a signed HTTPS download link valid for ten minutes. Remote client integration in Doubao Work still needs an in-product test.
 
-The owner can verify the live endpoint without printing the token:
+The owner can verify the live endpoint without printing the token, using the owner-only token file on the deployment workstation:
 
 ```powershell
-node packages/geod-mcp/scripts/verify-http.mjs https://laogao.xyz/geod-mcp/mcp G:\code\tif-downloader\output\geod-mcp-remote-token.txt --fetch
+node packages/geod-mcp/scripts/verify-http.mjs https://laogao.xyz/geod-mcp/mcp C:\path\to\your-private-token.txt --fetch
 ```
 
 ## Build from this source checkout
@@ -68,7 +76,7 @@ The same installed stdio entrypoint can be registered in [WorkBuddy's user or pr
 powershell -NoProfile -File "$env:LOCALAPPDATA\GeoD\Agent\node_modules\geod-mcp\scripts\install-workbuddy.ps1" -Workspace (Get-Location).Path
 ```
 
-The script verifies real MCP tool calls, preserves other JSON servers, refuses to replace a different `geod` entry, and backs up an existing configuration before writing. WorkBuddy is not installed on this verification machine, so client discovery and tool invocation there remain unverified. Cloud-hosted agents can use the hosted HTTPS endpoint above if they support Streamable HTTP and custom Authorization headers.
+The script verifies real MCP tool calls, preserves other JSON servers, refuses to replace a different `geod` entry, and backs up an existing configuration before writing. WorkBuddy is not installed on this verification machine, so client discovery and tool invocation there remain unverified. Cloud-hosted agents can use the hosted HTTPS endpoint above only with an owner-issued token and support for Streamable HTTP and custom Authorization headers.
 
 ## Run from this checkout
 

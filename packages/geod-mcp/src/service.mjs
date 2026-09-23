@@ -56,7 +56,7 @@ export class GeoDService {
     return { ok: true, name: 'GeoD MCP', version: '0.1.0', transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
       cli: { path: this.bin, available: existsSync(this.bin) },
       geostyle: { url: this.geostyleUrl.href, renderEnabled: this.renderEnabled, renderScriptAvailable: existsSync(this.renderScript), requiresRunningServer: true },
-      limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: 4096, maxPixels: 67108864 },
+      limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: this.env.GEOD_PUBLIC_MCP === '1' ? 64 : 4096, maxPixels: this.env.GEOD_PUBLIC_MCP === '1' ? 4194304 : 67108864 },
       workflow: this.renderEnabled
         ? ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_render', 'geod_job_status until completed', 'geod_get_artifact']
         : ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', 'geod_artifact_link for downloads'],
@@ -74,6 +74,18 @@ export class GeoDService {
   async requestValue(request) {
     if (Buffer.byteLength(JSON.stringify(request)) > 2 * 1024 * 1024) throw fail('REQUEST_TOO_LARGE', 'Request exceeds 2 MiB');
     const value = structuredClone(request);
+    if (this.env.GEOD_PUBLIC_MCP === '1') {
+      value.limits = { maxTiles: 64, maxPixels: 4194304, timeoutSeconds: 180, ...value.limits };
+      if (value.imagery) value.imagery.concurrency ??= 4;
+      if (value.vector?.input || value.vector?.endpoint || (value.vector && !value.vector.url)) throw fail('SOURCE_NOT_ALLOWED', 'Hosted accounts use prepared GeoJSON URLs only');
+      const allowed = (raw, host, pathname) => {
+        try { const url = new URL(raw); return url.protocol === 'https:' && url.hostname === host && !url.port && !url.username && !url.password && !url.hash && pathname(url.pathname); }
+        catch { return false; }
+      };
+      if (value.vector?.url && !allowed(value.vector.url, 'geo.datav.aliyun.com', path => /^\/areas_v3\/bound\/[0-9]{6}(?:_full)?\.json$/.test(path))) throw fail('SOURCE_NOT_ALLOWED', 'Hosted accounts support DataV administrative GeoJSON only');
+      if (value.imagery?.url && !allowed(value.imagery.url, 'gibs.earthdata.nasa.gov', path => path.startsWith('/wmts/epsg3857/best/'))) throw fail('SOURCE_NOT_ALLOWED', 'Hosted accounts support NASA GIBS imagery only');
+      if (value.limits.maxTiles > 64 || value.limits.maxPixels > 4194304 || value.limits.timeoutSeconds > 180 || (value.imagery?.concurrency ?? 1) > 4) throw fail('RESOURCE_LIMIT', 'Hosted accounts are limited to 64 tiles, 4M pixels, 180 seconds and 4 parallel tiles');
+    }
     if (value.vector?.input) value.vector.input = await this.scopedPath(value.vector.input);
     return value;
   }

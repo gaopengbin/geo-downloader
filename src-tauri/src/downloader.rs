@@ -108,7 +108,8 @@ impl TileDownloader {
             .pool_max_idle_per_host(20)
             .pool_idle_timeout(Duration::from_secs(30))
             .tcp_keepalive(Duration::from_secs(15))
-            .danger_accept_invalid_certs(config::allow_invalid_certs());
+            .danger_accept_invalid_certs(config::allow_invalid_certs())
+            .redirect(if std::env::var_os("GEOD_PUBLIC_MCP").is_some() { reqwest::redirect::Policy::none() } else { reqwest::redirect::Policy::default() });
 
         // 配置代理
         if let Some(proxy_url) = proxy {

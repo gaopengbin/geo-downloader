@@ -404,6 +404,7 @@ async fn execute(request: &Request, base_dir: &Path, stage: &Path) -> Result<Man
             .user_agent("GeoD-CLI/0.1 (+https://github.com/gaopengbin/geo-downloader)")
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(request.limits.timeout_seconds))
+            .redirect(if std::env::var_os("GEOD_PUBLIC_MCP").is_some() { reqwest::redirect::Policy::none() } else { reqwest::redirect::Policy::default() })
             .build()
             .map_err(|e| e.to_string())?;
         let result = vector::acquire(v, request.bounds, base_dir, &client).await?;
