@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
+import { Script } from 'node:vm';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -65,6 +66,10 @@ test('separate account OAuth uses PKCE, resource binding and isolated MCP worksp
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.doesNotMatch(html, /platform-api|platform_token/);
+    assert.match(html, /注册密码为 8–128 个字符/);
+    assert.match(html, /该邮箱已注册，请返回登录/);
+    assert.doesNotMatch(html, /Unable to verify this identity/);
+    new Script(html.match(/<script>([\s\S]*?)<\/script>/)[1]);
     const transaction = html.match(/const tx="([^"]+)"/)[1];
     const rejected = await post(`${base}/oauth/approve`, { transaction }, false, { origin: 'http://127.0.0.1:19475' });
     assert.equal(rejected.status, 401);
