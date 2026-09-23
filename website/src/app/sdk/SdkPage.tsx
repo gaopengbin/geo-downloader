@@ -357,13 +357,13 @@ export default async function SDKPage() {
             两者都围绕真实下载结果工作。
           </p>
           <div className={styles.resourceGrid}>
-            <Link className={cn(styles.card, styles.resourceCard)} href="/tools#cli">
+            <Link className={cn(styles.card, styles.resourceCard)} href="/cli">
               <span className={styles.cardEyebrow}>GEOD CLI · WINDOWS X64</span>
               <strong>在脚本中下载影像</strong>
               <small>安装公开预览版，查看命令、示例和使用边界。</small>
               <span className={styles.resourceArrow} aria-hidden="true"><ArrowRight size={18} strokeWidth={1.8} /></span>
             </Link>
-            <Link className={cn(styles.card, styles.resourceCard)} href="/tools#prompt">
+            <Link className={cn(styles.card, styles.resourceCard)} href="/mcp">
               <span className={styles.cardEyebrow}>GEOD MCP · LOCAL / HTTPS</span>
               <strong>让 Agent 接入 GeoD</strong>
               <small>复制接入提示词，按本机或云端运行方式连接。</small>

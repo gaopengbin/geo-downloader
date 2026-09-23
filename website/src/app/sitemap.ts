@@ -20,7 +20,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       priority: 0.8,
     },
     {
-      url: `${SITE_URL}/tools`,
+      url: `${SITE_URL}/cli`,
+      lastModified: new Date("2026-09-23"),
+      changeFrequency: "monthly" as const,
+      priority: 0.9,
+    },
+    {
+      url: `${SITE_URL}/mcp`,
       lastModified: new Date("2026-09-23"),
       changeFrequency: "monthly" as const,
       priority: 0.9,
