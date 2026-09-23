@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { readFile, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 if (!process.argv[2] || !process.argv[3]) throw new Error('Usage: node scripts/package-smoke.mjs PACKAGE_DIRECTORY SICHUAN_BUNDLE_DIRECTORY');
 const packageDir = path.resolve(process.argv[2]);
 const bundleDir = path.resolve(process.argv[3]);
-const config = JSON.parse(await readFile(path.join(packageDir, 'mcp.config.json'), 'utf8')).mcpServers.geod;
+const config = { command: process.execPath, args: [path.join(packageDir, 'src/index.mjs')] };
 const transport = new StdioClientTransport({ ...config, env: { ...process.env, ...config.env, GEOD_WORKSPACE: root, GEOD_OUTPUT_DIR: path.join(root, 'output/geod-mcp-package-check') }, stderr: 'pipe' });
 const client = new Client({ name: 'geod-portable-package-check', version: '0.1.1' });
 const errors = [];

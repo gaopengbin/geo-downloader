@@ -29,7 +29,7 @@ const cliRequest = `{
   "limits": { "timeoutSeconds": 180 }
 }`;
 const cliWorkflow = "geod plan --request .\\henan-boundary.json\nif ($LASTEXITCODE -ne 0) { throw '请求校验失败' }\n$bundle = Join-Path (Get-Location) ('henan-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))\ngeod fetch --request .\\henan-boundary.json --out $bundle\nif ($LASTEXITCODE -ne 0) { throw '获取失败' }\ngeod inspect --bundle $bundle\nif ($LASTEXITCODE -ne 0) { throw '成果校验失败' }";
-const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg --workspace "C:\\path\\to\\your\\workspace"';
+const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.2.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
 const remoteUrl = "https://laogao.xyz/geod-mcp/mcp";
 const remoteConfig = `{
   "mcpServers": {
@@ -39,7 +39,7 @@ const remoteConfig = `{
     }
   }
 }`;
-const agentPrompt = `请把 GeoD 的影像下载 MCP 接入当前 Agent。如果你运行在我的 Windows x64 电脑上且有 Node.js 22+，从 https://laogao.xyz/geod-mcp/geod-mcp-0.1.1.tgz 安装本机 MCP，并把当前工作目录作为 workspace；Codex 使用 codex 安装目标，WorkBuddy 使用 workbuddy。如果你运行在云端，请添加 ${remoteUrl} 作为 Streamable HTTP MCP，让我在浏览器中使用自己的 GeoD 账号完成授权。接入后实际调用 geod_capabilities 和 geod_plan 验证，并报告结果或具体阻碍。不要使用发布者的电脑路径或令牌。`;
+const agentPrompt = `请把 GeoD 的影像下载 MCP 接入当前 Agent。如果你运行在我的 Windows x64 电脑上且有 Node.js 22+，从 https://laogao.xyz/geod-mcp/geod-mcp-0.1.2.tgz 安装本机 MCP；默认工作空间使用我电脑的 %LOCALAPPDATA%\\GeoD\\Workspace，不要使用当前项目目录或发布者的路径；Codex 使用 codex 安装目标，WorkBuddy 使用 workbuddy。如果你运行在云端，请添加 ${remoteUrl} 作为 Streamable HTTP MCP，让我在浏览器中使用自己的 GeoD 账号完成授权。接入后实际调用 geod_capabilities 和 geod_plan 验证，并报告结果或具体阻碍。`;
 
 function CodeBlock({ text, label }: { text: string; label: string }) {
   return (
@@ -133,7 +133,7 @@ export default function ToolsPage() {
                   <span className={styles.kicker}>03 / AGENT TOOLS</span>
                   <h2 id="mcp-title">GeoD MCP</h2>
                 </div>
-                <span className={styles.version}>0.1.1 · 本机或 HTTPS</span>
+                <span className={styles.version}>0.1.2 · 本机或 HTTPS</span>
               </div>
               <p className={styles.description}>
                 Agent 可以先调用 <code>geod_plan</code> 估算，再用 <code>geod_fetch</code> 启动任务，
@@ -143,9 +143,9 @@ export default function ToolsPage() {
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>在自己的电脑上运行</div>
                   <h3>本机 MCP</h3>
-                  <p>Windows x64、Node.js 22+。任务和成果保存在使用者自己的工作目录；Codex 和 WorkBuddy 有安装目标。</p>
+                  <p>Windows x64、Node.js 22+。任务和成果默认保存在使用者自己的 %LOCALAPPDATA%\\GeoD\\Workspace；Codex 和 WorkBuddy 有安装目标。</p>
                   <CodeBlock text={localInstall} label="PowerShell · Codex 示例" />
-                  <p className={styles.finePrint}>将示例路径换成你电脑上的绝对路径；WorkBuddy 把命令中的 <code>codex</code> 换成 <code>workbuddy</code>。</p>
+                  <p className={styles.finePrint}>只有想更换工作空间时才加 <code>--workspace</code> 并填写自己电脑上的绝对路径；WorkBuddy 把命令中的 <code>codex</code> 换成 <code>workbuddy</code>。</p>
                 </article>
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>在云端 Agent 中使用</div>
@@ -157,7 +157,7 @@ export default function ToolsPage() {
                 </article>
               </div>
               <div className={styles.linkRow}>
-                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.1" target="_blank" rel="noopener noreferrer">
+                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.2" target="_blank" rel="noopener noreferrer">
                   查看 MCP 安装包与校验值 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
                 <a href={CLI_EXPERIENCE_URL}>浏览器里的 CLI 预览 <ArrowRight size={15} aria-hidden="true" /></a>

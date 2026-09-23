@@ -1,11 +1,12 @@
 param(
-    [string]$Workspace = (Get-Location).Path,
+    [string]$Workspace = (Join-Path $env:LOCALAPPDATA 'GeoD\Workspace'),
     [string]$ConfigPath = (Join-Path $env:USERPROFILE '.workbuddy\mcp.json')
 )
 $ErrorActionPreference = 'Stop'
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $entrypoint = Join-Path $packageRoot 'src\index.mjs'
-$workspacePath = (Resolve-Path -LiteralPath $Workspace).Path
+$workspacePath = [System.IO.Path]::GetFullPath($Workspace)
+if (-not (Test-Path -LiteralPath $workspacePath)) { New-Item -ItemType Directory -Path $workspacePath -Force | Out-Null }
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 if (-not (Test-Path -LiteralPath $entrypoint)) { throw 'GeoD MCP entrypoint is missing.' }
 $oldWorkspace = $env:GEOD_WORKSPACE
@@ -21,12 +22,13 @@ $config = if (Test-Path -LiteralPath $target) { Get-Content -LiteralPath $target
 if (-not $config.mcpServers) { $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([pscustomobject]@{}) -Force }
 $existing = $config.mcpServers.geod
 if ($existing) {
-    if ($existing.command -ne $node -or $existing.args.Count -ne 1 -or $existing.args[0] -ne $entrypoint -or $existing.env.GEOD_WORKSPACE -ne $workspacePath) {
+    if ($existing.command -ne $node -or $existing.args.Count -ne 1 -or $existing.args[0] -ne $entrypoint -or @($existing.env.PSObject.Properties).Count -ne 1) {
         throw 'A different geod MCP registration already exists in WorkBuddy. Inspect it before replacing it.'
     }
-} else {
+}
+if (-not $existing -or $existing.env.GEOD_WORKSPACE -ne $workspacePath) {
     $geod = [pscustomobject]@{ command = $node; args = @($entrypoint); env = [pscustomobject]@{ GEOD_WORKSPACE = $workspacePath } }
-    $config.mcpServers | Add-Member -NotePropertyName geod -NotePropertyValue $geod
+    $config.mcpServers | Add-Member -NotePropertyName geod -NotePropertyValue $geod -Force
     $json = $config | ConvertTo-Json -Depth 100
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     if (Test-Path -LiteralPath $target) {

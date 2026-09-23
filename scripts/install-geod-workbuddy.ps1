@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory = $true)][string]$PackageSpec,
-    [string]$Workspace = (Get-Location).Path,
+    [string]$Workspace = (Join-Path $env:LOCALAPPDATA 'GeoD\Workspace'),
     [string]$Destination = (Join-Path $env:LOCALAPPDATA 'GeoD\Agent')
 )
 $ErrorActionPreference = 'Stop'
-$workspacePath = (Resolve-Path -LiteralPath $Workspace).Path
+$workspacePath = [System.IO.Path]::GetFullPath($Workspace)
+if (-not (Test-Path -LiteralPath $workspacePath)) { New-Item -ItemType Directory -Path $workspacePath -Force | Out-Null }
 $installPath = [System.IO.Path]::GetFullPath($Destination)
 if (Test-Path -LiteralPath $PackageSpec) { $PackageSpec = (Resolve-Path -LiteralPath $PackageSpec).Path }
 New-Item -ItemType Directory -Path $installPath -Force | Out-Null

@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory = $true)][string]$PackageSpec,
-    [string]$Workspace = (Get-Location).Path,
+    [string]$Workspace = (Join-Path $env:LOCALAPPDATA 'GeoD\Workspace'),
     [string]$Destination = (Join-Path $env:LOCALAPPDATA 'GeoD\Agent')
 )
 $ErrorActionPreference = 'Stop'
-$workspacePath = (Resolve-Path -LiteralPath $Workspace).Path
+$workspacePath = [System.IO.Path]::GetFullPath($Workspace)
+if (-not (Test-Path -LiteralPath $workspacePath)) { New-Item -ItemType Directory -Path $workspacePath -Force | Out-Null }
 $installPath = [System.IO.Path]::GetFullPath($Destination)
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 $codex = (Get-Command codex.cmd -ErrorAction Stop).Source
@@ -17,7 +18,7 @@ $configured = & $codex mcp list --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Could not inspect existing Codex MCP servers.' }
 $existing = $configured | Where-Object { $_.name -eq 'geod' } | Select-Object -First 1
 if ($existing) {
-    if ($existing.transport.command -ne $node -or $existing.transport.args.Count -ne 1 -or $existing.transport.args[0] -ne $entrypoint -or $existing.transport.env.GEOD_WORKSPACE -ne $workspacePath) {
+    if ($existing.transport.command -ne $node -or $existing.transport.args.Count -ne 1 -or $existing.transport.args[0] -ne $entrypoint -or @($existing.transport.env.PSObject.Properties).Count -ne 1) {
         throw 'A different geod MCP registration already exists in Codex. Inspect it before replacing it.'
     }
 }
@@ -34,7 +35,21 @@ try {
     & $node (Join-Path $packageRoot 'scripts\self-check.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'GeoD MCP tool-call verification failed.' }
 } finally { $env:GEOD_WORKSPACE = $oldWorkspace }
-if (-not $existing) {
+if ($existing -and $existing.transport.env.GEOD_WORKSPACE -ne $workspacePath) {
+    $codexConfig = Join-Path $codexHome 'config.toml'
+    if (-not (Test-Path -LiteralPath $codexConfig)) { throw 'Codex config.toml is missing; cannot back up the existing geod registration.' }
+    $backup = $codexConfig + '.backup-geod-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    Copy-Item -LiteralPath $codexConfig -Destination $backup
+    & $codex mcp remove geod
+    if ($LASTEXITCODE -ne 0) { throw "Could not remove the old geod registration; backup: $backup" }
+    try {
+        & $codex mcp add geod --env "GEOD_WORKSPACE=$workspacePath" -- $node $entrypoint
+        if ($LASTEXITCODE -ne 0) { throw 'Could not register GeoD with the new workspace.' }
+    } catch {
+        Copy-Item -LiteralPath $backup -Destination $codexConfig -Force
+        throw
+    }
+} elseif (-not $existing) {
     & $codex mcp add geod --env "GEOD_WORKSPACE=$workspacePath" -- $node $entrypoint
     if ($LASTEXITCODE -ne 0) { throw 'Codex MCP registration failed.' }
 }

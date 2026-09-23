@@ -22,9 +22,9 @@ try {
     & npm.cmd ci --omit=dev --ignore-scripts --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'Production dependency installation failed.' }
 } finally { Pop-Location }
-$config = @{ mcpServers = @{ geod = @{ command = 'node'; args = @((Join-Path $packagePath 'src\index.mjs')); env = @{ GEOD_WORKSPACE = $packagePath } } } }
+$config = @{ mcpServers = @{ geod = @{ command = 'node'; args = @('C:\path\to\geod-mcp\src\index.mjs'); env = @{ GEOD_WORKSPACE = 'C:\path\to\your\workspace' } } } }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText((Join-Path $packagePath 'mcp.config.json'), ($config | ConvertTo-Json -Depth 6), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $packagePath 'mcp.config.example.json'), ($config | ConvertTo-Json -Depth 6), $utf8)
 Compress-Archive -LiteralPath $packagePath -DestinationPath $archivePath
 $stream = [System.IO.File]::OpenRead($archivePath)
 $hasher = [System.Security.Cryptography.SHA256]::Create()
