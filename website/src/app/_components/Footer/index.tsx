@@ -16,6 +16,7 @@ const linkCategories: {
       { id: "Overview", label: "产品介绍", href: "/" },
       { id: "Features", label: "核心能力", href: "/#features" },
       { id: "Screenshots", label: "产品界面", href: "/#screenshots" },
+      { id: "Tools", label: "CLI 与 MCP", href: "/tools" },
       { id: "Cli", label: "CLI 在线体验", href: CLI_EXPERIENCE_URL },
       { id: "Download", label: "立即下载", href: "/#download" },
     ],

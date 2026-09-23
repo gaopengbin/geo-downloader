@@ -346,6 +346,32 @@ export default async function SDKPage() {
           </div>
         </section>
 
+        <section id="tools" className={cn(styles.section, styles.resourcesSection)}>
+          <div className={styles.specialHeadingContainer}>
+            <h2 className={styles.h2}>开发者与 Agent</h2>
+            <hr className={styles.separator} />
+          </div>
+          <h3 className={cn(styles.h1, styles.sectionTitle)}>同一套影像下载能力，进入命令行和 AI 工具</h3>
+          <p className={cn(styles.p, styles.sectionLead)}>
+            GeoD CLI 用参数完成规划与下载；GeoD MCP 让 Agent 调用规划、任务、成果读取工具。
+            两者都围绕真实下载结果工作。
+          </p>
+          <div className={styles.resourceGrid}>
+            <Link className={cn(styles.card, styles.resourceCard)} href="/tools#cli">
+              <span className={styles.cardEyebrow}>GEOD CLI · WINDOWS X64</span>
+              <strong>在脚本中下载影像</strong>
+              <small>安装公开预览版，查看命令、示例和使用边界。</small>
+              <span className={styles.resourceArrow} aria-hidden="true"><ArrowRight size={18} strokeWidth={1.8} /></span>
+            </Link>
+            <Link className={cn(styles.card, styles.resourceCard)} href="/tools#mcp">
+              <span className={styles.cardEyebrow}>GEOD MCP · LOCAL / HTTPS</span>
+              <strong>让 Agent 接入 GeoD</strong>
+              <small>复制接入提示词，按本机或云端运行方式连接。</small>
+              <span className={styles.resourceArrow} aria-hidden="true"><ArrowRight size={18} strokeWidth={1.8} /></span>
+            </Link>
+          </div>
+        </section>
+
         <section id="download" className={cn(styles.section, styles.downloadSection)}>
           <div className={styles.specialHeadingContainer}>
             <h2 className={styles.h2}>下载 GeoD</h2>

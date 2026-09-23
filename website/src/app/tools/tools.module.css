@@ -1,0 +1,246 @@
+.content {
+  display: grid;
+  gap: 28px;
+  padding-top: 32px;
+}
+
+.toolSection,
+.promptSection {
+  scroll-margin-top: 100px;
+  min-width: 0;
+  padding: clamp(24px, 4vw, 42px);
+  border: 1px solid rgb(147 197 253 / 0.16);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgb(17 31 66 / 0.94), rgb(8 16 38 / 0.95));
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.04), 0 24px 70px rgb(0 0 0 / 0.18);
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  place-items: center;
+  border: 1px solid rgb(96 165 250 / 0.28);
+  border-radius: 12px;
+  color: #93c5fd;
+  background: rgb(37 99 235 / 0.14);
+}
+
+.kicker,
+.methodLabel {
+  color: #93c5fd;
+  font: 700 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sectionHeading h2,
+.promptSection h2 {
+  margin: 5px 0 0;
+  color: #f8fafc;
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  letter-spacing: -0.04em;
+  line-height: 1.2;
+}
+
+.version {
+  margin-left: auto;
+  padding: 7px 10px;
+  border: 1px solid rgb(147 197 253 / 0.19);
+  border-radius: 99px;
+  color: #a9bfda;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.description,
+.promptSection > p {
+  max-width: 860px;
+  margin: 20px 0 0;
+  color: #b8c6da;
+  font-size: 15px;
+  line-height: 1.85;
+}
+
+.description code,
+.finePrint code {
+  color: #bfdbfe;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.codeBlock {
+  min-width: 0;
+  margin-top: 22px;
+  overflow: hidden;
+  border: 1px solid rgb(147 197 253 / 0.16);
+  border-radius: 10px;
+  background: rgb(3 10 25 / 0.7);
+}
+
+.codeHead {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 14px;
+  border-bottom: 1px solid rgb(147 197 253 / 0.12);
+  color: #91a6c3;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.codeBlock pre {
+  margin: 0;
+  padding: 18px;
+  overflow-x: auto;
+  color: #e1ecfa;
+  font: 12px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre;
+}
+
+.copyControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copyButton {
+  padding: 6px 10px;
+  border: 1px solid rgb(147 197 253 / 0.3);
+  border-radius: 6px;
+  color: #dbeafe;
+  background: rgb(37 99 235 / 0.16);
+  cursor: pointer;
+  font: inherit;
+}
+
+.copyButton:hover,
+.copyButton:focus-visible {
+  border-color: #93c5fd;
+  background: rgb(37 99 235 / 0.32);
+}
+
+.copyStatus {
+  color: #a7f3d0;
+  font-size: 11px;
+}
+
+.linkRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.linkRow a {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid rgb(147 197 253 / 0.23);
+  border-radius: 7px;
+  color: #bfdbfe;
+  background: rgb(15 38 80 / 0.56);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.linkRow a:hover,
+.linkRow a:focus-visible {
+  border-color: #60a5fa;
+  background: rgb(25 58 119 / 0.78);
+}
+
+.linkRow .primaryLink {
+  border-color: #3b82f6;
+  color: #fff;
+  background: #2563eb;
+}
+
+.methodGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 26px;
+}
+
+.method {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid rgb(147 197 253 / 0.14);
+  border-radius: 12px;
+  background: rgb(4 12 28 / 0.46);
+}
+
+.method h3 {
+  margin: 10px 0 8px;
+  color: #f8fafc;
+  font-size: 21px;
+}
+
+.method p,
+.promptSection > p {
+  color: #aebed3;
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.method p {
+  margin: 0;
+}
+
+.method .finePrint {
+  margin-top: 12px;
+  color: #8fa4bf;
+  font-size: 11px;
+}
+
+.promptSection {
+  background: linear-gradient(130deg, rgb(24 53 107 / 0.9), rgb(8 16 38 / 0.96));
+}
+
+.promptSection .codeBlock pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .sectionHeading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .version {
+    margin: 0 0 0 68px;
+  }
+
+  .methodGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .method {
+    padding: 18px;
+  }
+}
+
+@media (max-width: 450px) {
+  .version {
+    margin: 0;
+  }
+
+  .copyStatus {
+    max-width: 76px;
+    line-height: 1.2;
+  }
+}
