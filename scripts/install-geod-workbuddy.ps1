@@ -13,5 +13,5 @@ New-Item -ItemType Directory -Path $installPath -Force | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'GeoD MCP installation failed.' }
 $installer = Join-Path $installPath 'node_modules\geod-mcp\scripts\install-workbuddy.ps1'
 if (-not (Test-Path -LiteralPath $installer)) { throw 'Installed WorkBuddy integration script is missing.' }
-& powershell.exe -NoProfile -File $installer -Workspace $workspacePath
+& $installer -Workspace $workspacePath
 if ($LASTEXITCODE -ne 0) { throw 'WorkBuddy MCP registration failed.' }

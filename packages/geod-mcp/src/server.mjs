@@ -74,7 +74,7 @@ export function createServer(service) {
     try { return publicError(typeof service.error === 'function' ? service.error(error) : error); }
     catch { return { code: 'GEOD_ERROR', message: 'GeoD could not complete this operation.' }; }
   };
-  const server = new McpServer({ name: 'geod-mcp', version: '0.1.1' }, {
+  const server = new McpServer({ name: 'geod-mcp', version: '0.1.3' }, {
     instructions: 'GeoD downloads real geographic imagery through the GeoD CLI. Start with geod_capabilities and geod_plan. geod_fetch returns a background job ID; poll geod_job_status, then read the verified imagery preview or other artifact with geod_get_artifact. Always inspect source, coverage, quality and warnings. Province overviews should use a permitted imagery source and bounded requests.',
   });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

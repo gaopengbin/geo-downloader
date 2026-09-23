@@ -1,6 +1,7 @@
 param(
     [string]$Workspace = (Join-Path $env:LOCALAPPDATA 'GeoD\Workspace'),
-    [string]$ConfigPath = (Join-Path $env:USERPROFILE '.workbuddy\mcp.json')
+    [string]$ConfigPath = (Join-Path $env:USERPROFILE '.workbuddy\mcp.json'),
+    [string]$SkillDestination = (Join-Path $env:USERPROFILE '.agents\skills\geod-agent')
 )
 $ErrorActionPreference = 'Stop'
 $packageRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -39,4 +40,6 @@ if (-not $existing -or $existing.env.GEOD_WORKSPACE -ne $workspacePath) {
 }
 $readback = Get-Content -LiteralPath $target -Raw | ConvertFrom-Json
 if ($readback.mcpServers.geod.command -ne $node -or $readback.mcpServers.geod.args[0] -ne $entrypoint) { throw 'WorkBuddy MCP configuration readback failed.' }
-@{ ok = $true; config = $target; server = 'geod'; workspace = $workspacePath; clientToolCallVerified = $false } | ConvertTo-Json -Compress
+& (Join-Path $PSScriptRoot 'install-skill.ps1') -PackageRoot $packageRoot -Destination $skillDestination
+if ($LASTEXITCODE -ne 0) { throw 'WorkBuddy GeoD Agent Skill installation failed.' }
+@{ ok = $true; config = $target; server = 'geod'; workspace = $workspacePath; skill = $skillDestination; clientToolCallVerified = $false } | ConvertTo-Json -Compress

@@ -16,6 +16,8 @@ Copy-Item -LiteralPath (Join-Path $source 'skill') -Destination $stage -Recurse
 New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') | Out-Null
 Copy-Item -LiteralPath (Join-Path $source 'scripts\self-check.mjs') -Destination (Join-Path $stage 'scripts\self-check.mjs')
 Copy-Item -LiteralPath (Join-Path $source 'scripts\geod-agent-0.1.0.md') -Destination (Join-Path $stage 'scripts\geod-agent-0.1.0.md')
+Copy-Item -LiteralPath (Join-Path $source 'scripts\geod-agent-0.1.2.md') -Destination (Join-Path $stage 'scripts\geod-agent-0.1.2.md')
+Copy-Item -LiteralPath (Join-Path $source 'scripts\install-skill.ps1') -Destination (Join-Path $stage 'scripts\install-skill.ps1')
 Copy-Item -LiteralPath (Join-Path $source 'scripts\install-workbuddy.ps1') -Destination (Join-Path $stage 'scripts\install-workbuddy.ps1')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\install-geod-codex.ps1') -Destination (Join-Path $stage 'scripts\install-geod-codex.ps1')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\install-geod-workbuddy.ps1') -Destination (Join-Path $stage 'scripts\install-geod-workbuddy.ps1')

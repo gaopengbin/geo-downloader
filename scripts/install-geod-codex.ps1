@@ -53,23 +53,8 @@ if ($existing -and $existing.transport.env.GEOD_WORKSPACE -ne $workspacePath) {
     & $codex mcp add geod --env "GEOD_WORKSPACE=$workspacePath" -- $node $entrypoint
     if ($LASTEXITCODE -ne 0) { throw 'Codex MCP registration failed.' }
 }
-$skillSource = Join-Path $packageRoot 'skill\geod-agent'
-function Normalize-GeoDSkill([string]$Content) { return ($Content -replace "`r`n", "`n").TrimEnd() }
-if (Test-Path -LiteralPath $skillDestination) {
-    $current = Get-Content -LiteralPath (Join-Path $skillDestination 'SKILL.md') -Raw
-    $incoming = Get-Content -LiteralPath (Join-Path $skillSource 'SKILL.md') -Raw
-    if ((Normalize-GeoDSkill $current) -ne (Normalize-GeoDSkill $incoming)) {
-        $previous = Get-Content -LiteralPath (Join-Path $packageRoot 'scripts\geod-agent-0.1.0.md') -Raw
-        if ((Normalize-GeoDSkill $current) -ne (Normalize-GeoDSkill $previous)) { throw 'A modified geod-agent skill already exists. Inspect it before replacing it.' }
-        $skillFile = Join-Path $skillDestination 'SKILL.md'
-        $backup = $skillFile + '.backup-0.1.0-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
-        Copy-Item -LiteralPath $skillFile -Destination $backup
-        $utf8 = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($skillFile, $incoming, $utf8)
-    }
-} else {
-    Copy-Item -LiteralPath $skillSource -Destination $skillDestination -Recurse
-}
+& (Join-Path $packageRoot 'scripts\install-skill.ps1') -PackageRoot $packageRoot -Destination $skillDestination
+if ($LASTEXITCODE -ne 0) { throw 'GeoD Agent Skill installation failed.' }
 $registered = & $codex mcp get geod --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $registered.transport.command -ne $node) { throw 'Codex MCP readback failed.' }
 @{ ok = $true; package = $packageRoot; workspace = $workspacePath; codexServer = 'geod'; skill = $skillDestination; entrypoint = $entrypoint } | ConvertTo-Json -Compress

@@ -21,7 +21,7 @@ if (!args.length || (args.length === 1 && args[0] === 'serve')) {
   }
   const userData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   const workspace = path.resolve(optionIndex >= 0 ? args[optionIndex + 1] : path.join(userData, 'GeoD', 'Workspace'));
-  const packageSpec = packageIndex >= 0 ? args[packageIndex + 1] : 'geod-mcp@0.1.2';
+  const packageSpec = packageIndex >= 0 ? args[packageIndex + 1] : 'geod-mcp@0.1.3';
   const script = args[1] === 'codex' ? 'install-geod-codex.ps1' : 'install-geod-workbuddy.ps1';
   const result = spawnSync('powershell.exe', ['-NoProfile', '-File', path.join(root, 'scripts', script), '-PackageSpec', packageSpec, '-Workspace', workspace], { stdio: 'inherit', windowsHide: true, shell: false });
   if (result.error) throw result.error;
