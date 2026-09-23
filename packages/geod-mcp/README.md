@@ -4,7 +4,14 @@ Local stdio MCP for acquiring real geographic data with GeoD CLI 0.1.1 and rende
 
 ## Install in one command
 
-On Windows x64 with Node.js 22+, run one of these commands in the workspace GeoD may access. Version 0.1.0 is publicly available as a GitHub Release tarball; npm registry publication is pending account authorization.
+On Windows x64 with Node.js 22+, run one of these commands in the workspace GeoD may access:
+
+```powershell
+npx --yes geod-mcp@0.1.0 install codex
+npx --yes geod-mcp@0.1.0 install workbuddy
+```
+
+The same package is also available from the GitHub Release tarball:
 
 ```powershell
 $pkg = 'https://github.com/gaopengbin/geo-downloader/releases/download/geod-mcp-v0.1.0/geod-mcp-0.1.0.tgz'
