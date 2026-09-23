@@ -10,9 +10,14 @@ const json = (res, status, value) => { res.writeHead(status, { 'content-type': '
 const error = (res, status, code, description) => json(res, status, { error: code, error_description: description });
 const validRedirect = raw => {
   try {
+    if (typeof raw !== 'string' || raw.length > 2048) return false;
     const uri = new URL(raw);
-    return !uri.username && !uri.password && !uri.hash && (uri.protocol === 'https:' ||
-      (uri.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(uri.hostname)));
+    if (uri.username || uri.password || uri.hash) return false;
+    if (uri.protocol === 'https:') return true;
+    if (uri.protocol === 'http:') return ['127.0.0.1', '[::1]', 'localhost'].includes(uri.hostname);
+    // RFC 7591 also permits application-specific redirects for native clients.
+    return /^[a-z][a-z0-9+.-]*:$/.test(uri.protocol) &&
+      !['about:', 'blob:', 'chrome:', 'data:', 'edge:', 'file:', 'ftp:', 'javascript:', 'ws:', 'wss:'].includes(uri.protocol);
   } catch { return false; }
 };
 const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
@@ -125,12 +130,22 @@ $('createBtn').onclick=()=>run(async()=>{const address=email();if(!challengeId)t
     if (pathname === '/oauth/register' && req.method === 'POST') {
       try {
         const input = await body(req);
-        if (Object.keys(state.clients).length >= 1000 || !Array.isArray(input.redirect_uris) || input.redirect_uris.length < 1 || input.redirect_uris.length > 5 || !input.redirect_uris.every(validRedirect) || input.token_endpoint_auth_method && input.token_endpoint_auth_method !== 'none') return error(res, 400, 'invalid_client_metadata', 'Invalid public client redirect URIs');
+        const reject = (code, reason) => {
+          console.warn(`[geod-mcp] OAuth client registration rejected: ${reason}`);
+          return error(res, 400, code, reason);
+        };
+        if (Object.keys(state.clients).length >= 1000) return reject('invalid_client_metadata', 'Client registration limit reached');
+        if (!Array.isArray(input.redirect_uris) || input.redirect_uris.length < 1 || input.redirect_uris.length > 5) return reject('invalid_client_metadata', 'Expected 1 to 5 redirect URIs');
+        if (!input.redirect_uris.every(validRedirect)) return reject('invalid_redirect_uri', 'Redirect URI must use HTTPS, a local HTTP loopback, or an application-specific scheme');
+        if (input.token_endpoint_auth_method && input.token_endpoint_auth_method !== 'none') return reject('invalid_client_metadata', 'Only public clients with token_endpoint_auth_method none are supported');
         const clientId = secret();
         state.clients[clientId] = { name: String(input.client_name || 'Agent client').slice(0, 100), redirectUris: input.redirect_uris, created: now() };
         await save();
         json(res, 201, { client_id: clientId, client_name: state.clients[clientId].name, redirect_uris: input.redirect_uris, token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] });
-      } catch { error(res, 400, 'invalid_client_metadata', 'Invalid client registration'); }
+      } catch {
+        console.warn('[geod-mcp] OAuth client registration rejected: malformed request');
+        error(res, 400, 'invalid_client_metadata', 'Invalid client registration request');
+      }
       return true;
     }
     if (pathname === '/oauth/authorize' && req.method === 'GET') {

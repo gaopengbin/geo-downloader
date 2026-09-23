@@ -55,6 +55,12 @@ test('separate account OAuth uses PKCE, resource binding and isolated MCP worksp
     assert.equal(resourceDoc.resource, 'https://laogao.xyz/geod-mcp/mcp');
     const issuerDoc = await fetch(`${base}/.well-known/oauth-authorization-server/geod-mcp`).then(r => r.json());
     assert.equal(issuerDoc.issuer, 'https://laogao.xyz/geod-mcp');
+    const nativeRegistration = await post(`${base}/oauth/register`, { client_name: 'Native Agent', redirect_uris: ['marvis://oauth/callback'], application_type: 'native', token_endpoint_auth_method: 'none' });
+    assert.equal(nativeRegistration.status, 201);
+    assert.deepEqual((await nativeRegistration.json()).redirect_uris, ['marvis://oauth/callback']);
+    const unsafeRegistration = await post(`${base}/oauth/register`, { redirect_uris: ['javascript:alert(1)'] });
+    assert.equal(unsafeRegistration.status, 400);
+    assert.equal((await unsafeRegistration.json()).error, 'invalid_redirect_uri');
     const registration = await post(`${base}/oauth/register`, { client_name: 'OAuth test', redirect_uris: ['http://127.0.0.1:49152/callback'] });
     assert.equal(registration.status, 201);
     const { client_id: clientId } = await registration.json();
