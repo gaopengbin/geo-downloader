@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/cli" },
 };
 
-const cliInstall = "npm install -g https://github.com/gaopengbin/geo-downloader/releases/download/geod-cli-v0.2.0/geod-cli-0.2.0.tgz\ngeod --version";
+const cliInstall = "npm install -g geod-cli@0.2.0\ngeod --version";
 const cliRequest = `{
   "schemaVersion": "1.0",
   "name": "Blue Marble 多级影像示例",
@@ -66,11 +66,12 @@ export default function CliPage() {
                 本机下载多级影像，输出 GeoTIFF、PNG/JPEG、原始瓦片、MBTiles 或 GeoPackage；支持叠加、裁剪、金字塔、辅助文件和断点续传。
                 安装程序或便携包无需 Node.js；通过 npm 安装发布包需要 Node.js 18+。
               </p>
-              <CodeBlock text={cliInstall} label="PowerShell · 安装 GitHub 发布包" />
+                <CodeBlock text={cliInstall} label="PowerShell · npm 安装" />
               <div className={styles.linkRow}>
                 <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.2.0" target="_blank" rel="noopener noreferrer">
                   <Download size={17} aria-hidden="true" /> 下载 Windows 安装包与便携版
                 </a>
+                <a href="https://www.npmjs.com/package/geod-cli/v/0.2.0" target="_blank" rel="noopener noreferrer">npm 包 <ArrowUpRight size={15} aria-hidden="true" /></a>
                 <a href="https://github.com/gaopengbin/geo-downloader/releases/download/geod-cli-v0.2.0/SHA256SUMS.txt" target="_blank" rel="noopener noreferrer">校验文件 <ArrowUpRight size={15} aria-hidden="true" /></a>
                 <a href="#example">命令与示例 <ArrowRight size={15} aria-hidden="true" /></a>
               </div>
