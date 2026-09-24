@@ -118,7 +118,7 @@ impl XyzFixture {
             "bounds": [-1.0, 1.0, 1.0, 2.0],
             "imagery": {
                 "url": format!("http://{}/{{z}}/{{x}}/{{y}}.png", self.address),
-                "source": "deterministic-local-test-fixture",
+                "source": format!("deterministic-local-test-fixture-{}", self.address.port()),
                 "attribution": "Synthetic pixels generated only for automated tests",
                 "zoom": 1,
                 "format": "geotiff",
@@ -181,7 +181,7 @@ async fn publishes_hashes_pixels_and_geotiff_mercator_tags() {
     assert_eq!(manifest.bounds, [-1.0, 1.0, 1.0, 2.0]);
     assert_eq!(
         manifest.provenance[0].source,
-        "deterministic-local-test-fixture"
+        format!("deterministic-local-test-fixture-{}", service.address.port())
     );
     for asset in &manifest.assets {
         let bytes = fs::read(output.join(&asset.path)).unwrap();

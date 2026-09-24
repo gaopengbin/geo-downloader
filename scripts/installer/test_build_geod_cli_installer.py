@@ -13,8 +13,8 @@ from build_geod_cli_installer import package_files, validate_build_info
 def fixture():
     binary = b'frozen-test-binary'
     return {'geod.exe': binary, 'LICENSE': b'license', 'README.txt': b'readme',
-            'docs/geod-cli-0.2.md': b'docs', 'scripts/geod-render.mjs': b'script',
-            'build-info.json': json.dumps({'name': 'geod-cli', 'version': '0.2.0',
+            'docs/geod-cli-0.3.md': b'docs', 'scripts/geod-render.mjs': b'script',
+            'build-info.json': json.dumps({'name': 'geod-cli', 'version': '0.3.0',
                 'platform': 'windows-x64', 'sourceRevision': 'a' * 40,
                 'binarySha256': hashlib.sha256(binary).hexdigest()}).encode()}
 

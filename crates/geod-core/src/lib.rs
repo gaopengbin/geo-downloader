@@ -24,6 +24,8 @@ pub mod downloader;
 pub mod tile_policy;
 #[path = "../../../src-tauri/src/tile_payload.rs"]
 pub mod tile_payload;
+#[path = "../../../src-tauri/src/source_analyzer.rs"]
+pub mod source_analyzer;
 #[path = "../../../src-tauri/src/tile_cache/mod.rs"]
 pub mod tile_cache;
 #[path = "../../../src-tauri/src/cache_access.rs"]

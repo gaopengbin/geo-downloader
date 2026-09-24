@@ -217,7 +217,7 @@ pub(crate) fn selected_zooms(i: &ImageryRequest) -> Result<Vec<u8>, String> {
     Ok((i.zoom..=i.zoom_max.unwrap_or(i.zoom)).collect())
 }
 
-fn validate_tile_source(
+pub fn validate_tile_source(
     url: &str,
     source: &str,
     attribution: &str,
@@ -226,11 +226,12 @@ fn validate_tile_source(
     if source.trim().is_empty() || attribution.trim().is_empty() {
         return Err("Each imagery source and attribution are required".into());
     }
-    if !url.contains("{z}")
-        || !url.contains("{x}")
-        || !(url.contains("{y}") || url.contains("{-y}"))
+    if !(url.contains("{q}")
+        || (url.contains("{z}")
+            && url.contains("{x}")
+            && (url.contains("{y}") || url.contains("{-y}"))))
     {
-        return Err("Tile URL must contain {z}, {x}, and {y} or {-y}".into());
+        return Err("Tile URL must contain {z}, {x}, and {y}/{-y}, or {q} QuadKey".into());
     }
     if subdomains.len() > 8
         || subdomains.iter().any(|s| {
@@ -247,7 +248,8 @@ fn validate_tile_source(
         .replace("{z}", "0")
         .replace("{x}", "0")
         .replace("{y}", "0")
-        .replace("{-y}", "0");
+        .replace("{-y}", "0")
+        .replace("{q}", "0");
     let parsed = reqwest::Url::parse(&sample).map_err(|_| "Invalid tile URL")?;
     if !["http", "https"].contains(&parsed.scheme())
         || parsed.host_str().is_none()

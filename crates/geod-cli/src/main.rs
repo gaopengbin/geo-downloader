@@ -1,4 +1,5 @@
 use geod_core::pipeline;
+mod sources;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -10,11 +11,18 @@ const HELP: &str = r#"Download and inspect imagery and boundary data
   geod plan --request job.json
   geod fetch --request job.json --out ./outputs/map [--work-dir ./work/map]
   geod inspect --bundle ./outputs/map
+  geod sources list
+  geod sources register --id my_source --name "My imagery" --url "https://example.com/{z}/{x}/{y}.png" --attribution "Provider"
+  geod sources default --id my_source
+  geod sources probe --id my_source [--zoom 0 --x 0 --y 0]
+Use --source ID with plan/fetch, or imagery.sourceId in job.json. A default
+source is used when imagery has no url/sourceId. Registered sources are local
+to this user's GeoD CLI configuration; they are not uploaded to GeoD.
 Results are JSON on stdout; progress is JSON lines on stderr. --json is accepted.
 fetch is synchronous and never overwrites an existing output directory.
 --work-dir retains validated tiles so the same request can resume after interruption.
 Bounds are WGS84 [west,south,east,north]. Raster grids are EPSG:3857.
-See docs/geod-cli.md and examples/geod-cli for the versioned request contract.
+See docs/geod-cli-0.3.md and examples/geod-cli for the versioned request contract.
 "#;
 
 fn options(args: &[String], allowed: &[&str]) -> Result<BTreeMap<String, String>, String> {
@@ -57,14 +65,18 @@ fn absolute(path: &str) -> Result<PathBuf, String> {
 async fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "plan" => {
-            let options = options(args, &["--request"])?;
-            let request = pipeline::read_request(Path::new(required(&options, "--request")?))?;
+            let options = options(args, &["--request", "--source"])?;
+            let request = sources::read_request(
+                Path::new(required(&options, "--request")?),
+                options.get("--source").map(String::as_str),
+            )?;
             pipeline::plan_local(&request)
         }
         "fetch" => {
-            let options = options(args, &["--request", "--out", "--work-dir"])?;
+            let options = options(args, &["--request", "--out", "--work-dir", "--source"])?;
             let path = absolute(required(&options, "--request")?)?;
-            let request = pipeline::read_request(&path)?;
+            let request =
+                sources::read_request(&path, options.get("--source").map(String::as_str))?;
             let out = absolute(required(&options, "--out")?)?;
             let work_dir = options
                 .get("--work-dir")
@@ -87,6 +99,7 @@ async fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 json!({"ok":true,"manifest":pipeline::inspect(Path::new(required(&options,"--bundle")?))?}),
             )
         }
+        "sources" => sources::run(args).await,
         "geostyle-import" => {
             let options = options(args, &["--bundle", "--url", "--token-env", "--style"])?;
             let token = options

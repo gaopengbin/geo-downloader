@@ -1,10 +1,10 @@
 # GeoD CLI：包管理器安装
 
-当前二进制版本为 **0.2.0，Windows x64**。npm 包内置同一份经过校验的原生程序；安装不需要 Rust、GeoD 桌面端或 GDAL，也不会运行安装脚本来额外下载 GitHub 文件。
+当前二进制版本为 **0.3.0，Windows x64**。npm 包内置同一份经过校验的原生程序；安装不需要 Rust、GeoD 桌面端或 GDAL，也不会运行安装脚本来额外下载 GitHub 文件。
 
 ## npm 安装
 
-需要 Windows x64 和 Node.js 18+（包含 npm）。`geod-cli@0.2.0` 可从 [npm 注册表](https://www.npmjs.com/package/geod-cli)安装：
+需要 Windows x64 和 Node.js 18+（包含 npm）。`geod-cli@0.3.0` 可从 [npm 注册表](https://www.npmjs.com/package/geod-cli)安装：
 
 ```powershell
 npm install -g geod-cli
@@ -16,7 +16,7 @@ geod --help
 如果使用的 npm 镜像尚未同步，可以给安装命令添加 `--registry=https://registry.npmjs.org`。也可以直接安装 GitHub Release 中的同一份 npm 包：
 
 ```powershell
-npm install -g "https://github.com/gaopengbin/geo-downloader/releases/download/geod-cli-v0.2.0/geod-cli-0.2.0.tgz"
+npm install -g "https://github.com/gaopengbin/geo-downloader/releases/download/geod-cli-v0.3.0/geod-cli-0.3.0.tgz"
 if ($LASTEXITCODE -ne 0) { throw 'GeoD CLI 安装失败' }
 geod --version
 geod --help
@@ -24,7 +24,7 @@ geod --help
 
 npm 会在自己的全局命令目录创建 `geod`。如果当前终端找不到命令，请重新打开终端，并检查 `npm prefix -g` 对应的目录是否在用户 PATH 中。此方式不创建独立安装器的 Windows 卸载记录。
 
-以上两种安装方式均不要求登录 npm 账户。需要固定版本时使用 `npm install -g geod-cli@0.2.0`。
+以上两种安装方式均不要求登录 npm 账户。需要固定版本时使用 `npm install -g geod-cli@0.3.0`。
 
 卸载：
 
@@ -49,7 +49,7 @@ geod inspect --bundle $out
 if ($LASTEXITCODE -ne 0) { throw '成果校验失败' }
 ```
 
-示例访问 DataV 公开边界源，返回 GeoJSON 和 `manifest.json`，不调用付费 AI。`plan` 成功仅表示请求通过校验；`fetch` 仍需上游服务可用。影像下载、格式与限制见 [CLI 0.2 使用文档](geod-cli-0.2.md)。
+示例访问 DataV 公开边界源，返回 GeoJSON 和 `manifest.json`，不调用付费 AI。`plan` 成功仅表示请求通过校验；`fetch` 仍需上游服务可用。影像下载、格式与限制见 [CLI 0.3 使用文档](geod-cli-0.3.md)。
 
 ## WinGet
 
@@ -59,4 +59,4 @@ if ($LASTEXITCODE -ne 0) { throw '成果校验失败' }
 
 npm 包包含原生 `geod.exe`、命令启动器、使用说明、示例、许可证及构建来源信息。没有地图数据、模型、后台服务、安装期脚本或运行依赖包。
 
-原生二进制与发布包的 SHA-256 见 [GeoD CLI 0.2.0 Release](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.2.0) 附带的 `SHA256SUMS.txt`。
+原生二进制与发布包的 SHA-256 见 [GeoD CLI 0.3.0 Release](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.0) 附带的 `SHA256SUMS.txt`。
