@@ -12,6 +12,12 @@ const require = createRequire(import.meta.url);
 let installedCliRoot;
 try { installedCliRoot = path.dirname(require.resolve('geod-cli/package.json')); } catch { /* Source checkout may use its own release binary. */ }
 const MAX_INLINE = 8 * 1024 * 1024;
+const MCP_VERSION = '0.1.4';
+const PUBLIC_SOURCE = {
+  id: 'nasa_gibs_blue_marble', name: 'NASA GIBS Blue Marble', kind: 'builtIn',
+  attribution: 'NASA GIBS', maxZoom: 8, available: true, default: false, reason: null,
+};
+const PUBLIC_SOURCE_URL = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg';
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/;
 const terminal = status => ['completed', 'failed', 'cancelled'].includes(status);
 const fail = (code, message) => Object.assign(new Error(message), { code });
@@ -49,10 +55,11 @@ export class GeoDService {
 
   async capabilities() {
     await this.ready;
-    return { ok: true, name: 'GeoD MCP', version: '0.1.1', transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
+    return { ok: true, name: 'GeoD MCP', version: MCP_VERSION, transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
       cli: { path: this.bin, available: existsSync(this.bin) },
       limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: this.env.GEOD_PUBLIC_MCP === '1' ? 64 : 4096, maxPixels: this.env.GEOD_PUBLIC_MCP === '1' ? 4194304 : 67108864 },
-      workflow: ['geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', ...(typeof this.artifactLink === 'function' ? ['geod_artifact_link for large downloads'] : [])],
+      workflow: ['geod_sources list before choosing imagery', 'geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', ...(typeof this.artifactLink === 'function' ? ['geod_artifact_link for large downloads'] : [])],
+      sources: { customRegistration: this.env.GEOD_PUBLIC_MCP !== '1', registry: this.env.GEOD_PUBLIC_MCP === '1' ? 'hosted allowlist' : 'current user GeoD CLI configuration' },
       behavior: { localPaths: 'workspace or configured output directory only', jobsSurviveClientTimeout: true, downloadsResumeAfterRestart: false, clipping: 'imagery.clipToLayer selects a polygon layer; PNG/GeoTIFF outside pixels become transparent; vectors unchanged' },
       examples: this.examples };
   }
@@ -68,6 +75,13 @@ export class GeoDService {
     if (Buffer.byteLength(JSON.stringify(request)) > 2 * 1024 * 1024) throw fail('REQUEST_TOO_LARGE', 'Request exceeds 2 MiB');
     const value = structuredClone(request);
     if (this.env.GEOD_PUBLIC_MCP === '1') {
+      if (value.imagery?.sourceId) {
+        if (value.imagery.sourceId !== PUBLIC_SOURCE.id) throw fail('SOURCE_NOT_ALLOWED', 'Hosted accounts support NASA GIBS only; use local MCP or WebMCP for other sources');
+        if (value.imagery.url || value.imagery.source || value.imagery.attribution) throw fail('INVALID_SOURCE', 'Use sourceId or url/source/attribution, not both');
+        Object.assign(value.imagery, { url: PUBLIC_SOURCE_URL, source: PUBLIC_SOURCE.id, attribution: PUBLIC_SOURCE.attribution });
+        delete value.imagery.sourceId;
+      }
+      if (value.imagery?.overlays?.length || value.imagery?.buildPyramid) throw fail('SOURCE_NOT_ALLOWED', 'Hosted accounts do not run overlay or pyramid jobs; use local MCP or WebMCP');
       value.limits = { maxTiles: 64, maxPixels: 4194304, timeoutSeconds: 180, ...value.limits };
       if (value.imagery) value.imagery.concurrency ??= 4;
       if (value.vector?.input || value.vector?.endpoint || (value.vector && !value.vector.url)) throw fail('SOURCE_NOT_ALLOWED', 'Hosted accounts use prepared GeoJSON URLs only');
@@ -81,6 +95,20 @@ export class GeoDService {
     }
     if (value.vector?.input) value.vector.input = await this.scopedPath(value.vector.input);
     return value;
+  }
+
+  async sources(input) {
+    await this.ready;
+    if (this.env.GEOD_PUBLIC_MCP === '1') {
+      if (input.action !== 'list') throw fail('LOCAL_ONLY', 'Hosted MCP cannot register or probe arbitrary tile sources; use local MCP for custom sources');
+      return { ok: true, defaultSourceId: null, sources: [PUBLIC_SOURCE] };
+    }
+    const args = [input.action];
+    for (const [key, flag] of Object.entries({ id: '--id', name: '--name', url: '--url', attribution: '--attribution', maxZoom: '--max-zoom', scheme: '--scheme', zoom: '--zoom', x: '--x', y: '--y' })) {
+      if (input[key] !== undefined) args.push(flag, String(input[key]));
+    }
+    if (input.subdomains?.length) args.push('--subdomains', input.subdomains.join(','));
+    return this.run(this.bin, ['sources', ...args], { timeout: input.action === 'probe' ? 30_000 : 10_000 });
   }
 
   error(error) {

@@ -40,7 +40,7 @@ jobs:
           cp examples/geod-cli/*.json dist/geod-mcp-linux/examples/
           cp packages/geod-mcp/deploy-linux/package.json dist/geod-mcp-linux/package.json
           cp -a packages/geod-mcp/deploy-linux/node_modules dist/geod-mcp-linux/node_modules
-          ./dist/geod-mcp-linux/bin/geod --help | grep 'GeoD CLI 0.1.1'
+          ./dist/geod-mcp-linux/bin/geod --help | grep 'GeoD CLI 0.3.0'
           tar -C dist -czf geod-mcp-linux-${GITHUB_SHA}.tar.gz geod-mcp-linux
           sha256sum geod-mcp-linux-${GITHUB_SHA}.tar.gz > geod-mcp-linux-${GITHUB_SHA}.tar.gz.sha256
       - uses: actions/upload-artifact@v4

@@ -12,9 +12,9 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function fixture(t) {
+async function fixture(t, extraEnv = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'geod-service-test-'));
-  const service = new GeoDService({ GEOD_WORKSPACE: directory, GEOD_OUTPUT_DIR: path.join(directory, 'output'), GEOD_MAX_CONCURRENT_JOBS: '1' });
+  const service = new GeoDService({ GEOD_WORKSPACE: directory, GEOD_OUTPUT_DIR: path.join(directory, 'output'), GEOD_MAX_CONCURRENT_JOBS: '1', ...extraEnv });
   await service.ready;
   t.after(async () => {
     await service.close();
@@ -24,6 +24,17 @@ async function fixture(t) {
   });
   return service;
 }
+
+test('hosted source catalog stays limited to NASA and refuses registration', async t => {
+  const service = await fixture(t, { GEOD_PUBLIC_MCP: '1' });
+  const catalog = await service.sources({ action: 'list' });
+  assert.deepEqual(catalog.sources.map(source => source.id), ['nasa_gibs_blue_marble']);
+  await assert.rejects(service.sources({ action: 'register', id: 'custom' }), { code: 'LOCAL_ONLY' });
+  const request = await service.requestValue({ schemaVersion: '1.0', name: 'source test', bounds: [0, 0, 1, 1], imagery: { sourceId: 'nasa_gibs_blue_marble', zoom: 0 } });
+  assert.equal(request.imagery.source, 'nasa_gibs_blue_marble');
+  assert.match(request.imagery.url, /^https:\/\/gibs\.earthdata\.nasa\.gov\//);
+  await assert.rejects(service.requestValue({ imagery: { sourceId: 'other', zoom: 0 } }), { code: 'SOURCE_NOT_ALLOWED' });
+});
 
 test('close waits for a reserved job and never starts its worker after shutdown', { timeout: 5000 }, async t => {
   const service = await fixture(t);

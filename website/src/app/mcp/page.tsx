@@ -26,7 +26,7 @@ const remoteConfig = `{
 }`;
 const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
-const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.3.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
+const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.4.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
 const agentPrompt = `请优先让 GeoD 影像下载和拼接使用我的设备：如果你支持网页 WebMCP，打开 https://geod.laogao.xyz/browser 并使用 geod_browser_capabilities、geod_browser_plan；我确认下载后才调用 geod_browser_fetch，并让我在页面保存文件。如果你是本机 Windows x64 的 Codex 或 WorkBuddy，按 https://geod.laogao.xyz/mcp 的“本机 MCP”说明安装 geod-mcp 和 Skill，使用本机工具。只有上述方式不适用且任务很小时，才把 ${remoteUrl} 添加为 Streamable HTTP MCP；这个远端方式会使用 GeoD 服务器资源。先规划，不要为了测试连接启动下载。`;
 
 export default function McpPage() {
@@ -66,7 +66,7 @@ export default function McpPage() {
                   <span className={styles.kicker}>CONNECT / AGENT TOOLS</span>
                   <h2 id="connect-title">选择 MCP 接入方式</h2>
                 </div>
-                <span className={styles.version}>MCP 0.1.3 · HTTPS 或本机</span>
+                <span className={styles.version}>MCP 0.1.4 · HTTPS 或本机</span>
               </div>
               <p className={styles.description}>按 Agent 的运行环境选择接入方式；前两种由使用者的设备下载和拼接，远端 HTTPS MCP 仅适合受限的小任务。</p>
               <div className={styles.methodGrid}>
@@ -82,6 +82,7 @@ export default function McpPage() {
                   <h3>本机 MCP</h3>
                   <p>Windows x64、Node.js 22+。任务和成果保存在使用者自己的 %LOCALAPPDATA%\\GeoD\\Workspace；安装命令同时配置 MCP 与 GeoD Skill。</p>
                   <CodeBlock text={localInstall} label="PowerShell · Codex 示例" />
+                  <p className={styles.finePrint}>本机 MCP 可用 <code>geod_sources</code> 列出图源、注册自己的授权图源，再在规划和下载任务中填写 <code>imagery.sourceId</code>。图源配置留在当前用户电脑上。</p>
                   <p className={styles.finePrint}>只有想更换工作空间时才加 <code>--workspace</code> 并填写自己电脑上的绝对路径；WorkBuddy 把命令中的 <code>codex</code> 换成 <code>workbuddy</code>。</p>
                 </article>
                 <article className={`${styles.method} ${styles.remoteMethod}`}>
@@ -91,14 +92,14 @@ export default function McpPage() {
                   <CodeBlock text={remoteUrl} label="MCP 服务地址" />
                   <a href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></a>
                   <CodeBlock text={remoteConfig} label="支持 mcpServers 的客户端示例" />
-                  <p className={styles.finePrint}>WorkBuddy 可在技能页面<a href={skillZipUrl}>导入 Skill ZIP</a>。远端服务按账号隔离任务，每个账号每天最多 3 次下载任务；豆包工作的实际客户端兼容性仍需测试。</p>
+                  <p className={styles.finePrint}>WorkBuddy 可在技能页面<a href={skillZipUrl}>导入 Skill ZIP</a>。远端 MCP 只开放 NASA GIBS 图源，不接受自定义图源注册；按账号隔离任务，每个账号每天最多 3 次下载任务。豆包工作的实际客户端兼容性仍需测试。</p>
                 </article>
               </div>
               <div className={styles.linkRow}>
                 <a href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
                   远端 MCP 安装器 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
-                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.3" target="_blank" rel="noopener noreferrer">
+                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.4" target="_blank" rel="noopener noreferrer">
                   查看 MCP 安装包与校验值 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
               </div>

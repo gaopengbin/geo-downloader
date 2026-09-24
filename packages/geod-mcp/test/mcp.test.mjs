@@ -226,6 +226,7 @@ test('official MCP v2 stdio client completes GeoD jobs and reads native artifact
       env: {
         ...Object.fromEntries(Object.entries(process.env).filter(([, value]) => typeof value === 'string')),
         GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'output'), GEOD_BIN: geodBin,
+        GEOD_CLI_HOME: path.join(workspace, 'source-config'),
       },
     });
     transport.stderr.on('data', (chunk) => serverLogs.push(chunk.toString()));
@@ -253,9 +254,26 @@ test('official MCP v2 stdio client completes GeoD jobs and reads native artifact
   await t.test('tools/list and capabilities expose the promised callable interface', async () => {
     const list = await client.listTools();
     const names = list.tools.map((tool) => tool.name);
-    for (const name of ['geod_capabilities', 'geod_plan', 'geod_fetch', 'geod_job_status', 'geod_cancel_job', 'geod_inspect', 'geod_get_artifact']) assert.ok(names.includes(name), `missing ${name}`);
+    for (const name of ['geod_capabilities', 'geod_sources', 'geod_plan', 'geod_fetch', 'geod_job_status', 'geod_cancel_job', 'geod_inspect', 'geod_get_artifact']) assert.ok(names.includes(name), `missing ${name}`);
     assert.ok(!names.includes('geod_render'));
     structured(await client.callTool({ name: 'geod_capabilities', arguments: {} }));
+  });
+
+  await t.test('source registration persists and sourceId plans without fetching', async () => {
+    const listed = structured(await client.callTool({ name: 'geod_sources', arguments: { action: 'list' } }));
+    assert.ok(listed.sources.some(source => source.id === 'nasa_gibs_blue_marble'));
+    const registered = structured(await client.callTool({ name: 'geod_sources', arguments: {
+      action: 'register', id: 'mcp_fixture', name: 'Synthetic MCP fixture',
+      url: `${fixture.url}/{z}/{x}/{y}.png`, attribution: 'Automated test', maxZoom: 3,
+    } }));
+    assert.equal(registered.id, 'mcp_fixture');
+    const chosen = structured(await client.callTool({ name: 'geod_sources', arguments: { action: 'default', id: 'mcp_fixture' } }));
+    assert.equal(chosen.defaultSourceId, 'mcp_fixture');
+    const request = requestFor(fixture.url);
+    request.imagery = { sourceId: 'mcp_fixture', zoom: 2, format: 'geotiff', concurrency: 1, clipToLayer: 'boundary' };
+    const plan = structured(await client.callTool({ name: 'geod_plan', arguments: { request } }));
+    assert.equal(plan.ok, true);
+    assert.equal(fixture.state.imageRequests, 0);
   });
 
   let completed;

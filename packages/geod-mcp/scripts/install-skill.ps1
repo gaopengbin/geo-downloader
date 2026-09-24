@@ -13,7 +13,7 @@ if (Test-Path -LiteralPath $target) {
     if (-not (Test-Path -LiteralPath $skillFile)) { throw "A different geod-agent directory already exists: $target" }
     $current = Get-Content -LiteralPath $skillFile -Raw
     if ((Normalize-GeoDSkill $current) -ne (Normalize-GeoDSkill $incoming)) {
-        $known = @('geod-agent-0.1.0.md', 'geod-agent-0.1.2.md')
+        $known = @('geod-agent-0.1.0.md', 'geod-agent-0.1.2.md', 'geod-agent-0.1.3.md')
         $isPrevious = $false
         foreach ($name in $known) {
             $previous = Get-Content -LiteralPath (Join-Path $PackageRoot "scripts\$name") -Raw

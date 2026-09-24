@@ -74,8 +74,8 @@ export function createServer(service) {
     try { return publicError(typeof service.error === 'function' ? service.error(error) : error); }
     catch { return { code: 'GEOD_ERROR', message: 'GeoD could not complete this operation.' }; }
   };
-  const server = new McpServer({ name: 'geod-mcp', version: '0.1.3' }, {
-    instructions: 'GeoD downloads real geographic imagery through the GeoD CLI. Start with geod_capabilities and geod_plan. geod_fetch returns a background job ID; poll geod_job_status, then read the verified imagery preview or other artifact with geod_get_artifact. Always inspect source, coverage, quality and warnings. Province overviews should use a permitted imagery source and bounded requests.',
+  const server = new McpServer({ name: 'geod-mcp', version: '0.1.4' }, {
+    instructions: 'GeoD downloads real geographic imagery through the GeoD CLI. Start with geod_capabilities and geod_sources list, then geod_plan. Local MCP can register a user-owned imagery source and use imagery.sourceId. Hosted MCP only allows its NASA GIBS source and does not register custom sources. geod_fetch returns a background job ID; poll geod_job_status, then inspect source, coverage, quality and warnings.',
   });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   const createJob = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
@@ -86,6 +86,10 @@ export function createServer(service) {
   register('geod_capabilities', 'GeoD capabilities',
     'Inspect available GeoD CLI download commands, size limits and example requests before starting work.',
     toolSchemas.capabilities, readOnly, () => service.capabilities());
+
+  if (typeof service.sources === 'function') register('geod_sources', 'Choose or register imagery sources',
+    'List imagery sources; on local MCP, register, update, remove or choose a default source, or probe one tile. Use imagery.sourceId in geod_plan/geod_fetch. Hosted MCP can only list its allowed source; registration needs the local MCP. Do not probe or fetch without a relevant user request.',
+    toolSchemas.sources, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true }, input => service.sources(input));
 
   register('geod_plan', 'Plan a GeoD acquisition',
     'Validate a parameterized GeoD request and estimate tile count, pixels and actual footprint without downloading data. Keep imagery zoom appropriate for the requested output scale.',

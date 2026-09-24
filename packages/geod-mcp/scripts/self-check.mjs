@@ -46,9 +46,11 @@ try {
   assert.equal(initialized.protocolVersion, '2025-11-25');
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
   const names = (await call('tools/list')).tools.map(tool => tool.name);
-  assert.ok(names.includes('geod_capabilities') && names.includes('geod_plan'));
+  assert.ok(names.includes('geod_capabilities') && names.includes('geod_sources') && names.includes('geod_plan'));
   const capabilities = (await call('tools/call', { name: 'geod_capabilities', arguments: {} })).structuredContent;
   assert.equal(capabilities.cli.available, true);
+  const sources = (await call('tools/call', { name: 'geod_sources', arguments: { action: 'list' } })).structuredContent;
+  assert.ok(sources.sources.some(source => source.id === 'nasa_gibs_blue_marble'));
   assert.ok(!names.includes('geod_render'));
   const example = await call('resources/read', { uri: 'geod://examples/henan' });
   const request = JSON.parse(example.contents[0].text);
