@@ -20,6 +20,7 @@ export type ImageryPlan = {
   sourceSpec: BrowserSource;
   attribution: string;
   clipGeometry?: ClipGeometry;
+  clipAttribution?: string;
 };
 
 const TILE_SIZE = 256;
@@ -37,7 +38,7 @@ function latitudePixel(latitude: number, zoom: number) {
   return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * TILE_SIZE * 2 ** zoom;
 }
 
-export function planBrowserImagery(bounds: Bounds, zoom: number, source: BrowserSource = BROWSER_SOURCE, clipInput?: unknown): ImageryPlan {
+export function planBrowserImagery(bounds: Bounds, zoom: number, source: BrowserSource = BROWSER_SOURCE, clipInput?: unknown, clipAttribution?: string): ImageryPlan {
   if (!Array.isArray(bounds) || bounds.length !== 4 || bounds.some(value => !Number.isFinite(value))) {
     throw new Error("请输入有效的西、南、东、北经纬度。");
   }
@@ -73,7 +74,8 @@ export function planBrowserImagery(bounds: Bounds, zoom: number, source: Browser
   }
   return {
     bounds, zoom, firstX, lastX, firstY, lastY, tiles, width, height,
-    westPixel, northPixel, source: source.name, sourceId: source.id, sourceSpec: source, attribution: source.attribution, clipGeometry,
+    westPixel, northPixel, source: source.name, sourceId: source.id, sourceSpec: source, attribution: source.attribution,
+    clipGeometry, clipAttribution: clipGeometry ? clipAttribution : undefined,
   };
 }
 
@@ -241,7 +243,7 @@ export async function downloadBrowserImagery(
     bounds: plan.bounds, crs: "EPSG:3857", zoom: plan.zoom,
     width: plan.width, height: plan.height, tileCount: plan.tiles,
     sourceId: plan.sourceId, source: plan.source, attribution: plan.attribution,
-    clip: plan.clipGeometry ? { type: plan.clipGeometry.type, outside: "transparent", geometryFile: "clip.geojson" } : null,
+    clip: plan.clipGeometry ? { type: plan.clipGeometry.type, outside: "transparent", geometryFile: "clip.geojson", attribution: plan.clipAttribution ?? null } : null,
     files: ["imagery.png", "imagery.pgw", "imagery.prj", ...(plan.clipGeometry ? ["clip.geojson"] : [])],
     note: "影像由当前浏览器直接从所选图源下载和拼接，未上传到 GeoD 服务器。拍摄时间和使用许可请核对图源方说明。",
   };
@@ -249,7 +251,7 @@ export async function downloadBrowserImagery(
     { name: "imagery.png", data: new Uint8Array(await png.arrayBuffer()) },
     { name: "imagery.pgw", data: encoder.encode(worldFile(plan)) },
     { name: "imagery.prj", data: encoder.encode(WEB_MERCATOR_WKT) },
-    ...(plan.clipGeometry ? [{ name: "clip.geojson", data: encoder.encode(JSON.stringify({ type: "Feature", properties: {}, geometry: plan.clipGeometry }, null, 2)) }] : []),
+    ...(plan.clipGeometry ? [{ name: "clip.geojson", data: encoder.encode(JSON.stringify({ type: "Feature", properties: plan.clipAttribution ? { attribution: plan.clipAttribution } : {}, geometry: plan.clipGeometry }, null, 2)) }] : []),
     { name: "manifest.json", data: encoder.encode(JSON.stringify(manifest, null, 2)) },
   ]);
   return { png, zip, manifest };

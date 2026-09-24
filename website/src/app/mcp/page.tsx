@@ -27,7 +27,7 @@ const remoteConfig = `{
 const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
 const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.4.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
-const agentPrompt = `请优先让 GeoD 影像下载和拼接使用我的设备：如果你支持网页 WebMCP，打开 https://geod.laogao.xyz/browser ，先调用 geod_browser_capabilities 和 geod_browser_sources 的 list，再用 geod_browser_plan 规划；如需我自己的图源，可在页面注册或用 geod_browser_sources 注册、检测，并在规划时填写 sourceId。如需按行政边界或多边形裁剪，请把 WGS84 GeoJSON Polygon/MultiPolygon 传入 clipGeometry，导出图像边界外透明。我确认下载后才调用 geod_browser_fetch，并让我在页面保存文件。如果你是本机 Windows x64 的 Codex 或 WorkBuddy，按 https://geod.laogao.xyz/mcp 的“本机 MCP”说明安装 geod-mcp 和 Skill。只有上述方式不适用且任务很小时，才把 ${remoteUrl} 添加为 Streamable HTTP MCP；远端方式会使用 GeoD 服务器资源。先规划，不要为了测试连接启动下载。`;
+const agentPrompt = `请优先让 GeoD 影像下载和拼接使用我的设备：如果你支持网页 WebMCP，打开 https://geod.laogao.xyz/browser ，先调用 geod_browser_capabilities 和 geod_browser_sources 的 list，再用 geod_browser_plan 规划；如需我自己的图源，可在页面注册或用 geod_browser_sources 注册、检测，并在规划时填写 sourceId。河南或四川省界示例可直接传 exampleId=henan 或 sichuan，自动带上裁剪边界和范围；其他边界请把 WGS84 GeoJSON Polygon/MultiPolygon 传入 clipGeometry，导出图像边界外透明。我确认下载后才调用 geod_browser_fetch，并让我在页面保存文件。如果你是本机 Windows x64 的 Codex 或 WorkBuddy，按 https://geod.laogao.xyz/mcp 的“本机 MCP”说明安装 geod-mcp 和 Skill。只有上述方式不适用且任务很小时，才把 ${remoteUrl} 添加为 Streamable HTTP MCP；远端方式会使用 GeoD 服务器资源。先规划，不要为了测试连接启动下载。`;
 
 export default function McpPage() {
   return (
