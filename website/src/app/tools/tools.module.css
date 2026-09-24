@@ -208,6 +208,10 @@
   background: rgb(4 12 28 / 0.46);
 }
 
+.remoteMethod {
+  grid-column: 1 / -1;
+}
+
 .method h3 {
   margin: 10px 0 8px;
   color: #f8fafc;
