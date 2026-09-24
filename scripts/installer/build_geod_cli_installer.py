@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 import zipfile
 
-VERSION = '0.1.1'
+VERSION = '0.2.0'
 LIMIT = 128 * 1024 * 1024
 
 
@@ -72,7 +72,7 @@ def package_files(archive: Path) -> dict[str, bytes]:
                     ('docs/', 'examples/geod-cli/', 'scripts/')):
                 raise ValueError(f'Unexpected portable file: {relative}')
             files[relative] = zf.read(item)
-    required = {'geod.exe', 'LICENSE', 'README.txt', 'build-info.json', 'docs/geod-cli.md', 'scripts/geod-render.mjs'}
+    required = {'geod.exe', 'LICENSE', 'README.txt', 'build-info.json', 'docs/geod-cli-0.2.md', 'scripts/geod-render.mjs'}
     if not required.issubset(files):
         raise ValueError(f'Missing required payload files: {sorted(required - files.keys())}')
     return files

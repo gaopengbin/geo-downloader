@@ -4,7 +4,7 @@
 module.exports = Object.freeze({
   version: "0.2.0",
   platform: "windows-x64",
-  sourceRevision: "a9d1a9062916141071e1b122de15dc2041f0fdc1",
-  portableZipSha256: "24f4ef353a616ea5a0a1d79f16b32d4b598dfabef6a1ae89e5bd7b426ab9ac18",
-  binarySha256: "c0001175440b44d888e51fb02735f0b7aefe6577c0d9e7d7b93df3f75780263c",
+  sourceRevision: "b8aba2d15b7b7ccccbe98f3fe05f3dcd74f79862",
+  portableZipSha256: "b1dc4fd0d53bd284d35a981d4a611ed0f3f59b08c137823464e549b563f89cae",
+  binarySha256: "70f7c507606cef384de177695e6e0ae3aac7cbd4bacae27ac1ea63a929bd3706",
 });
