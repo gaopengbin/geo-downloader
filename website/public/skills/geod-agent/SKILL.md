@@ -1,17 +1,26 @@
 ---
 name: geod-agent
-description: Plan, download, and inspect geographic imagery with GeoD MCP when a user asks for GeoD data or imagery. Diagnose missing GeoD tools.
+description: Connect an Agent to GeoD imagery downloads through browser WebMCP or GeoD MCP, then plan, download, and inspect imagery when requested.
 ---
 
 # GeoD imagery download
 
-Use the connected GeoD MCP server, regardless of the client's registration name. It wraps GeoD CLI's imagery download workflow; users of the hosted HTTPS server do not need GeoD CLI on their computers.
+Connect this Agent to GeoD and use the user's device for downloading and mosaicking when possible. GeoD is separate from GeoStyle. Do not assume the Agent can access the user's computer or browser: check the current environment first.
 
-1. Call `geod_capabilities` and `geod_sources` with `{ "action": "list" }` to learn the actual transport, available imagery sources, and limits. On local MCP, use `geod_sources` to register a user-supplied, authorized XYZ/TMS/QuadKey source when needed. Prefer `imagery.sourceId` in each request; set a persistent default only when the user asks. Hosted MCP lists only NASA GIBS and does not accept custom source registration. For other sources or larger work, use local MCP or the browser workflow so the user's device does the download.
-2. If the user has not supplied a complete request, read a relevant `geod://examples/henan` or `geod://examples/sichuan` resource and adapt its area and source. Bounds are WGS84 `[west, south, east, north]`; do not invent a precise boundary or claim a source is permitted without checking. Call `geod_plan` with `{ "request": ... }` to validate and estimate tiles, pixels, and footprint. Planning does not download anything. Explain the plan and any source or size limitation in plain language.
-3. When the user asks to obtain the data, call `geod_fetch` with the planned request. It starts a job. Poll `geod_job_status` using its `jobId` until it completes or fails. Do not call `geod_fetch` just to test a connection, because hosted accounts have a daily job limit.
-4. Check the completed manifest and report the actual source, coverage, quality, missing tiles, warnings, and provenance. Read a small preview with `geod_get_artifact`. For large hosted files, use `geod_artifact_link` to return a temporary HTTPS download link; for local files, return the artifact path. Use `geod_inspect` when the user asks to validate an existing bundle.
+## Connect
 
-The bundled NASA Blue Marble examples are overview imagery, not current high-resolution satellite imagery. A prepared administrative boundary is not a verified tourism or POI dataset. `geod_sources probe` requests one tile and should run only when the user wants to test a source. Source URLs may contain credentials; do not quote them in reports. GeoD MCP does not render GeoStyle maps.
+1. If this Agent supports browser WebMCP, open `https://geod.laogao.xyz/browser` in its controllable browser and use the page's `geod_browser_*` tools. Keep the page open during the task. The imagery is processed in that browser.
+2. Otherwise, for Codex or WorkBuddy running on the user's Windows x64 computer with Node.js 22+, install the local MCP and bundled Skill. In PowerShell, set `$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.4.tgz"`, then run `npx --yes --package $pkg geod-mcp install codex --package $pkg` (use `workbuddy` instead of `codex` in WorkBuddy). Afterward, update the installed, unmodified bundled `geod-agent/SKILL.md` with this current file. Preserve any user edits and report a conflict instead of overwriting them. The installer configures the current user's MCP and Skill; do not use another person's paths.
+3. If neither device-based option works and the requested download is small, add `https://laogao.xyz/geod-mcp/mcp` as a Streamable HTTP MCP server. The user authorizes it with their own GeoD account in a browser. This option downloads and mosaics on the GeoD server, uses only its listed sources, and has account limits. Never present it as local processing.
 
-If GeoD tools are missing, check the MCP registration and whether this client can use the configured transport. The hosted endpoint is `https://laogao.xyz/geod-mcp/mcp` and requires the user's own GeoD account authorization in a browser. For local Windows x64 with Node.js 22+, follow the installation instructions at `https://geod.laogao.xyz/mcp`; the installer configures the client and its Skill. A newly added MCP server or Skill may require a new client session. Do not ask for another person's machine path, password, or authorization code.
+Install this `SKILL.md` in the current Agent's supported Skills location; for Codex use `~/.codex/skills/geod-agent/SKILL.md`, and for WorkBuddy import `https://geod.laogao.xyz/skills/geod-agent.zip` if its Skills UI is available. If this client cannot install Skills, read this file as the task guide and report that limitation. A new Agent session may be needed to load an installed Skill or MCP server.
+
+## Browser WebMCP
+
+Call `geod_browser_capabilities`, then `geod_browser_sources` with `action: list`, then `geod_browser_plan`. Use a listed `sourceId`; register an authorized custom source in this browser only when the user provides one. The browser must allow that source's CORS requests. `exampleId: "henan"` or `"sichuan"` supplies an example province boundary and range. For another boundary, pass a WGS84 GeoJSON Polygon or MultiPolygon in `clipGeometry`; pixels outside it become transparent. Planning is read-only. Call `geod_browser_fetch` only when the user asks to download, then have them save the resulting ZIP in the page. Browser output is PNG with positioning files and a manifest; use local MCP for other formats.
+
+## Local or hosted MCP
+
+Call `geod_capabilities` and `geod_sources` with `action: list`; use `imagery.sourceId` from the actual source list. On local MCP, an authorized XYZ/TMS/QuadKey source can be registered with `geod_sources` when needed. Hosted MCP cannot register custom sources. Read `geod://examples/henan` or `geod://examples/sichuan` for request examples, or use the user's WGS84 bounds `[west, south, east, north]`. Do not invent a precise boundary. Call `geod_plan` to validate and estimate size without downloading. When the user asks for the data, call `geod_fetch`, poll `geod_job_status`, inspect the completed manifest, and return the actual source, coverage, warnings, and artifact. Use `geod_get_artifact` for a small preview, `geod_artifact_link` for a large hosted file, or the local path for a local file. Use `geod_inspect` for an existing bundle.
+
+For any route, verify connection with capabilities, source listing, and a read-only plan. Do not start a download or probe a network tile solely to test setup. NASA Blue Marble examples are overview imagery, not current high-resolution imagery. Do not expose source URLs containing credentials.
