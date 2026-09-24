@@ -23,7 +23,7 @@
 .boundsGrid small { position: absolute; right: 12px; bottom: 13px; color: #6682a5; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .zoomHeading { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; color: #cbd5e1; font-size: 12px; font-weight: 650; }
 .zoomHeading strong { color: #93c5fd; font-size: 15px; }
-.zoomRow { display: flex; gap: 7px; margin-top: 8px; }
+.zoomRow { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .zoomRow button { min-width: 39px; min-height: 35px; border: 1px solid rgba(147,197,253,.23); border-radius: 6px; background: rgba(15,38,80,.7); color: #cde0fa; font-size: 12px; font-weight: 700; }
 .zoomRow button[aria-pressed="true"] { border-color: #60a5fa; color: #fff; background: #1e4e97; }
 .actionRow { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 25px; }
@@ -44,5 +44,30 @@
 .runtime { display: flex; align-items: center; gap: 8px; margin-top: 23px; color: #9bb5d5; font-size: 11px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: #60a5fa; box-shadow: 0 0 10px rgba(96,165,250,.6); }
 .finePrint { margin: 11px 0 0; font-size: 11px; }
+.sourceCard { grid-column: 1 / -1; min-width: 0; padding: 28px; border: 1px solid rgba(147,197,253,.17); border-radius: 14px; background: linear-gradient(135deg, rgba(18,38,79,.96), rgba(7,17,40,.97)); box-shadow: 0 24px 70px rgba(0,0,0,.18); }
+.sourceList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+.sourceRow { display: flex; min-width: 0; border: 1px solid rgba(147,197,253,.2); border-radius: 8px; background: rgba(2,12,32,.45); }
+.sourceChoice { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 13px 14px; border: 0; border-radius: 8px; background: transparent; color: #dbeafe; text-align: left; font: inherit; cursor: pointer; }
+.sourceChoice strong { font-size: 13px; }
+.sourceChoice span { max-width: 100%; color: #90aacb; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.sourceChoice[aria-pressed="true"] { background: rgba(37,99,235,.2); box-shadow: inset 0 0 0 1px rgba(96,165,250,.65); }
+.sourceChoice:hover { background: rgba(37,99,235,.16); }
+.sourceRemove { display: grid; place-items: center; width: 42px; border: 0; border-left: 1px solid rgba(147,197,253,.16); border-radius: 0 8px 8px 0; background: transparent; color: #fca5a5; cursor: pointer; }
+.sourceRemove:hover { background: rgba(127,29,29,.25); }
+.sourceChoice:disabled, .sourceRemove:disabled { opacity: .55; cursor: not-allowed; }
+.sourceActions { display: flex; flex-wrap: wrap; gap: 9px; }
+.sourceActions button, .sourceForm > button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 0 14px; border-radius: 7px; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.sourceForm { margin-top: 18px; padding: 19px; border: 1px solid rgba(147,197,253,.2); border-radius: 9px; background: rgba(2,12,32,.48); }
+.sourceForm p { margin: 0 0 15px; color: #a7b8ce; font-size: 12px; line-height: 1.7; }
+.sourceFormGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.sourceFormGrid label { display: flex; flex-direction: column; gap: 6px; color: #cbd5e1; font-size: 12px; font-weight: 650; }
+.sourceFormGrid .fullField { grid-column: 1 / -1; }
+.sourceFormGrid input { width: 100%; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid rgba(147,197,253,.25); border-radius: 7px; outline: none; background: rgba(2,12,32,.75); color: #f8fafc; font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; appearance: textfield; }
+.sourceFormGrid input::-webkit-inner-spin-button, .sourceFormGrid input::-webkit-outer-spin-button { appearance: none; }
+.sourceFormGrid input:focus-visible, .sourceChoice:focus-visible, .sourceRemove:focus-visible, .sourceActions button:focus-visible, .sourceForm button:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.schemeRow { display: flex; gap: 7px; margin: 15px 0; }
+.schemeRow button { min-height: 33px; padding: 0 14px; border: 1px solid rgba(147,197,253,.25); border-radius: 6px; background: rgba(15,38,80,.7); color: #cde0fa; font: 700 12px ui-monospace, SFMono-Regular, Consolas, monospace; cursor: pointer; }
+.schemeRow button[aria-pressed="true"] { border-color: #60a5fa; background: #1e4e97; color: #fff; }
 @media (max-width: 780px) { .intro { grid-template-columns: 1fr; padding: 18px 0; } .intro div { min-height: 64px; } .workspace { grid-template-columns: 1fr; } }
-@media (max-width: 480px) { .formCard, .resultCard { padding: 20px; } .boundsGrid { gap: 9px; } .actionRow .primary { flex: 1 1 100%; } .actionRow .secondary { flex: 1; } }
+@media (max-width: 780px) { .sourceList { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .formCard, .resultCard, .sourceCard { padding: 20px; } .boundsGrid, .sourceFormGrid { gap: 9px; } .actionRow .primary { flex: 1 1 100%; } .actionRow .secondary { flex: 1; } .sourceFormGrid { grid-template-columns: 1fr; } .sourceFormGrid .fullField { grid-column: auto; } }

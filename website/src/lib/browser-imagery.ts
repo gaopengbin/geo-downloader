@@ -1,3 +1,5 @@
+import { BROWSER_SOURCE, browserTileUrl, type BrowserSource } from "./browser-sources";
+
 export type Bounds = [number, number, number, number];
 
 export type ImageryPlan = {
@@ -13,6 +15,8 @@ export type ImageryPlan = {
   westPixel: number;
   northPixel: number;
   source: string;
+  sourceId: string;
+  sourceSpec: BrowserSource;
   attribution: string;
 };
 
@@ -21,13 +25,6 @@ const MAX_LAT = 85.05112878;
 const MAX_TILES = 256;
 const MAX_PIXELS = 16_777_216;
 const EARTH_RADIUS = 6_378_137;
-
-export const BROWSER_SOURCE = {
-  name: "NASA GIBS Blue Marble Shaded Relief Bathymetry",
-  attribution: "NASA GIBS / Blue Marble；地形概览图，不是近期卫星影像",
-  tileUrl: (zoom: number, x: number, y: number) =>
-    `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/${zoom}/${y}/${x}.jpeg`,
-};
 
 function longitudePixel(longitude: number, zoom: number) {
   return ((longitude + 180) / 360) * TILE_SIZE * 2 ** zoom;
@@ -38,7 +35,7 @@ function latitudePixel(latitude: number, zoom: number) {
   return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * TILE_SIZE * 2 ** zoom;
 }
 
-export function planBrowserImagery(bounds: Bounds, zoom: number): ImageryPlan {
+export function planBrowserImagery(bounds: Bounds, zoom: number, source: BrowserSource = BROWSER_SOURCE): ImageryPlan {
   if (!Array.isArray(bounds) || bounds.length !== 4 || bounds.some(value => !Number.isFinite(value))) {
     throw new Error("请输入有效的西、南、东、北经纬度。");
   }
@@ -46,8 +43,8 @@ export function planBrowserImagery(bounds: Bounds, zoom: number): ImageryPlan {
   if (west < -180 || east > 180 || west >= east || south < -MAX_LAT || north > MAX_LAT || south >= north) {
     throw new Error("范围需为 WGS84 经纬度，且满足西 < 东、南 < 北；跨 180° 经线请拆成两个任务。");
   }
-  if (!Number.isInteger(zoom) || zoom < 0 || zoom > 8) {
-    throw new Error("当前 NASA 图源支持 0–8 级。");
+  if (!Number.isInteger(zoom) || zoom < 0 || zoom > source.maxZoom) {
+    throw new Error(`${source.name} 支持 0–${source.maxZoom} 级。`);
   }
   const maxIndex = 2 ** zoom - 1;
   const westPixel = longitudePixel(west, zoom);
@@ -67,7 +64,7 @@ export function planBrowserImagery(bounds: Bounds, zoom: number): ImageryPlan {
   }
   return {
     bounds, zoom, firstX, lastX, firstY, lastY, tiles, width, height,
-    westPixel, northPixel, source: BROWSER_SOURCE.name, attribution: BROWSER_SOURCE.attribution,
+    westPixel, northPixel, source: source.name, sourceId: source.id, sourceSpec: source, attribution: source.attribution,
   };
 }
 
@@ -167,7 +164,12 @@ export async function downloadBrowserImagery(
     while (next < jobs.length) {
       if (signal?.aborted) throw new DOMException("任务已取消。", "AbortError");
       const { x, y } = jobs[next++];
-      const response = await fetch(BROWSER_SOURCE.tileUrl(plan.zoom, x, y), { mode: "cors", signal: controller.signal });
+      let response: Response;
+      try { response = await fetch(browserTileUrl(plan.sourceSpec, plan.zoom, x, y), { mode: "cors", credentials: "omit", signal: controller.signal }); }
+      catch (error) {
+        if (controller.signal.aborted) throw error;
+        throw new Error(`浏览器无法读取 ${plan.source} 的瓦片，请检查地址、网络和 CORS 设置。`);
+      }
       if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) {
         throw new Error(`图源瓦片 ${plan.zoom}/${x}/${y} 获取失败（HTTP ${response.status}）。`);
       }
@@ -199,9 +201,9 @@ export async function downloadBrowserImagery(
     schemaVersion: "geod-browser-1", generatedAt: new Date().toISOString(),
     bounds: plan.bounds, crs: "EPSG:3857", zoom: plan.zoom,
     width: plan.width, height: plan.height, tileCount: plan.tiles,
-    source: plan.source, attribution: plan.attribution,
+    sourceId: plan.sourceId, source: plan.source, attribution: plan.attribution,
     files: ["imagery.png", "imagery.pgw", "imagery.prj"],
-    note: "NASA Blue Marble 地形概览图，不代表近期卫星拍摄时间。影像由当前浏览器直接下载和拼接，未上传到 GeoD 服务器。",
+    note: "影像由当前浏览器直接从所选图源下载和拼接，未上传到 GeoD 服务器。拍摄时间和使用许可请核对图源方说明。",
   };
   const zip = makeZip([
     { name: "imagery.png", data: new Uint8Array(await png.arrayBuffer()) },

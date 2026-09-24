@@ -9,7 +9,7 @@ import styles from "./browser.module.css";
 
 export const metadata: Metadata = {
   title: "GeoD 浏览器端影像下载｜本机拼接与 WebMCP",
-  description: "在浏览器中直接下载并拼接 NASA GIBS 影像，输出带地理定位的 PNG 数据包。支持可用浏览器中的 WebMCP 工具。",
+  description: "在浏览器中直接下载并拼接影像，注册自己的 HTTPS 图源，输出带地理定位的 PNG 数据包。支持可用浏览器中的 WebMCP 工具。",
   alternates: { canonical: "/browser" },
 };
 
