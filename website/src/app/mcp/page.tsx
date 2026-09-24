@@ -27,7 +27,7 @@ const remoteConfig = `{
 const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
 const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.4.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
-const agentPrompt = `请从 ${skillUrl} 安装 GeoD Skill，为当前 Agent 接入影像下载，并按 Skill 完成一次只读规划验证。`;
+const agentPrompt = `请从 ${skillUrl} 安装 GeoD Skill，并为当前 Agent 配置 GeoD MCP；通过 MCP 工具完成一次只读规划验证。`;
 
 export default function McpPage() {
   return (
@@ -68,15 +68,8 @@ export default function McpPage() {
                 </div>
                 <span className={styles.version}>MCP 0.1.4 · HTTPS 或本机</span>
               </div>
-              <p className={styles.description}>按 Agent 的运行环境选择接入方式；前两种由使用者的设备下载和拼接，远端 HTTPS MCP 仅适合受限的小任务。</p>
+              <p className={styles.description}>在用户电脑运行的 Agent 优先接入本机 MCP；云端 Agent 可接入 HTTPS MCP。浏览器 WebMCP 只在你主动选择网页处理时使用。</p>
               <div className={styles.methodGrid}>
-                <article className={styles.method}>
-                  <div className={styles.methodLabel}>推荐 · 浏览器本机计算</div>
-                  <h3>WebMCP 页面</h3>
-                  <p>打开浏览器端影像下载页面。可选内置 NASA 图源或在当前浏览器注册自己的授权图源；网页直接请求瓦片，在当前设备拼接、按 GeoJSON 多边形裁剪并保存 PNG 数据包。支持 WebMCP 的 Agent 可调用页面工具，普通浏览器也可手动操作。</p>
-                  <div className={styles.linkRow}><Link className={styles.primaryLink} href="/browser">打开浏览器端下载 <ArrowUpRight size={16} aria-hidden="true" /></Link></div>
-                  <p className={styles.finePrint}>自定义图源只保存在当前浏览器，必须允许 HTTPS 跨域读取（CORS）；使用 WebMCP 时保持页面打开。浏览器版导出 PNG、定位文件和可选裁剪边界；其他影像格式与处理请使用本机 MCP。</p>
-                </article>
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>推荐 · 本机完整 CLI 流程</div>
                   <h3>本机 MCP</h3>
@@ -85,14 +78,21 @@ export default function McpPage() {
                   <p className={styles.finePrint}>本机 MCP 可用 <code>geod_sources</code> 列出图源、注册自己的授权图源，再在规划和下载任务中填写 <code>imagery.sourceId</code>。图源配置留在当前用户电脑上。</p>
                   <p className={styles.finePrint}>只有想更换工作空间时才加 <code>--workspace</code> 并填写自己电脑上的绝对路径；WorkBuddy 把命令中的 <code>codex</code> 换成 <code>workbuddy</code>。</p>
                 </article>
-                <article className={`${styles.method} ${styles.remoteMethod}`}>
-                  <div className={styles.methodLabel}>小任务备用 · 使用服务器资源</div>
+                <article className={styles.method}>
+                  <div className={styles.methodLabel}>云端 Agent · 使用服务器资源</div>
                   <h3>HTTPS MCP</h3>
                   <p>Marvis 等客户端可手动添加远端地址与 GeoD Skill，并在浏览器中使用自己的 GeoD 账号授权。客户端需要支持 Streamable HTTP 与 OAuth。下载和拼接在 GeoD 服务器上执行。</p>
                   <CodeBlock text={remoteUrl} label="MCP 服务地址" />
                   <a href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></a>
                   <CodeBlock text={remoteConfig} label="支持 mcpServers 的客户端示例" />
                   <p className={styles.finePrint}>WorkBuddy 可在技能页面<a href={skillZipUrl}>导入 Skill ZIP</a>。远端 MCP 只开放 NASA GIBS 图源，不接受自定义图源注册；按账号隔离任务，每个账号每天最多 3 次下载任务。豆包工作的实际客户端兼容性仍需测试。</p>
+                </article>
+                <article className={`${styles.method} ${styles.remoteMethod}`}>
+                  <div className={styles.methodLabel}>按需选择 · 浏览器本机计算</div>
+                  <h3>WebMCP 页面</h3>
+                  <p>明确选择网页处理时，打开浏览器端影像下载页面。网页直接请求瓦片，在当前设备拼接、按 GeoJSON 多边形裁剪并保存 PNG 数据包。只有 Agent 真正获得页面注入的 WebMCP 工具，才能通过工具调用；打开网页本身不等于接入成功。</p>
+                  <div className={styles.linkRow}><Link href="/browser">打开浏览器端下载 <ArrowUpRight size={16} aria-hidden="true" /></Link></div>
+                  <p className={styles.finePrint}>可选内置 NASA 图源或在当前浏览器注册自己的授权图源。自定义图源只保存在当前浏览器，必须允许 HTTPS 跨域读取（CORS）；使用 WebMCP 时保持页面打开。浏览器版导出 PNG、定位文件和可选裁剪边界；其他影像格式与处理请使用本机 MCP。</p>
                 </article>
               </div>
               <div className={styles.linkRow}>
