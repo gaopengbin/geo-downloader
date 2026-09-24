@@ -9,7 +9,7 @@ import styles from "./browser.module.css";
 
 export const metadata: Metadata = {
   title: "GeoD 浏览器端影像下载｜本机拼接与 WebMCP",
-  description: "在浏览器中直接下载并拼接影像，注册自己的 HTTPS 图源，输出带地理定位的 PNG 数据包。支持可用浏览器中的 WebMCP 工具。",
+  description: "在浏览器中直接下载、拼接并按 GeoJSON 多边形裁剪影像，注册自己的 HTTPS 图源，输出带地理定位的 PNG 数据包。支持 WebMCP 工具。",
   alternates: { canonical: "/browser" },
 };
 
@@ -22,7 +22,7 @@ export default function BrowserPage() {
         <header className={page.head}>
           <span className={page.eyebrow}>GEOD / BROWSER COMPUTE</span>
           <h1 className={page.title}>影像在你的浏览器里完成</h1>
-          <p className={page.lead}>瓦片由你的浏览器直接获取、拼接并保存。GeoD 官网只提供页面代码，不代理影像下载，也不在服务器上运行拼接任务。</p>
+          <p className={page.lead}>瓦片由你的浏览器直接获取、拼接、按多边形裁剪并保存。GeoD 官网只提供页面代码，不代理影像下载，也不在服务器上运行拼接任务。</p>
           <div className={page.toolbar}>
             <a href="#browser-workspace">开始下载</a>
             <Link href="/mcp">查看其他 Agent 接入方式</Link>

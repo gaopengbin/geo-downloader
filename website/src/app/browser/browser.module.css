@@ -21,6 +21,20 @@
 .boundsGrid input::-webkit-inner-spin-button, .boundsGrid input::-webkit-outer-spin-button { appearance: none; margin: 0; }
 .boundsGrid input:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(37,99,235,.2); }
 .boundsGrid small { position: absolute; right: 12px; bottom: 13px; color: #6682a5; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.clipField { margin-top: 20px; }
+.clipHeading, .clipFoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.clipHeading label { color: #cbd5e1; font-size: 12px; font-weight: 650; }
+.clipHeading label span { margin-left: 5px; color: #7190b6; font-weight: 500; }
+.clipHeading button, .clipFoot button { padding: 3px 0; border: 0; background: transparent; color: #93c5fd; font-family: inherit; font-size: 11px; font-weight: 650; cursor: pointer; }
+.clipHeading button:hover, .clipFoot button:hover { color: #dbeafe; text-decoration: underline; }
+.clipHeading button:disabled, .clipFoot button:disabled { opacity: .45; cursor: not-allowed; text-decoration: none; }
+.clipField textarea { display: block; width: 100%; min-height: 92px; max-height: 240px; margin-top: 8px; padding: 11px 13px; border: 1px solid rgba(147,197,253,.25); border-radius: 7px; outline: none; background: rgba(2,12,32,.7); color: #f8fafc; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: none; field-sizing: content; scrollbar-width: none; }
+.clipField textarea::-webkit-scrollbar { display: none; }
+.clipField textarea::placeholder { color: #718aa9; }
+.clipField textarea:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(37,99,235,.2); }
+.clipFoot { align-items: flex-start; margin-top: 7px; }
+.clipFoot span { color: #8fa8c8; font-size: 11px; line-height: 1.5; }
+.clipFoot button { flex: 0 0 auto; }
 .zoomHeading { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; color: #cbd5e1; font-size: 12px; font-weight: 650; }
 .zoomHeading strong { color: #93c5fd; font-size: 15px; }
 .zoomRow { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
@@ -35,8 +49,8 @@
 .actionRow button:disabled, .exampleRow button:disabled, .zoomRow button:disabled { opacity: .55; cursor: not-allowed; }
 .status { min-height: 22px; margin: 17px 0 0; color: #c8d8ed; font-size: 12px; line-height: 1.7; }
 .progress { width: 100%; height: 8px; margin-top: 12px; accent-color: #60a5fa; }
-.preview { display: grid; place-items: center; min-height: 240px; max-height: 380px; overflow: hidden; border: 1px solid rgba(147,197,253,.16); border-radius: 8px; background: #061023; }
-.preview img { display: block; max-width: 100%; max-height: 378px; object-fit: contain; }
+.preview { display: grid; place-items: center; min-height: 240px; max-height: 380px; overflow: hidden; border: 1px solid rgba(147,197,253,.16); border-radius: 8px; background-color: #061023; background-image: linear-gradient(45deg, #172844 25%, transparent 25%), linear-gradient(-45deg, #172844 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #172844 75%), linear-gradient(-45deg, transparent 75%, #172844 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0; }
+.preview img { display: block; width: 100%; max-height: 378px; object-fit: contain; }
 .download { margin-top: 15px; }
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 242px; padding: 25px; border: 1px dashed rgba(147,197,253,.25); border-radius: 8px; text-align: center; background: rgba(2,12,32,.36); }
 .empty strong { color: #dbeafe; font-size: 16px; }

@@ -27,7 +27,7 @@ const remoteConfig = `{
 const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
 const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.4.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
-const agentPrompt = `请优先让 GeoD 影像下载和拼接使用我的设备：如果你支持网页 WebMCP，打开 https://geod.laogao.xyz/browser ，先调用 geod_browser_capabilities 和 geod_browser_sources 的 list，再用 geod_browser_plan 规划；如需我自己的图源，可在页面注册或用 geod_browser_sources 注册、检测，并在规划时填写 sourceId。我确认下载后才调用 geod_browser_fetch，并让我在页面保存文件。如果你是本机 Windows x64 的 Codex 或 WorkBuddy，按 https://geod.laogao.xyz/mcp 的“本机 MCP”说明安装 geod-mcp 和 Skill。只有上述方式不适用且任务很小时，才把 ${remoteUrl} 添加为 Streamable HTTP MCP；远端方式会使用 GeoD 服务器资源。先规划，不要为了测试连接启动下载。`;
+const agentPrompt = `请优先让 GeoD 影像下载和拼接使用我的设备：如果你支持网页 WebMCP，打开 https://geod.laogao.xyz/browser ，先调用 geod_browser_capabilities 和 geod_browser_sources 的 list，再用 geod_browser_plan 规划；如需我自己的图源，可在页面注册或用 geod_browser_sources 注册、检测，并在规划时填写 sourceId。如需按行政边界或多边形裁剪，请把 WGS84 GeoJSON Polygon/MultiPolygon 传入 clipGeometry，导出图像边界外透明。我确认下载后才调用 geod_browser_fetch，并让我在页面保存文件。如果你是本机 Windows x64 的 Codex 或 WorkBuddy，按 https://geod.laogao.xyz/mcp 的“本机 MCP”说明安装 geod-mcp 和 Skill。只有上述方式不适用且任务很小时，才把 ${remoteUrl} 添加为 Streamable HTTP MCP；远端方式会使用 GeoD 服务器资源。先规划，不要为了测试连接启动下载。`;
 
 export default function McpPage() {
   return (
@@ -73,9 +73,9 @@ export default function McpPage() {
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>推荐 · 浏览器本机计算</div>
                   <h3>WebMCP 页面</h3>
-                  <p>打开浏览器端影像下载页面。可选内置 NASA 图源或在当前浏览器注册自己的授权图源；网页直接请求瓦片，在当前设备拼接并保存 PNG 数据包。支持 WebMCP 的 Agent 可调用页面工具，普通浏览器也可手动操作。</p>
+                  <p>打开浏览器端影像下载页面。可选内置 NASA 图源或在当前浏览器注册自己的授权图源；网页直接请求瓦片，在当前设备拼接、按 GeoJSON 多边形裁剪并保存 PNG 数据包。支持 WebMCP 的 Agent 可调用页面工具，普通浏览器也可手动操作。</p>
                   <div className={styles.linkRow}><Link className={styles.primaryLink} href="/browser">打开浏览器端下载 <ArrowUpRight size={16} aria-hidden="true" /></Link></div>
-                  <p className={styles.finePrint}>自定义图源只保存在当前浏览器，必须允许 HTTPS 跨域读取（CORS）；使用 WebMCP 时保持页面打开。浏览器版当前导出 PNG 与定位文件，完整影像格式和高级处理请使用本机 MCP。</p>
+                  <p className={styles.finePrint}>自定义图源只保存在当前浏览器，必须允许 HTTPS 跨域读取（CORS）；使用 WebMCP 时保持页面打开。浏览器版导出 PNG、定位文件和可选裁剪边界；其他影像格式与处理请使用本机 MCP。</p>
                 </article>
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>推荐 · 本机完整 CLI 流程</div>

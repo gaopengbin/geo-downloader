@@ -1,4 +1,5 @@
 import { BROWSER_SOURCE, browserTileUrl, type BrowserSource } from "./browser-sources";
+import { clipBounds, validateClipGeometry, type ClipGeometry } from "./browser-clip";
 
 export type Bounds = [number, number, number, number];
 
@@ -18,6 +19,7 @@ export type ImageryPlan = {
   sourceId: string;
   sourceSpec: BrowserSource;
   attribution: string;
+  clipGeometry?: ClipGeometry;
 };
 
 const TILE_SIZE = 256;
@@ -35,7 +37,7 @@ function latitudePixel(latitude: number, zoom: number) {
   return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * TILE_SIZE * 2 ** zoom;
 }
 
-export function planBrowserImagery(bounds: Bounds, zoom: number, source: BrowserSource = BROWSER_SOURCE): ImageryPlan {
+export function planBrowserImagery(bounds: Bounds, zoom: number, source: BrowserSource = BROWSER_SOURCE, clipInput?: unknown): ImageryPlan {
   if (!Array.isArray(bounds) || bounds.length !== 4 || bounds.some(value => !Number.isFinite(value))) {
     throw new Error("请输入有效的西、南、东、北经纬度。");
   }
@@ -62,10 +64,46 @@ export function planBrowserImagery(bounds: Bounds, zoom: number, source: Browser
   if (tiles > MAX_TILES || width * height > MAX_PIXELS) {
     throw new Error(`本机浏览器单次最多 ${MAX_TILES} 块瓦片、约 1600 万像素；请缩小范围或降低级别。`);
   }
+  const clipGeometry = clipInput === undefined ? undefined : validateClipGeometry(clipInput);
+  if (clipGeometry) {
+    const [clipWest, clipSouth, clipEast, clipNorth] = clipBounds(clipGeometry);
+    if (clipWest >= east || clipEast <= west || clipSouth >= north || clipNorth <= south) {
+      throw new Error("裁剪边界与下载范围没有交集；请用边界填入范围，或调整经纬度框。");
+    }
+  }
   return {
     bounds, zoom, firstX, lastX, firstY, lastY, tiles, width, height,
-    westPixel, northPixel, source: source.name, sourceId: source.id, sourceSpec: source, attribution: source.attribution,
+    westPixel, northPixel, source: source.name, sourceId: source.id, sourceSpec: source, attribution: source.attribution, clipGeometry,
   };
+}
+
+function applyClipMask(canvas: HTMLCanvasElement, plan: ImageryPlan) {
+  const geometry = plan.clipGeometry;
+  if (!geometry) return;
+  const mask = document.createElement("canvas");
+  mask.width = plan.width;
+  mask.height = plan.height;
+  const maskContext = mask.getContext("2d");
+  const context = canvas.getContext("2d");
+  if (!maskContext || !context) throw new Error("浏览器无法创建裁剪画布。");
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  maskContext.fillStyle = "#fff";
+  for (const polygon of polygons) {
+    const path = new Path2D();
+    for (const ring of polygon) {
+      ring.forEach(([lon, lat], index) => {
+        const x = longitudePixel(lon, plan.zoom) - plan.westPixel;
+        const y = latitudePixel(lat, plan.zoom) - plan.northPixel;
+        if (index === 0) path.moveTo(x, y); else path.lineTo(x, y);
+      });
+      path.closePath();
+    }
+    maskContext.fill(path, "evenodd");
+  }
+  context.save();
+  context.globalCompositeOperation = "destination-in";
+  context.drawImage(mask, 0, 0);
+  context.restore();
 }
 
 function mercatorX(longitude: number) {
@@ -151,7 +189,7 @@ export async function downloadBrowserImagery(
   const canvas = document.createElement("canvas");
   canvas.width = plan.width;
   canvas.height = plan.height;
-  const context = canvas.getContext("2d", { alpha: false });
+  const context = canvas.getContext("2d", { alpha: true });
   if (!context) throw new Error("浏览器无法创建影像画布。");
   const jobs: { x: number; y: number }[] = [];
   for (let y = plan.firstY; y <= plan.lastY; y++) {
@@ -193,6 +231,7 @@ export async function downloadBrowserImagery(
     signal?.removeEventListener("abort", relayAbort);
   }
   if (signal?.aborted) throw new DOMException("任务已取消。", "AbortError");
+  applyClipMask(canvas, plan);
   const png = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("PNG 导出失败。")), "image/png");
   });
@@ -202,13 +241,15 @@ export async function downloadBrowserImagery(
     bounds: plan.bounds, crs: "EPSG:3857", zoom: plan.zoom,
     width: plan.width, height: plan.height, tileCount: plan.tiles,
     sourceId: plan.sourceId, source: plan.source, attribution: plan.attribution,
-    files: ["imagery.png", "imagery.pgw", "imagery.prj"],
+    clip: plan.clipGeometry ? { type: plan.clipGeometry.type, outside: "transparent", geometryFile: "clip.geojson" } : null,
+    files: ["imagery.png", "imagery.pgw", "imagery.prj", ...(plan.clipGeometry ? ["clip.geojson"] : [])],
     note: "影像由当前浏览器直接从所选图源下载和拼接，未上传到 GeoD 服务器。拍摄时间和使用许可请核对图源方说明。",
   };
   const zip = makeZip([
     { name: "imagery.png", data: new Uint8Array(await png.arrayBuffer()) },
     { name: "imagery.pgw", data: encoder.encode(worldFile(plan)) },
     { name: "imagery.prj", data: encoder.encode(WEB_MERCATOR_WKT) },
+    ...(plan.clipGeometry ? [{ name: "clip.geojson", data: encoder.encode(JSON.stringify({ type: "Feature", properties: {}, geometry: plan.clipGeometry }, null, 2)) }] : []),
     { name: "manifest.json", data: encoder.encode(JSON.stringify(manifest, null, 2)) },
   ]);
   return { png, zip, manifest };
