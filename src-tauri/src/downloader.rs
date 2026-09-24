@@ -18,6 +18,40 @@ use std::time::Duration;
 use rand::seq::SliceRandom;
 use futures::stream::{self, StreamExt};
 use tokio_util::sync::CancellationToken;
+use crate::{tile_payload, tile_policy};
+
+#[derive(Default)]
+struct RateLimitGate(std::sync::Mutex<Option<tokio::time::Instant>>);
+
+impl RateLimitGate {
+    async fn wait(&self) {
+        loop {
+            let until = *self.0.lock().unwrap();
+            match until {
+                Some(until) if until > tokio::time::Instant::now() => tokio::time::sleep_until(until).await,
+                _ => return,
+            }
+        }
+    }
+
+    fn defer(&self, delay: Duration) {
+        let until = tokio::time::Instant::now() + delay;
+        let mut current = self.0.lock().unwrap();
+        *current = Some(current.map_or(until, |value| value.max(until)));
+    }
+}
+
+fn retry_after(headers: &reqwest::header::HeaderMap, attempt: u32) -> Duration {
+    let seconds = headers.get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok().or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(v).ok().map(|date| {
+                (date.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds().max(0) as u64
+            })
+        }))
+        .unwrap_or(2 * (u64::from(attempt) + 1));
+    Duration::from_secs(seconds)
+}
 
 /// Bounds compressed raster/vector tile payloads before they can exhaust memory.
 /// This also applies to decoded HTTP content (for example a gzip response).
@@ -73,6 +107,8 @@ pub struct TileDownloader {
     source: TileSource,
     client: Client,
     retry_times: u32,
+    preview_only: bool,
+    rate_limit: Arc<RateLimitGate>,
 }
 
 impl TileDownloader {
@@ -102,14 +138,27 @@ impl TileDownloader {
 
     /// 创建新的下载器
     pub fn new(source: TileSource, proxy: Option<&str>) -> Result<Self, String> {
+        tile_policy::ensure_offline_allowed(&source.url)?;
+        Self::build(source, proxy, false)
+    }
+
+    /// Single-tile interactive probe; never usable for offline task downloads.
+    pub fn new_preview(source: TileSource, proxy: Option<&str>) -> Result<Self, String> {
+        Self::build(source, proxy, true)
+    }
+
+    fn build(source: TileSource, proxy: Option<&str>, preview_only: bool) -> Result<Self, String> {
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(config::TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(5))
             .pool_max_idle_per_host(20)
             .pool_idle_timeout(Duration::from_secs(30))
             .tcp_keepalive(Duration::from_secs(15))
-            .danger_accept_invalid_certs(config::allow_invalid_certs())
-            .redirect(if std::env::var_os("GEOD_PUBLIC_MCP").is_some() { reqwest::redirect::Policy::none() } else { reqwest::redirect::Policy::default() });
+            .danger_accept_invalid_certs(config::allow_invalid_certs());
+
+        if !preview_only {
+            builder = builder.redirect(if std::env::var_os("GEOD_PUBLIC_MCP").is_some() { reqwest::redirect::Policy::none() } else { tile_policy::offline_redirect_policy() });
+        }
 
         // 配置代理
         if let Some(proxy_url) = proxy {
@@ -127,6 +176,8 @@ impl TileDownloader {
             source,
             client,
             retry_times: config::RETRY_TIMES,
+            preview_only,
+            rate_limit: Arc::new(RateLimitGate::default()),
         })
     }
 
@@ -165,8 +216,7 @@ impl TileDownloader {
     fn get_headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
 
-        let is_osm_standard = self.source.id == "osm"
-            && self.source.url.contains("tile.openstreetmap.org");
+        let is_osm_standard = tile_policy::is_osm_standard_url(&self.source.url);
         let ua = if is_osm_standard {
             concat!(
                 "GeoD/",
@@ -259,7 +309,9 @@ impl TileDownloader {
         file_path: &Path,
         retry_times: u32,
         retrying_count: Option<&AtomicU32>,
+        rate_limit: &RateLimitGate,
     ) -> Result<(), String> {
+        tile_policy::ensure_offline_allowed(url)?;
         let mut last_error = String::new();
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -268,16 +320,23 @@ impl TileDownloader {
         }
 
         for attempt in 0..=retry_times {
+            rate_limit.wait().await;
             let req_fut = async {
                 match client.get(url).headers(headers.clone()).send().await {
                     Ok(resp) => {
                         let status = resp.status();
                         if status.is_success() {
+                            let content_type = resp.headers().get(reqwest::header::CONTENT_TYPE)
+                                .and_then(|v| v.to_str().ok()).map(str::to_owned);
                             match bounded_tile_body(resp, MAX_TILE_RESPONSE_BYTES).await {
-                                Ok(bytes) => match tokio::fs::write(file_path, &bytes).await {
+                                Ok(bytes) => {
+                                    tile_payload::validate(&bytes, content_type.as_deref())
+                                        .map_err(|e| (e, false))?;
+                                    match tokio::fs::write(file_path, &bytes).await {
                                     Ok(_) => Ok(()),
                                     Err(e) => Err((format!("写入失败: {}", e), false)),
-                                },
+                                    }
+                                }
                                 Err(e) => Err((e, false)),
                             }
                         } else if status.as_u16() == 404 {
@@ -286,24 +345,34 @@ impl TileDownloader {
                             let _ = tokio::fs::remove_file(file_path).await;
                             Ok(())
                         } else if status.as_u16() == 429 || status.as_u16() == 503 {
+                            let delay = retry_after(resp.headers(), attempt);
+                            if delay > Duration::from_secs(60) || attempt >= retry_times {
+                                return Err((format!("TILE_RATE_LIMITED: {}；请稍后重试", Self::http_error_message(url, status)), false));
+                            }
+                            rate_limit.defer(delay);
                             Err((Self::http_error_message(url, status), true))
+                        } else if status.as_u16() == 401 || status.as_u16() == 403 {
+                            Err((format!("TILE_ACCESS_DENIED: {}；任务已停止，请检查权限或切换图源", Self::http_error_message(url, status)), false))
                         } else {
                             Err((Self::http_error_message(url, status), false))
                         }
                     }
-                    Err(e) => Err((e.to_string(), false)),
+                    Err(e) if e.is_redirect() => Err((
+                        "TILE_REDIRECT_DENIED: 下载重定向被拒绝（公共 OSM 瓦片或重定向过多），请切换图源".into(), false)),
+                    Err(e) => Err((e.without_url().to_string(), false)),
                 }
             };
 
             match tokio::time::timeout(Duration::from_secs(8), req_fut).await {
                 Ok(Ok(())) => return Ok(()),
                 Ok(Err((e, rate_limited))) => {
+                    if tile_policy::is_terminal_download_error(&e) { return Err(e); }
                     last_error = e;
                     if attempt < retry_times {
                         if let Some(counter) = retrying_count {
                             counter.fetch_add(1, Ordering::Relaxed);
                         }
-                        let delay = if rate_limited { 2000 * (attempt as u64 + 1) } else { 300 * (attempt as u64 + 1) };
+                        let delay = if rate_limited { 0 } else { 300 * (attempt as u64 + 1) };
                         tokio::time::sleep(Duration::from_millis(delay)).await;
                         if let Some(counter) = retrying_count {
                             counter.fetch_sub(1, Ordering::Relaxed);
@@ -340,6 +409,10 @@ impl TileDownloader {
     where
         F: FnMut(DownloadProgress),
     {
+        tile_policy::ensure_offline_allowed(&self.source.url)?;
+        if self.preview_only { return Err("交互预览客户端不能用于离线下载".into()); }
+        let cancellation = cancel_token.cloned().unwrap_or_default();
+        if cancellation.is_cancelled() { return Err("任务已取消".into()); }
         let concurrency = concurrency.clamp(1, 100);
         let total = tiles.len() as u32;
         let mut completed = 0u32;
@@ -364,7 +437,7 @@ impl TileDownloader {
             } else {
                 legacy_path
             };
-            if file_path.exists() && std::fs::metadata(&file_path).map_or(false, |m| m.len() > 0) {
+            if tile_payload::valid_file(&file_path) {
                 tile_files.insert((tile.x, tile.y), MergerTileSource::from_path(file_path));
                 completed += 1;
             } else {
@@ -412,7 +485,7 @@ impl TileDownloader {
                 .collect();
             if let Ok(cached_set) = tcache::Store::global().contains_batch(&cache_src, &coords) {
                 if !cached_set.is_empty() {
-                    let (cached_tiles, real_need): (Vec<_>, Vec<_>) = need_download
+                    let (cached_tiles, mut real_need): (Vec<_>, Vec<_>) = need_download
                         .into_iter()
                         .partition(|t| {
                             cached_set.contains(&CacheCoord {
@@ -426,15 +499,17 @@ impl TileDownloader {
                     for tile in cached_tiles {
                         let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cache_src, coord) {
-                            if !stored.bytes.is_empty() {
+                            if tile_payload::validate(&stored.bytes, None).is_ok() {
                                 tile_files.insert(
                                     (tile.x, tile.y),
                                     MergerTileSource::from_bytes(stored.bytes),
                                 );
                                 completed += 1;
                                 cache_hit_count += 1;
+                                continue;
                             }
                         }
+                        real_need.push(tile);
                     }
                     need_download = real_need;
                 }
@@ -483,7 +558,7 @@ impl TileDownloader {
                 // 1) 检查是否已被浏览补齐（Issue #28）
                 if !active_downloads::is_still_pending(&ask, coord) {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                        if !stored.bytes.is_empty() {
+                        if tile_payload::validate(&stored.bytes, None).is_ok() {
                             return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
                         }
                     }
@@ -492,14 +567,14 @@ impl TileDownloader {
                 // 2) 优先查缓存（#26：直接返回 Bytes，不写 temp_dir）
                 if tcache::get_config().enabled {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                        if !stored.bytes.is_empty() {
+                        if tile_payload::validate(&stored.bytes, None).is_ok() {
                             return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
                         }
                     }
                 }
 
                 // 3) 网络下载
-                let result = Self::download_one_tile(&client, &url, &headers, &file_path, retry_times, Some(&rc)).await;
+                let result = Self::download_one_tile(&client, &url, &headers, &file_path, retry_times, Some(&rc), &self.rate_limit).await;
                 let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
                     if file_path.exists() {
                         Ok(MergerTileSource::from_path(file_path.clone()))
@@ -545,13 +620,17 @@ impl TileDownloader {
                     progress_callback(DownloadProgress {
                         total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: "paused".to_string(),
                     });
-                    pc.wait_if_paused().await;
+                    tokio::select! {
+                        _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                        _ = pc.wait_if_paused() => {},
+                    }
                     progress_callback(DownloadProgress {
                         total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: "downloading".to_string(),
                     });
                 }
             }
             tokio::select! {
+                _ = cancellation.cancelled() => return Err("任务已取消".into()),
                 result = tile_stream.next() => {
                     match result {
                         Some((tile, Ok(path))) => {
@@ -559,6 +638,7 @@ impl TileDownloader {
                             completed += 1;
                         }
                         Some((_tile, Err(e))) => {
+                            if tile_policy::is_terminal_download_error(&e) { return Err(e); }
                             if e == "no_data" {
                                 no_data_count += 1;
                                 completed += 1;
@@ -655,7 +735,10 @@ impl TileDownloader {
                 if token.is_cancelled() { return Err("任务已取消".to_string()); }
             }
             if let Some(pc) = pause_control {
-                pc.wait_if_paused().await;
+                tokio::select! {
+                    _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                    _ = pc.wait_if_paused() => {},
+                }
             }
 
             let retry_count = failed_tiles.len();
@@ -666,7 +749,10 @@ impl TileDownloader {
             });
 
             // 等待一段时间再重试，让服务器限速恢复
-            tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+            tokio::select! {
+                _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                _ = tokio::time::sleep(Duration::from_secs(wait_secs)) => {},
+            }
 
             progress_callback(DownloadProgress {
                 total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
@@ -694,14 +780,14 @@ impl TileDownloader {
                     // 缓存命中直接返回 Bytes，跳过 temp_dir IO（#26）
                     if tcache::get_config().enabled {
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                            if !stored.bytes.is_empty() {
+                            if tile_payload::validate(&stored.bytes, None).is_ok() {
                                 return (tile, Ok(MergerTileSource::from_bytes(stored.bytes)));
                             }
                         }
                     }
 
                     // 重试轮只给 1 次重试机会
-                    let result = Self::download_one_tile(&client, &url, &headers, &file_path, 1, None).await;
+                    let result = Self::download_one_tile(&client, &url, &headers, &file_path, 1, None, &self.rate_limit).await;
                     let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
                         if file_path.exists() {
                             Ok(MergerTileSource::from_path(file_path.clone()))
@@ -732,7 +818,12 @@ impl TileDownloader {
 
             let mut retry_stream = stream::iter(retry_futures).buffer_unordered(rc);
 
-            while let Some((tile, result)) = retry_stream.next().await {
+            loop {
+                let next = tokio::select! {
+                    _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                    result = retry_stream.next() => result,
+                };
+                let Some((tile, result)) = next else { break; };
                 if let Some(token) = cancel_token {
                     if token.is_cancelled() { return Err("任务已取消".to_string()); }
                 }
@@ -743,6 +834,7 @@ impl TileDownloader {
                         failed -= 1;
                     }
                     Err(e) => {
+                        if tile_policy::is_terminal_download_error(&e) { return Err(e); }
                         if e == "no_data" {
                             no_data_count += 1;
                             completed += 1;
@@ -825,6 +917,115 @@ fn tile_quadkey(x: u32, y: u32, z: u8) -> String {
 mod tests {
     use super::*;
 
+    async fn mock_tile_server(response: Vec<u8>) -> (String, Arc<AtomicU32>, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let count = Arc::new(AtomicU32::new(0));
+        let observed = count.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = [0; 4096];
+                if socket.read(&mut request).await.is_err() { continue; }
+                observed.fetch_add(1, Ordering::SeqCst);
+                let _ = socket.write_all(&response).await;
+                let _ = socket.shutdown().await;
+            }
+        });
+        (format!("http://{address}/tile"), count, server)
+    }
+
+    fn wire(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut response = format!("HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    #[tokio::test]
+    async fn refuses_forbidden_sources_even_when_a_resumed_tile_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("0_0.png"), b"old blocked tile").unwrap();
+        let source = custom_source("https://a.tile.openstreetmap.org/{z}/{x}/{y}.png");
+        assert!(TileDownloader::new(source.clone(), None).is_err());
+        let preview = TileDownloader::new_preview(source, None).unwrap();
+        let result = preview.download_tiles(vec![TileCoord { x: 0, y: 0, z: 0 }], 1, dir.path(), None, None, |_| {}).await;
+        assert!(result.unwrap_err().starts_with("OSM_OFFLINE_FORBIDDEN:"));
+        assert!(dir.path().join("0_0.png").exists());
+    }
+
+    #[tokio::test]
+    async fn denied_or_invalid_http_responses_are_not_retried_or_saved() {
+        for (status, mime, body, expected) in [
+            ("403 Forbidden", "image/png", b"blocked".as_slice(), "TILE_ACCESS_DENIED:"),
+            ("401 Unauthorized", "text/html", b"login".as_slice(), "TILE_ACCESS_DENIED:"),
+            ("200 OK", "text/html", b"<html>Access blocked</html>".as_slice(), "INVALID_TILE:"),
+            ("200 OK", "image/png", b"\x89PNG\r\n\x1a\n".as_slice(), "INVALID_TILE:"),
+        ] {
+            let (url, count, server) = mock_tile_server(wire(status, &format!("Content-Type: {mime}\r\n"), body)).await;
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tile.png");
+            let client = Client::builder().no_proxy().build().unwrap();
+            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 3, None, &RateLimitGate::default()).await.unwrap_err();
+            server.abort();
+            assert!(error.starts_with(expected), "{error}");
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            assert!(!path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limits_have_bounded_retries_and_honor_long_retry_after() {
+        for (retry_after, expected_requests) in [("0", 2), ("120", 1)] {
+            let (url, count, server) = mock_tile_server(wire("429 Too Many Requests", &format!("Retry-After: {retry_after}\r\n"), b"limited")).await;
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tile.png");
+            let client = Client::builder().no_proxy().build().unwrap();
+            let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 1, None, &RateLimitGate::default()).await.unwrap_err();
+            server.abort();
+            assert!(error.starts_with("TILE_RATE_LIMITED:"), "{error}");
+            assert_eq!(count.load(Ordering::SeqCst), expected_requests);
+            assert!(!path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn blocks_redirect_before_sending_any_request_to_osm() {
+        // Even a regression must only contact loopback, never the real OSM service.
+        let (target_url, target_count, target_server) = mock_tile_server(wire("200 OK", "", b"blocked")).await;
+        let target_url = reqwest::Url::parse(&target_url).unwrap();
+        let port = target_url.port().unwrap();
+        let location = format!("Location: http://TILE.OPENSTREETMAP.ORG.:{port}/1/0/0.png\r\n");
+        let (url, count, server) = mock_tile_server(wire("302 Found", &location, b"")).await;
+        let client = Client::builder().no_proxy()
+            .resolve("tile.openstreetmap.org.", ([127, 0, 0, 1], port).into())
+            .redirect(tile_policy::offline_redirect_policy()).build().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tile.png");
+        let error = TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 3, None, &RateLimitGate::default()).await.unwrap_err();
+        server.abort();
+        target_server.abort();
+        assert!(error.starts_with("TILE_REDIRECT_DENIED:"), "{error}");
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(target_count.load(Ordering::SeqCst), 0);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn valid_png_and_vector_tiles_still_download() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        for (mime, bytes) in [("image/png", png.into_inner()), ("application/x-protobuf", b"\x1a\x07\x0a\x03osm\x78\x02".to_vec())] {
+            let (url, count, server) = mock_tile_server(wire("200 OK", &format!("Content-Type: {mime}\r\n"), &bytes)).await;
+            let client = Client::builder().no_proxy().build().unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("tile.png");
+            TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 0, None, &RateLimitGate::default()).await.unwrap();
+            server.abort();
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        }
+    }
+
     async fn tile_response(wire_response: Vec<u8>) -> reqwest::Response {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -891,7 +1092,7 @@ mod tests {
             "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         );
         assert!(source.subdomains.is_empty());
-        let downloader = TileDownloader::new(source, None).expect("downloader");
+        let downloader = TileDownloader::new_preview(source, None).expect("downloader");
         let headers = downloader.get_headers();
 
         let user_agent = headers

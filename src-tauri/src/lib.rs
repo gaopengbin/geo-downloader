@@ -23,6 +23,8 @@ pub mod tile_cache;
 pub mod cache_access;
 pub mod pause_control;
 pub mod tile_pack;
+pub mod tile_policy;
+pub mod tile_payload;
 pub mod cache_migration;
 pub mod source_analyzer;
 pub mod assistant;

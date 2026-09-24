@@ -293,6 +293,22 @@ fn default_concurrency() -> usize {
     30
 }
 
+// Run before registering, resuming or exporting a task, including its overlays.
+fn validate_offline_sources(request: &DownloadRequest, source: &TileSource) -> Result<(), String> {
+    let sources = get_tile_sources(request.tianditu_token.clone());
+    validate_offline_sources_in(request, source, &sources)
+}
+
+fn validate_offline_sources_in(request: &DownloadRequest, source: &TileSource, sources: &HashMap<String, TileSource>) -> Result<(), String> {
+    crate::tile_policy::ensure_offline_allowed(&source.url)?;
+    for id in request.overlay_sources.iter().flatten() {
+        if let Some(overlay) = sources.get(id) {
+            crate::tile_policy::ensure_offline_allowed(&overlay.url)?;
+        }
+    }
+    Ok(())
+}
+
 fn default_compression() -> String {
     "lzw".to_string()
 }
@@ -728,6 +744,7 @@ pub async fn create_download_task(
     let sources = get_tile_sources(request.tianditu_token.clone());
     let source = sources.get(&request.source)
         .ok_or_else(|| format!("未知图源: {}", request.source))?.clone();
+    validate_offline_sources(&request, &source)?;
     
     // 估算瓦片数：优先按离散级别集合求和，否则按 zoom..=zoom_max 区段求和
     let z_min = request.zoom;
@@ -1162,10 +1179,11 @@ async fn execute_zoom_level(
                     Some(cancel_token),
                     Some(pause_control),
                     |_p| {},
-                ).await.unwrap_or_else(|e| {
+                ).await.or_else(|e| {
+                    if crate::tile_policy::is_terminal_download_error(&e) { return Err(e); }
                     task_log(app, tm, task_id, "WARN", &format!("叠加图层 [{}] 下载异常: {}（本层瓦片缺失部分将被跳过）", ov_src.name, e));
-                    HashMap::new()
-                });
+                    Ok(HashMap::new())
+                })?;
                 task_log(app, tm, task_id, "INFO", &format!(
                     "叠加图层 [{}] 完成：{}/{}",
                     ov_src.name, ov_files.len(), main_tiles.len()
@@ -1694,6 +1712,7 @@ async fn execute_download_task(
     source_name: &str,
 ) -> Result<(), String> {
     let event_name = format!("task-progress-{}", task_id);
+    validate_offline_sources(&request, &source)?;
     let start_time = std::time::Instant::now();
     let z_min = request.zoom;
     let z_max = request.zoom_max.unwrap_or(z_min).max(z_min);
@@ -2017,7 +2036,7 @@ pub async fn probe_tile(
     let tile_coord = tile::TileCoord { x: tx, y: ty, z: zoom };
 
     // 复用 TileDownloader 的 URL 构造与请求头
-    let downloader = TileDownloader::new(source, proxy.as_deref())?;
+    let downloader = TileDownloader::new_preview(source, proxy.as_deref())?;
     let url = downloader.get_tile_url_public(&tile_coord);
     let headers = downloader.get_headers_public();
     let client = downloader.client();
@@ -2230,6 +2249,8 @@ pub async fn resume_task(
         return Err(format!("未知图源: {}", request.source));
     };
 
+    validate_offline_sources(&request, &source)?;
+
     // 注册任务（复用原 task_id）
     let (cancel_token, pause_control) = task_manager.create_task(
         task_id.clone(),
@@ -2340,9 +2361,7 @@ fn scan_temp_dir_for_zoom(
                             Some(y) => y,
                             None => continue,
                         };
-                        if y_path.is_file()
-                            && std::fs::metadata(&y_path).map_or(false, |m| m.len() > 0)
-                        {
+                        if crate::tile_payload::valid_file(&y_path) {
                             tile_files.insert(
                                 (x, y),
                                 crate::merger::TileSource::from_path(y_path),
@@ -2362,7 +2381,7 @@ fn scan_temp_dir_for_zoom(
             // 文件名格式: {x}_{y}.png
             if let Some((xs, ys)) = stem.split_once('_') {
                 if let (Ok(x), Ok(y)) = (xs.parse::<u32>(), ys.parse::<u32>()) {
-                    if std::fs::metadata(&path).map_or(false, |m| m.len() > 0) {
+                    if crate::tile_payload::valid_file(&path) {
                         tile_files.insert((x, y), crate::merger::TileSource::from_path(path));
                     }
                 }
@@ -2377,6 +2396,25 @@ mod resumable_tile_scan_tests {
     use super::*;
 
     #[test]
+    fn offline_validation_covers_custom_sources_and_overlays() {
+        let mut request: DownloadRequest = serde_json::from_value(serde_json::json!({
+            "bounds": {"north": 1, "south": 0, "east": 1, "west": 0},
+            "zoom": 1, "source": "google_satellite", "format": "mbtiles"
+        })).unwrap();
+        // Use built-in fixtures directly, not the user's mutable source settings.
+        let sources = config::get_tile_sources(None);
+        let mut source = sources["google_satellite"].clone();
+        source.id = "custom-osm-copy".into();
+        source.url = "https://tile.openstreetmap.org./{z}/{x}/{y}.png".into();
+        assert!(validate_offline_sources_in(&request, &source, &sources).unwrap_err().starts_with("OSM_OFFLINE_FORBIDDEN:"));
+        request.overlay_sources = Some(vec!["osm".into()]);
+        let source = &sources["google_satellite"];
+        assert!(validate_offline_sources_in(&request, source, &sources).is_err());
+        request.overlay_sources = None;
+        assert!(validate_offline_sources_in(&request, source, &sources).is_ok());
+    }
+
+    #[test]
     fn no_data_tiles_are_not_counted_as_real_failures() {
         assert_eq!(real_failure_count(12, 12), 0);
         assert_eq!(real_failure_count(12, 7), 5);
@@ -2388,13 +2426,15 @@ mod resumable_tile_scan_tests {
         let dir = tempfile::tempdir().unwrap();
         let sharded_dir = dir.path().join("123");
         std::fs::create_dir_all(&sharded_dir).unwrap();
-        std::fs::write(sharded_dir.join("456.png"), b"sharded").unwrap();
-        std::fs::write(dir.path().join("7_8.png"), b"legacy").unwrap();
+        image::RgbImage::new(2, 2).save(sharded_dir.join("456.png")).unwrap();
+        image::RgbImage::new(2, 2).save(dir.path().join("7_8.png")).unwrap();
+        std::fs::write(dir.path().join("9_10.png"), b"<html>Access blocked</html>").unwrap();
 
         let tiles = scan_temp_dir_for_zoom(dir.path(), 10, false);
 
         assert!(tiles.contains_key(&(123, 456)));
         assert!(tiles.contains_key(&(7, 8)));
+        assert!(!tiles.contains_key(&(9, 10)));
     }
 }
 
@@ -2429,6 +2469,16 @@ pub async fn export_partial_task(
         .save_path
         .clone()
         .ok_or_else(|| "未指定保存路径".to_string())?;
+
+    let sources = get_tile_sources(request.tianditu_token.clone());
+    let source = if let Some(source) = sources.get(&request.source) {
+        source.clone()
+    } else if let Some(version_id) = request.source.strip_prefix("wayback_") {
+        crate::wayback::make_tile_source(version_id, "")
+    } else {
+        return Err(format!("未知图源: {}", request.source));
+    };
+    validate_offline_sources(&request, &source)?;
 
     // 2) 校验格式（仅支持流式格式）
     let format = ExportFormat::from_str(&request.format);
@@ -3902,6 +3952,7 @@ pub async fn create_wayback_task(
     task_name: String,
 ) -> Result<CreateTaskResult, String> {
     let source = crate::wayback::make_tile_source(&version_id, &version_date);
+    validate_offline_sources(&request, &source)?;
     let source_name = source.name.clone();
 
     // 将 DownloadRequest 中的 source 字段重写为 wayback source id

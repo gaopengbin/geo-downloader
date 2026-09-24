@@ -11,7 +11,7 @@ function verifyPackage(packageRoot) {
     throw new Error("npm metadata does not match the frozen GeoD release.");
   }
   if (JSON.stringify(metadata.os) !== '["win32"]' || JSON.stringify(metadata.cpu) !== '["x64"]') {
-    throw new Error("GeoD 0.1.1 npm packages must be limited to Windows x64.");
+    throw new Error("GeoD npm packages must be limited to Windows x64.");
   }
   for (const key of ["dependencies", "optionalDependencies", "peerDependencies"]) {
     if (Object.keys(metadata[key] || {}).length) throw new Error("GeoD npm must have zero runtime dependencies.");

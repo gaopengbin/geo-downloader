@@ -45,7 +45,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $packagePath
 foreach ($folderName in @('docs', 'scripts', 'examples\geod-cli')) {
     New-Item -ItemType Directory -Path (Join-Path $packagePath $folderName) | Out-Null
 }
-Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\geod-cli.md') -Destination (Join-Path $packagePath 'docs\geod-cli.md')
+Copy-Item -LiteralPath (Join-Path $repoRoot 'docs\geod-cli-0.2.md') -Destination (Join-Path $packagePath 'docs\geod-cli-0.2.md')
 Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\geod-render.mjs') -Destination (Join-Path $packagePath 'scripts\geod-render.mjs')
 Get-ChildItem -LiteralPath (Join-Path $repoRoot 'examples\geod-cli') -File | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $packagePath 'examples\geod-cli')
@@ -54,18 +54,17 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path $packagePath 'README.txt'), @'
 GeoD CLI for Windows x64
 
-Start here: docs/geod-cli.md
+Start here: docs/geod-cli-0.2.md
   .\geod.exe --help
   .\geod.exe plan --request examples/geod-cli/henan-overview.json
 
 Data acquisition needs no Tauri UI or Node runtime.
-Map rendering additionally needs your GeoStyle server, Node.js 22+, and Chrome/Edge.
-The package does not include the GeoStyle server or downloaded map data.
+The package does not include map data.
 
 Portable ZIP: extract, then run geod.exe by its full path (PATH is unchanged).
 Windows installer: installs for the current user; open a new terminal afterward.
-Full installation and first-run examples: docs/geod-cli.md.
-Project and release: https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.1.1
+Full installation and first-run examples: docs/geod-cli-0.2.md.
+Project and release: https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.2.0
 '@, $utf8)
 $binaryStream = [System.IO.File]::OpenRead($BinaryPath)
 $binaryHasher = [System.Security.Cryptography.SHA256]::Create()

@@ -2,7 +2,7 @@
 
 // Frozen upstream portable release. Update these together for a new package version.
 module.exports = Object.freeze({
-  version: "0.1.1",
+  version: "0.2.0",
   platform: "windows-x64",
   sourceRevision: "a9d1a9062916141071e1b122de15dc2041f0fdc1",
   portableZipSha256: "24f4ef353a616ea5a0a1d79f16b32d4b598dfabef6a1ae89e5bd7b426ab9ac18",

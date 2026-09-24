@@ -45,7 +45,7 @@ test("packing a substituted executable fails the frozen SHA256 check", (t) => {
 
 test("changing npm version or adding an install hook cannot silently bypass release checks", (t) => {
   const directory = fixture(t);
-  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ ...metadata, version: "0.1.2" }));
+  fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ ...metadata, version: "9.9.9" }));
   assert.throws(() => verifyPackage(directory), /metadata does not match/);
   fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify({ ...metadata, scripts: { ...metadata.scripts, postinstall: "curl bad" } }));
   assert.throws(() => verifyPackage(directory), /installation hooks/);

@@ -20,7 +20,7 @@ function runGeod({
   stderr = process.stderr,
 } = {}) {
   if (platform !== "win32" || arch !== "x64") {
-    stderr.write(`GeoD CLI 0.1.1 supports Windows x64 only; received ${platform}/${arch}. No binary was downloaded.\n`);
+    stderr.write(`GeoD CLI ${require("./release.cjs").version} supports Windows x64 only; received ${platform}/${arch}. No binary was downloaded.\n`);
     return Promise.resolve(1);
   }
   if (Number.parseInt(nodeVersion, 10) < 18) {

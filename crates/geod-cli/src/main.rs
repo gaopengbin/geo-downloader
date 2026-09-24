@@ -8,10 +8,11 @@ use std::{
 const HELP: &str = r#"Download and inspect imagery and boundary data
 
   geod plan --request job.json
-  geod fetch --request job.json --out ./outputs/map
+  geod fetch --request job.json --out ./outputs/map [--work-dir ./work/map]
   geod inspect --bundle ./outputs/map
 Results are JSON on stdout; progress is JSON lines on stderr. --json is accepted.
 fetch is synchronous and never overwrites an existing output directory.
+--work-dir retains validated tiles so the same request can resume after interruption.
 Bounds are WGS84 [west,south,east,north]. Raster grids are EPSG:3857.
 See docs/geod-cli.md and examples/geod-cli for the versioned request contract.
 "#;
@@ -58,16 +59,24 @@ async fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "plan" => {
             let options = options(args, &["--request"])?;
             let request = pipeline::read_request(Path::new(required(&options, "--request")?))?;
-            pipeline::plan(&request)
+            pipeline::plan_local(&request)
         }
         "fetch" => {
-            let options = options(args, &["--request", "--out"])?;
+            let options = options(args, &["--request", "--out", "--work-dir"])?;
             let path = absolute(required(&options, "--request")?)?;
             let request = pipeline::read_request(&path)?;
             let out = absolute(required(&options, "--out")?)?;
-            let manifest =
-                pipeline::fetch(request, path.parent().ok_or("Invalid request path")?, &out)
-                    .await?;
+            let work_dir = options
+                .get("--work-dir")
+                .map(|value| absolute(value))
+                .transpose()?;
+            let manifest = pipeline::fetch_local_with_work_dir(
+                request,
+                path.parent().ok_or("Invalid request path")?,
+                &out,
+                work_dir.as_deref(),
+            )
+            .await?;
             Ok(
                 json!({"ok":true,"bundleDir":out,"manifestPath":out.join("manifest.json"),"manifest":manifest}),
             )

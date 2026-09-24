@@ -1,7 +1,5 @@
 //! Strict, bounded headless jobs and the versioned GeoStyle artifact contract.
-use crate::{
-    config::TileSource, downloader::TileDownloader, exporter, merger, tile, tile_cache, vector,
-};
+use crate::{tile, vector};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Request {
     pub schema_version: String,
@@ -25,30 +23,70 @@ pub struct Request {
     pub limits: Limits,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageryRequest {
     pub url: String,
     pub source: String,
     pub attribution: String,
     pub zoom: u8,
+    #[serde(default)]
+    pub zoom_max: Option<u8>,
+    /// When set, these discrete levels take precedence over zoom..=zoomMax.
+    #[serde(default)]
+    pub zoom_levels: Option<Vec<u8>>,
     #[serde(default = "default_format")]
     pub format: String,
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
     #[serde(default)]
     pub allow_missing: bool,
+    #[serde(default = "default_compression")]
+    pub compression: String,
+    #[serde(default)]
+    pub generate_sidecars: bool,
+    #[serde(default)]
+    pub subdomains: Vec<String>,
+    #[serde(default)]
+    pub overlays: Vec<OverlayRequest>,
+    /// Same WGS84 polygon shape used by the desktop download request.
+    #[serde(default)]
+    pub crop_to_shape: bool,
+    #[serde(default)]
+    pub polygon: Option<Vec<Vec<PolygonCoord>>>,
+    #[serde(default)]
+    pub build_pyramid: bool,
     /// Mask the raster by the union of polygons in this normalized vector layer.
     pub clip_to_layer: Option<String>,
 }
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OverlayRequest {
+    pub url: String,
+    pub source: String,
+    pub attribution: String,
+    #[serde(default)]
+    pub subdomains: Vec<String>,
+    #[serde(default)]
+    pub max_zoom: Option<u8>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolygonCoord {
+    pub lat: f64,
+    pub lng: f64,
+}
 fn default_format() -> String {
     "geotiff".into()
+}
+fn default_compression() -> String {
+    "lzw".into()
 }
 fn default_concurrency() -> usize {
     4
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Limits {
     #[serde(default = "default_tiles")]
@@ -148,7 +186,7 @@ pub fn validate_bounds(b: [f64; 4]) -> Result<(), String> {
     }
     Ok(())
 }
-fn tile_bounds(b: [f64; 4]) -> tile::Bounds {
+pub(crate) fn tile_bounds(b: [f64; 4]) -> tile::Bounds {
     tile::Bounds {
         west: b[0],
         south: b[1],
@@ -156,11 +194,87 @@ fn tile_bounds(b: [f64; 4]) -> tile::Bounds {
         north: b[3],
     }
 }
-fn footprint(b: &tile::TileBounds) -> [f64; 4] {
+pub(crate) fn footprint(b: &tile::TileBounds) -> [f64; 4] {
     [b.west, b.south, b.east, b.north]
 }
 
+pub(crate) fn selected_zooms(i: &ImageryRequest) -> Result<Vec<u8>, String> {
+    if let Some(levels) = &i.zoom_levels {
+        if levels.is_empty() || levels.len() > 23 || levels.iter().any(|&z| z > 22) {
+            return Err("imagery.zoomLevels must contain 1..23 levels in 0..22".into());
+        }
+        let mut sorted = levels.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.len() != levels.len() {
+            return Err("imagery.zoomLevels must not contain duplicate levels".into());
+        }
+        return Ok(sorted);
+    }
+    if i.zoom > 22 || i.zoom_max.is_some_and(|z| z > 22 || z < i.zoom) {
+        return Err("imagery.zoom and zoomMax must be ordered levels in 0..22".into());
+    }
+    Ok((i.zoom..=i.zoom_max.unwrap_or(i.zoom)).collect())
+}
+
+fn validate_tile_source(
+    url: &str,
+    source: &str,
+    attribution: &str,
+    subdomains: &[String],
+) -> Result<(), String> {
+    if source.trim().is_empty() || attribution.trim().is_empty() {
+        return Err("Each imagery source and attribution are required".into());
+    }
+    if !url.contains("{z}")
+        || !url.contains("{x}")
+        || !(url.contains("{y}") || url.contains("{-y}"))
+    {
+        return Err("Tile URL must contain {z}, {x}, and {y} or {-y}".into());
+    }
+    if subdomains.len() > 8
+        || subdomains.iter().any(|s| {
+            s.is_empty()
+                || s.len() > 16
+                || !s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        })
+        || (url.contains("{s}") && subdomains.is_empty())
+    {
+        return Err("Tile URL {s} requires 1..8 alphanumeric subdomains".into());
+    }
+    let sample = url
+        .replace("{s}", subdomains.first().map_or("a", String::as_str))
+        .replace("{z}", "0")
+        .replace("{x}", "0")
+        .replace("{y}", "0")
+        .replace("{-y}", "0");
+    let parsed = reqwest::Url::parse(&sample).map_err(|_| "Invalid tile URL")?;
+    if !["http", "https"].contains(&parsed.scheme())
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("Tile URL must be HTTP(S) without embedded user credentials".into());
+    }
+    crate::tile_policy::ensure_offline_allowed(&sample)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum JobProfile {
+    Hosted,
+    Local,
+}
+
 pub fn plan(request: &Request) -> Result<serde_json::Value, String> {
+    plan_with_profile(request, JobProfile::Hosted)
+}
+
+pub fn plan_local(request: &Request) -> Result<serde_json::Value, String> {
+    plan_with_profile(request, JobProfile::Local)
+}
+
+fn plan_with_profile(request: &Request, profile: JobProfile) -> Result<serde_json::Value, String> {
     validate_bounds(request.bounds)?;
     if request.schema_version != "1.0" {
         return Err("Unsupported request schemaVersion (expected 1.0)".into());
@@ -172,19 +286,88 @@ pub fn plan(request: &Request) -> Result<serde_json::Value, String> {
         return Err("Specify imagery and/or vector".into());
     }
     let limits = &request.limits;
-    if !(1..=4096).contains(&limits.max_tiles)
-        || !(1..=67_108_864).contains(&limits.max_pixels)
-        || !(1..=1800).contains(&limits.timeout_seconds)
+    let (tile_ceiling, pixel_ceiling, time_ceiling) = match profile {
+        JobProfile::Hosted => (4_096, 67_108_864, 1_800),
+        JobProfile::Local => (16_384, 1_073_741_824, 43_200),
+    };
+    if !(1..=tile_ceiling).contains(&limits.max_tiles)
+        || !(1..=pixel_ceiling).contains(&limits.max_pixels)
+        || !(1..=time_ceiling).contains(&limits.timeout_seconds)
     {
-        return Err("limits exceed supported bounds: maxTiles 1..4096, maxPixels 1..67108864, timeoutSeconds 1..1800".into());
+        return Err(format!("limits exceed supported bounds: maxTiles 1..{tile_ceiling}, maxPixels 1..{pixel_ceiling}, timeoutSeconds 1..{time_ceiling}"));
     }
     let mut imagery = serde_json::Value::Null;
     if let Some(i) = &request.imagery {
-        if i.zoom > 22 || !(1..=32).contains(&i.concurrency) {
-            return Err("imagery.zoom must be 0..22 and concurrency 1..32".into());
+        let zooms = selected_zooms(i)?;
+        if !(1..=32).contains(&i.concurrency) {
+            return Err("imagery.concurrency must be 1..32".into());
         }
-        if !["png", "jpeg", "geotiff"].contains(&i.format.as_str()) {
-            return Err("imagery.format must be png, jpeg, or geotiff".into());
+        if !["png", "jpeg", "geotiff", "tiles", "mbtiles", "gpkg"].contains(&i.format.as_str()) {
+            return Err(
+                "imagery.format must be png, jpeg, geotiff, tiles, mbtiles, or gpkg".into(),
+            );
+        }
+        if !["none", "lzw", "deflate"].contains(&i.compression.as_str()) {
+            return Err("imagery.compression must be none, lzw, or deflate".into());
+        }
+        if i.generate_sidecars && i.format != "geotiff" {
+            return Err("imagery.generateSidecars requires geotiff".into());
+        }
+        if i.build_pyramid && i.format != "geotiff" {
+            return Err("imagery.buildPyramid requires geotiff".into());
+        }
+        if i.build_pyramid && (i.crop_to_shape || i.clip_to_layer.is_some()) {
+            return Err("imagery.buildPyramid currently requires an unclipped GeoTIFF".into());
+        }
+        if i.crop_to_shape && i.clip_to_layer.is_some() {
+            return Err("CLIP_INVALID: choose either cropToShape/polygon or clipToLayer".into());
+        }
+        if i.crop_to_shape {
+            if i.format == "jpeg" {
+                return Err(
+                    "CLIP_INVALID: JPEG cannot preserve transparent clipping; use png or geotiff"
+                        .into(),
+                );
+            }
+            if !["png", "geotiff"].contains(&i.format.as_str()) {
+                return Err("CLIP_INVALID: polygon clipping requires png or geotiff".into());
+            }
+            let polygons = i
+                .polygon
+                .as_ref()
+                .ok_or("CLIP_INVALID: cropToShape requires polygon")?;
+            if polygons.is_empty()
+                || polygons.len() > 100
+                || polygons.iter().any(|ring| {
+                    ring.len() < 3
+                        || ring.len() > 10_000
+                        || ring.iter().any(|p| {
+                            !p.lat.is_finite()
+                                || !p.lng.is_finite()
+                                || p.lat.abs() > 85.05112878
+                                || p.lng.abs() > 180.0
+                        })
+                })
+            {
+                return Err("CLIP_INVALID: polygon must contain 1..100 rings of 3..10000 valid WGS84 points".into());
+            }
+        } else if i.polygon.is_some() {
+            return Err("CLIP_INVALID: polygon requires cropToShape=true".into());
+        }
+        if i.overlays.len() > 4 {
+            return Err("imagery.overlays supports at most four sources".into());
+        }
+        validate_tile_source(&i.url, &i.source, &i.attribution, &i.subdomains)?;
+        for overlay in &i.overlays {
+            validate_tile_source(
+                &overlay.url,
+                &overlay.source,
+                &overlay.attribution,
+                &overlay.subdomains,
+            )?;
+            if overlay.max_zoom.is_some_and(|z| z > 22) {
+                return Err("imagery.overlays.maxZoom must be 0..22".into());
+            }
         }
         if let Some(layer) = &i.clip_to_layer {
             if layer.trim().is_empty() || layer.len() > 120 || request.vector.is_none() {
@@ -196,35 +379,37 @@ pub fn plan(request: &Request) -> Result<serde_json::Value, String> {
                         .into(),
                 );
             }
+            if !["png", "geotiff"].contains(&i.format.as_str()) {
+                return Err("CLIP_INVALID: polygon clipping requires png or geotiff".into());
+            }
         }
-        if i.source.trim().is_empty() || i.attribution.trim().is_empty() {
-            return Err("imagery.source and attribution are required".into());
+        let mut total_tiles = 0u64;
+        let mut total_pixels = 0u64;
+        let mut level_plans = Vec::new();
+        for &zoom in &zooms {
+            let (x0, y0, x1, y1, cols, rows) =
+                tile::get_tile_matrix_size(&tile_bounds(request.bounds), zoom);
+            let count = u64::from(cols) * u64::from(rows);
+            let pixels = count * 256 * 256;
+            if (i.format == "jpeg" || i.crop_to_shape || i.clip_to_layer.is_some())
+                && pixels > 67_108_864
+            {
+                return Err("RESOURCE_LIMIT: JPEG and clipped rasters are limited to 67108864 pixels per zoom; use an unclipped streaming format or split the region".into());
+            }
+            total_tiles += count;
+            total_pixels += pixels;
+            level_plans.push(serde_json::json!({"zoom":zoom,"tileCount":count,"width":cols*256,"height":rows*256,
+                "pixels":pixels,"actualBounds":footprint(&tile::get_merged_bounds(x0,y0,x1,y1,zoom))}));
         }
-        if !["{x}", "{y}", "{z}"].iter().all(|key| i.url.contains(key)) {
-            return Err("imagery.url must contain {z}, {x}, and {y}".into());
+        if total_tiles > u64::from(limits.max_tiles) || total_pixels > limits.max_pixels {
+            return Err(format!("RESOURCE_LIMIT: {total_tiles} tiles / {total_pixels} pixels exceed limits; reduce zoom, split region, or explicitly raise bounded limits"));
         }
-        let url = reqwest::Url::parse(&i.url).map_err(|_| "Invalid imagery URL")?;
-        if !["http", "https"].contains(&url.scheme())
-            || !url.username().is_empty()
-            || url.password().is_some()
-        {
-            return Err("imagery.url must be HTTP(S) without embedded user credentials".into());
-        }
-        if url.host_str().is_some_and(|host| {
-            host == "tile.openstreetmap.org" || host.ends_with(".tile.openstreetmap.org")
-        }) {
-            return Err("OSM standard tile servers are for interactive use; configure an XYZ service allowing downloads".into());
-        }
-        let (x0, y0, x1, y1, cols, rows) =
-            tile::get_tile_matrix_size(&tile_bounds(request.bounds), i.zoom);
-        let count = u64::from(cols) * u64::from(rows);
-        let pixels = count * 256 * 256;
-        if count > u64::from(limits.max_tiles) || pixels > limits.max_pixels {
-            return Err(format!("RESOURCE_LIMIT: {count} tiles / {pixels} pixels exceed limits; reduce zoom, split region, or explicitly raise bounded limits"));
-        }
-        imagery = serde_json::json!({"tileCount":count,"width":cols*256,"height":rows*256,"pixels":pixels,
-            "estimatedRgbBytes":pixels*3,"actualBounds":footprint(&tile::get_merged_bounds(x0,y0,x1,y1,i.zoom)),"crs":"EPSG:3857","zoom":i.zoom,
-            "clip":i.clip_to_layer.as_ref().map(|layer|serde_json::json!({"layer":layer,"mode":"polygon-union-alpha","outside":"transparent","vectorGeometriesUnchanged":true}))});
+        let last = level_plans.last().expect("zoom list is nonempty");
+        imagery = serde_json::json!({"tileCount":total_tiles,"width":last["width"],"height":last["height"],"pixels":total_pixels,
+            "estimatedRgbBytes":total_pixels*3,"actualBounds":last["actualBounds"],"crs":"EPSG:3857","zoom":last["zoom"],
+            "zoomLevels":zooms,"levels":level_plans,"format":i.format,"overlayCount":i.overlays.len(),
+            "clip":if i.crop_to_shape { Some(serde_json::json!({"mode":"drawn-polygon-alpha","outside":"transparent"})) }
+                else {i.clip_to_layer.as_ref().map(|layer|serde_json::json!({"layer":layer,"mode":"polygon-union-alpha","outside":"transparent","vectorGeometriesUnchanged":true}))}});
     }
     if let Some(v) = &request.vector {
         vector::validate_request(v, request.bounds)?;
@@ -260,7 +445,7 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
-fn asset(
+pub(crate) fn asset(
     dir: &Path,
     id: &str,
     file: &str,
@@ -327,7 +512,37 @@ pub async fn fetch(
     base_dir: &Path,
     destination: &Path,
 ) -> Result<Manifest, String> {
-    plan(&request)?;
+    fetch_with_work_dir(request, base_dir, destination, None).await
+}
+
+/// A persistent work directory lets the downloader reuse validated tiles after interruption.
+/// It is bound to the exact request so source or bounds changes cannot silently reuse old data.
+pub async fn fetch_with_work_dir(
+    request: Request,
+    base_dir: &Path,
+    destination: &Path,
+    work_dir: Option<&Path>,
+) -> Result<Manifest, String> {
+    fetch_with_profile(request, base_dir, destination, work_dir, JobProfile::Hosted).await
+}
+
+pub async fn fetch_local_with_work_dir(
+    request: Request,
+    base_dir: &Path,
+    destination: &Path,
+    work_dir: Option<&Path>,
+) -> Result<Manifest, String> {
+    fetch_with_profile(request, base_dir, destination, work_dir, JobProfile::Local).await
+}
+
+async fn fetch_with_profile(
+    request: Request,
+    base_dir: &Path,
+    destination: &Path,
+    work_dir: Option<&Path>,
+    profile: JobProfile,
+) -> Result<Manifest, String> {
+    plan_with_profile(&request, profile)?;
     if destination.exists() {
         return Err("OUTPUT_EXISTS: choose a new output directory; existing artifacts are never overwritten".into());
     }
@@ -341,6 +556,39 @@ pub async fn fetch(
     let parent = destination
         .parent()
         .ok_or("Output must have a parent directory")?;
+    let work_dir = if let Some(path) = work_dir {
+        if request.imagery.is_none() {
+            return Err("--work-dir requires an imagery request".into());
+        }
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|e| e.to_string())?
+                .join(path)
+        };
+        if path.starts_with(&destination) || destination.starts_with(&path) {
+            return Err("Work directory and output directory must be separate".into());
+        }
+        let digest = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&request).map_err(|e| e.to_string())?)
+        );
+        if path.exists() {
+            let marker = fs::read_to_string(path.join(".geod-request.sha256")).map_err(|_| {
+                "WORK_DIR_MISMATCH: existing work directory has no GeoD request marker"
+            })?;
+            if marker.trim() != digest {
+                return Err("WORK_DIR_MISMATCH: this directory belongs to another request".into());
+            }
+        } else {
+            fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+            fs::write(path.join(".geod-request.sha256"), &digest).map_err(|e| e.to_string())?;
+        }
+        Some(path)
+    } else {
+        None
+    };
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let stage = tempfile::Builder::new()
         .prefix(".geod-stage-")
@@ -348,11 +596,14 @@ pub async fn fetch(
         .map_err(|e| e.to_string())?;
     let timeout = Duration::from_secs(request.limits.timeout_seconds);
     let started = std::time::Instant::now();
-    let result = tokio::time::timeout(timeout, execute(&request, base_dir, stage.path()))
-        .await
-        .map_err(|_| {
-            "TIMEOUT: job deadline exceeded; no completed bundle was published".to_string()
-        })??;
+    let result = tokio::time::timeout(
+        timeout,
+        execute(&request, base_dir, stage.path(), work_dir.as_deref()),
+    )
+    .await
+    .map_err(|_| {
+        "TIMEOUT: job deadline exceeded; no completed bundle was published".to_string()
+    })??;
     // Synchronous bounded encoders may not yield to Tokio's timer. Still refuse
     // to publish their result when the overall job deadline has elapsed.
     if started.elapsed() >= timeout {
@@ -368,7 +619,11 @@ pub async fn fetch(
     fs::create_dir(&destination)
         .map_err(|e| format!("OUTPUT_EXISTS_OR_UNAVAILABLE: could not reserve destination: {e}"))?;
     for a in &result.assets {
-        fs::rename(stage.path().join(&a.path), destination.join(&a.path))
+        let target = destination.join(&a.path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::rename(stage.path().join(&a.path), target)
             .map_err(|e| format!("Publication incomplete (manifest absent): {e}"))?;
     }
     // Readers only accept a bundle after this final completion marker exists.
@@ -380,7 +635,12 @@ pub async fn fetch(
     Ok(result)
 }
 
-async fn execute(request: &Request, base_dir: &Path, stage: &Path) -> Result<Manifest, String> {
+async fn execute(
+    request: &Request,
+    base_dir: &Path,
+    stage: &Path,
+    tile_work_dir: Option<&Path>,
+) -> Result<Manifest, String> {
     let created_at = chrono::Utc::now().to_rfc3339();
     let mut m = Manifest {
         schema_version: "1.0".into(),
@@ -404,7 +664,11 @@ async fn execute(request: &Request, base_dir: &Path, stage: &Path) -> Result<Man
             .user_agent("GeoD-CLI/0.1 (+https://github.com/gaopengbin/geo-downloader)")
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(request.limits.timeout_seconds))
-            .redirect(if std::env::var_os("GEOD_PUBLIC_MCP").is_some() { reqwest::redirect::Policy::none() } else { reqwest::redirect::Policy::default() })
+            .redirect(if std::env::var_os("GEOD_PUBLIC_MCP").is_some() {
+                reqwest::redirect::Policy::none()
+            } else {
+                reqwest::redirect::Policy::default()
+            })
             .build()
             .map_err(|e| e.to_string())?;
         let result = vector::acquire(v, request.bounds, base_dir, &client).await?;
@@ -451,152 +715,7 @@ async fn execute(request: &Request, base_dir: &Path, stage: &Path) -> Result<Man
                 ));
             }
         }
-        tile_cache::set_enabled(false);
-        let temp = tempfile::Builder::new()
-            .prefix(".geod-tiles-")
-            .tempdir_in(stage)
-            .map_err(|e| e.to_string())?;
-        let source = TileSource {
-            id: "geod-cli-xyz".into(),
-            name: i.source.clone(),
-            url: i.url.clone(),
-            subdomains: vec![],
-            max_zoom: 22,
-            attribution: i.attribution.clone(),
-        };
-        let downloader = TileDownloader::new(source, None)?;
-        let b = tile_bounds(request.bounds);
-        let tiles = tile::get_tiles_in_bounds(&b, i.zoom);
-        let expected = tiles.len() as u32;
-        let mut last_report = 0;
-        let files=downloader.download_tiles(tiles,i.concurrency,temp.path(),None,None,|p|{
-            if p.completed != last_report { eprintln!("{}",serde_json::json!({"phase":"download","completed":p.completed,"total":p.total,"failed":p.failed,"noData":p.no_data})); last_report=p.completed; }
-        }).await?;
-        let mut valid = std::collections::HashMap::new();
-        for (key, source) in files {
-            let bytes = source.bytes().map_err(|e| e.to_string())?;
-            // Bound decompression before allocating decoded data.
-            let reader = image::ImageReader::new(std::io::Cursor::new(bytes.as_ref()))
-                .with_guessed_format()
-                .map_err(|e| e.to_string())?;
-            match reader.into_dimensions() {
-                Ok((256, 256)) if image::load_from_memory(bytes.as_ref()).is_ok() => {
-                    drop(bytes);
-                    valid.insert(key, source);
-                }
-                _ => {
-                    m.quality.warnings.push(format!(
-                        "Invalid or non-256px tile omitted: {}/{}",
-                        key.0, key.1
-                    ));
-                }
-            }
-        }
-        let missing = expected.saturating_sub(valid.len() as u32);
-        if valid.is_empty() {
-            return Err("NO_DATA: no valid imagery tiles received".into());
-        }
-        if missing > 0 && !i.allow_missing {
-            return Err(format!("MISSING_TILES: {missing}/{expected} unavailable or invalid; no bundle published. Set imagery.allowMissing explicitly to accept gaps"));
-        }
-        m.quality.missing_tiles = missing;
-        if missing > 0 {
-            m.quality.status = "partial".into();
-            m.quality
-                .warnings
-                .push(format!("{missing} missing tiles are white in the mosaic"));
-        }
-        let (x0, y0, x1, y1, _, _) = tile::get_tile_matrix_size(&b, i.zoom);
-        let actual = tile::get_merged_bounds(x0, y0, x1, y1, i.zoom);
-        eprintln!("{{\"phase\":\"export\"}}");
-        let image = merger::merge_tiles(&valid, x0, y0, x1, y1);
-        let (width, height) = image.dimensions();
-        let (format, file, mime) = match i.format.as_str() {
-            "png" => (exporter::ExportFormat::Png, "imagery.png", "image/png"),
-            "jpeg" => (exporter::ExportFormat::Jpeg, "imagery.jpg", "image/jpeg"),
-            _ => (exporter::ExportFormat::GeoTiff, "imagery.tif", "image/tiff"),
-        };
-        let (pw, ph) = if let Some(layer) = &i.clip_to_layer {
-            eprintln!("{{\"phase\":\"clip\"}}");
-            let vectors: serde_json::Value = serde_json::from_slice(
-                &fs::read(stage.join("data.geojson")).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
-            let clipped = crate::clip::clip_raster(image, &vectors, layer, &actual)?;
-            let preview = image::DynamicImage::ImageRgba8(clipped.clone())
-                .resize(
-                    width.min(2048),
-                    height.min(2048),
-                    image::imageops::FilterType::Triangle,
-                )
-                .to_rgba8();
-            let size = preview.dimensions();
-            exporter::export_rgba_image_to_file(
-                preview,
-                exporter::ExportFormat::Png,
-                &stage.join("imagery-preview.png"),
-                Some(&actual),
-                "lzw",
-            )?;
-            exporter::export_rgba_image_to_file(
-                clipped,
-                format,
-                &stage.join(file),
-                Some(&actual),
-                "lzw",
-            )?;
-            m.quality.warnings.push(format!("Raster clipped to polygon union in layer '{layer}'; outside pixels are transparent. Vector geometries are unchanged."));
-            size
-        } else {
-            let preview = image::DynamicImage::ImageRgb8(image.clone())
-                .resize(
-                    width.min(2048),
-                    height.min(2048),
-                    image::imageops::FilterType::Triangle,
-                )
-                .to_rgb8();
-            let size = preview.dimensions();
-            exporter::export_image_to_file(
-                preview,
-                exporter::ExportFormat::Png,
-                &stage.join("imagery-preview.png"),
-                Some(&actual),
-                "lzw",
-            )?;
-            exporter::export_image_to_file(image, format, &stage.join(file), Some(&actual), "lzw")?;
-            size
-        };
-        let mut a = asset(
-            stage,
-            "imagery-preview",
-            "imagery-preview.png",
-            "raster",
-            "preview",
-            "image/png",
-            "EPSG:3857",
-            footprint(&actual),
-        )?;
-        a.width = Some(pw);
-        a.height = Some(ph);
-        m.assets.push(a);
-        let mut a = asset(
-            stage,
-            "imagery",
-            file,
-            "raster",
-            "analysis",
-            mime,
-            "EPSG:3857",
-            footprint(&actual),
-        )?;
-        a.width = Some(width);
-        a.height = Some(height);
-        m.assets.push(a);
-        m.provenance.push(Provenance {
-            source: i.source.clone(),
-            attribution: i.attribution.clone(),
-            retrieved_at: created_at.clone(),
-        });
+        crate::imagery_job::execute(request, i, stage, &mut m, tile_work_dir).await?;
     }
     Ok(m)
 }
@@ -623,8 +742,8 @@ pub fn inspect(path: &Path) -> Result<Manifest, String> {
     } else {
         path.to_path_buf()
     };
-    if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 1024 * 1024 {
-        return Err("Manifest exceeds 1 MiB".into());
+    if fs::metadata(&path).map_err(|e| e.to_string())?.len() > 32 * 1024 * 1024 {
+        return Err("Manifest exceeds 32 MiB".into());
     }
     let manifest: Manifest = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("Invalid manifest: {e}"))?;
