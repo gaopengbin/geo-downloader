@@ -554,13 +554,16 @@ dependencies = [
 
 [[package]]
 name = "geod-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
+ "base64",
  "geod-core",
  "image",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

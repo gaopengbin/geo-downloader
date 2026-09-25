@@ -21,12 +21,17 @@ if (!args.length || (args.length === 1 && args[0] === 'serve')) {
   }
   const userData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   const workspace = path.resolve(optionIndex >= 0 ? args[optionIndex + 1] : path.join(userData, 'GeoD', 'Workspace'));
-  const packageSpec = packageIndex >= 0 ? args[packageIndex + 1] : 'https://laogao.xyz/geod-mcp/geod-mcp-0.1.5.tgz';
+  const packageSpec = packageIndex >= 0 ? args[packageIndex + 1] : 'https://laogao.xyz/geod-mcp/geod-mcp-0.1.6.tgz';
   const script = args[1] === 'codex' ? 'install-geod-codex.ps1' : 'install-geod-workbuddy.ps1';
   const result = spawnSync('powershell.exe', ['-NoProfile', '-File', path.join(root, 'scripts', script), '-PackageSpec', packageSpec, '-Workspace', workspace], { stdio: 'inherit', windowsHide: true, shell: false });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
+} else if (args[0] === 'auth' && ['login', 'status', 'logout'].includes(args[1]) && args.length === 2) {
+  const binary = path.join(root, 'bin', process.platform === 'win32' ? 'geod.exe' : 'geod');
+  const result = spawnSync(binary, ['auth', args[1]], { stdio: 'inherit', windowsHide: true, shell: false });
+  if (result.error) throw result.error;
+  process.exitCode = result.status ?? 1;
 } else {
-  process.stderr.write('Usage: geod-mcp [serve | install codex|workbuddy [--workspace PATH] [--package SPEC]]\n');
+  process.stderr.write('Usage: geod-mcp [serve | install codex|workbuddy [--workspace PATH] [--package SPEC] | auth login|status|logout]\n');
   process.exitCode = 2;
 }

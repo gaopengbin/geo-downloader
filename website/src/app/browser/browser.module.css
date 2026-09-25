@@ -51,6 +51,9 @@
 .zoomRow { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .zoomRow button { min-width: 39px; min-height: 35px; border: 1px solid rgba(147,197,253,.23); border-radius: 6px; background: rgba(15,38,80,.7); color: #cde0fa; font-size: 12px; font-weight: 700; }
 .zoomRow button[aria-pressed="true"] { border-color: #60a5fa; color: #fff; background: #1e4e97; }
+.accessNote { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 9px; margin-top: 12px; color: #aac3e1; font-size: 12px; line-height: 1.6; }
+.accessNote a { color: #93c5fd; font-weight: 700; text-underline-offset: 3px; }
+.accessNote a:hover { color: #dbeafe; }
 .actionRow { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 25px; }
 .actionRow button, .download { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 15px; border-radius: 7px; font-size: 12px; font-weight: 700; text-decoration: none; }
 .secondary { border: 1px solid rgba(147,197,253,.3); color: #dbeafe; background: rgba(15,38,80,.7); }

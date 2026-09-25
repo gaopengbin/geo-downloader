@@ -26,7 +26,7 @@ const remoteConfig = `{
 }`;
 const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
-const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.5.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
+const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.6.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
 const agentPrompt = `请从 ${skillUrl} 安装 GeoD Skill，并为当前 Agent 配置 GeoD MCP；通过 MCP 工具完成一次只读规划验证。`;
 
 export default function McpPage() {
@@ -66,9 +66,10 @@ export default function McpPage() {
                   <span className={styles.kicker}>CONNECT / AGENT TOOLS</span>
                   <h2 id="connect-title">选择 MCP 接入方式</h2>
                 </div>
-                <span className={styles.version}>MCP 0.1.5 · HTTPS 或本机</span>
+                <span className={styles.version}>MCP 0.1.6 · HTTPS 或本机</span>
               </div>
               <p className={styles.description}>在用户电脑运行的 Agent 优先接入本机 MCP；云端 Agent 可接入 HTTPS MCP。浏览器 WebMCP 只在你主动选择网页处理时使用。</p>
+              <p className={styles.description}>未登录可下载 0–5 级影像；6 级及以上需要 GeoD 账号。本机 MCP 由用户运行 <code>geod auth login</code>，HTTPS MCP 在高级别下载时发起 OAuth 授权；浏览器版使用官网同站账号。</p>
               <div className={styles.methodGrid}>
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>推荐 · 本机完整 CLI 流程</div>
@@ -81,7 +82,7 @@ export default function McpPage() {
                 <article className={styles.method}>
                   <div className={styles.methodLabel}>云端 Agent · 使用服务器资源</div>
                   <h3>HTTPS MCP</h3>
-                  <p>Marvis 等客户端可手动添加远端地址与 GeoD Skill，并在浏览器中使用自己的 GeoD 账号授权。客户端需要支持 Streamable HTTP 与 OAuth。下载和拼接在 GeoD 服务器上执行。</p>
+                  <p>Marvis 等客户端可手动添加远端地址与 GeoD Skill。0–5 级可匿名使用；请求 6 级及以上时，支持 OAuth 的客户端会引导用户在浏览器中授权。下载和拼接在 GeoD 服务器上执行。</p>
                   <CodeBlock text={remoteUrl} label="MCP 服务地址" />
                   <a href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></a>
                   <CodeBlock text={remoteConfig} label="支持 mcpServers 的客户端示例" />
@@ -99,7 +100,7 @@ export default function McpPage() {
                 <a href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
                   远端 MCP 安装器 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
-                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.5" target="_blank" rel="noopener noreferrer">
+                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.6" target="_blank" rel="noopener noreferrer">
                   查看 MCP 安装包与校验值 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
               </div>

@@ -1,12 +1,14 @@
-# GeoD MCP 0.1.5
+# GeoD MCP 0.1.6
 
 GeoD MCP wraps the GeoD CLI imagery download workflow for AI agents: plan a bounded download, start it, follow progress, inspect the actual result, and read or download verified files. The CLI can also acquire a prepared administrative GeoJSON boundary to clip imagery; this is part of the download request.
+
+Anonymous imagery downloads cover levels 0–5. A request containing level 6 or higher requires a GeoD account. Local MCP uses the user's `geod auth login` session; hosted MCP challenges the high-zoom fetch through OAuth. Planning and vector-only requests remain available without login.
 
 ## Let an agent connect it
 
 Copy this prompt into Codex, WorkBuddy, Doubao Work, or another MCP-capable agent:
 
-> Connect the GeoD imagery download MCP to this agent and install its `geod-agent` Skill from https://geod.laogao.xyz/skills/geod-agent/SKILL.md into this client's supported Skills location. If you are running on my Windows x64 computer with Node.js 22+, use `npx --yes --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.5.tgz geod-mcp install codex --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.5.tgz` (replace `codex` with `workbuddy` for WorkBuddy); this local installer also installs the Skill. Otherwise add `https://laogao.xyz/geod-mcp/mcp` as a Streamable HTTP MCP server and let me authorize with my own GeoD account in the browser. Read the Skill before using the tools. Then call `geod_capabilities`, `geod_sources` with `action: list`, and `geod_plan` to verify without starting a download. Report the Skill and MCP installation locations and the tool results or exact blocker.
+> Connect the GeoD imagery download MCP to this agent and install its `geod-agent` Skill from https://geod.laogao.xyz/skills/geod-agent/SKILL.md into this client's supported Skills location. If you are running on my Windows x64 computer with Node.js 22+, use `npx --yes --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.6.tgz geod-mcp install codex --package https://laogao.xyz/geod-mcp/geod-mcp-0.1.6.tgz` (replace `codex` with `workbuddy` for WorkBuddy); this local installer also installs the Skill. Otherwise add `https://laogao.xyz/geod-mcp/mcp` as a Streamable HTTP MCP server and let me authorize with my own GeoD account in the browser. Read the Skill before using the tools. Then call `geod_capabilities`, `geod_sources` with `action: list`, and `geod_plan` to verify without starting a download. Report the Skill and MCP installation locations and the tool results or exact blocker.
 
 The local package runs on the recipient's computer. The HTTPS endpoint runs on the hosted service and uses per-user OAuth authorization backed by the independent GeoD account at `geod.laogao.xyz`; email registration and password login use that same account. WeChat chat generator accounts and payment records are separate. A client must support remote Streamable HTTP MCP and OAuth to use that endpoint. Doubao Work client integration still needs an in-product test.
 
@@ -15,14 +17,14 @@ The local package runs on the recipient's computer. The HTTPS endpoint runs on t
 Run on Windows x64 with Node.js 22+:
 
 ```powershell
-$pkg = 'https://laogao.xyz/geod-mcp/geod-mcp-0.1.5.tgz'
+$pkg = 'https://laogao.xyz/geod-mcp/geod-mcp-0.1.6.tgz'
 npx --yes --package $pkg geod-mcp install codex --package $pkg
 npx --yes --package $pkg geod-mcp install workbuddy --package $pkg
 ```
 
 The installer places the package under `%LOCALAPPDATA%\GeoD\Agent`, creates `%LOCALAPPDATA%\GeoD\Workspace`, calls `geod_capabilities` and `geod_plan` through a real MCP process, then registers the selected client. An explicit `--workspace` path overrides that default. Reinstalling updates a GeoD registration made by this installer to the selected workspace after backing up client configuration; a different registration is preserved. Codex installs `geod-agent` under `$CODEX_HOME\skills` (or `%USERPROFILE%\.codex\skills`); WorkBuddy installs it under `%USERPROFILE%\.agents\skills`. Existing modified Skills are preserved. Restart the client session if it does not discover the new server or Skill. WorkBuddy configuration and MCP tool calls are checked independently; a WorkBuddy client session has not been tested on the release machine.
 
-The installer refuses to overwrite a different `geod` registration. A copy and SHA-256 checksum are on the [GitHub Release](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.5).
+The installer refuses to overwrite a different `geod` registration. A copy and SHA-256 checksum are on the [GitHub Release](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.6).
 
 ## Hosted HTTPS MCP
 
@@ -43,7 +45,7 @@ For clients accepting `mcpServers` JSON and supporting OAuth discovery:
 }
 ```
 
-Each user logs in or registers on the authorization page. The server issues a GeoD-specific token and keeps each user's jobs in a separate workspace. Public accounts can select `nasa_gibs_blue_marble` through `geod_sources` and download NASA GIBS imagery with DataV administrative GeoJSON boundaries. Hosted custom source registration is unavailable because hosted jobs use GeoD server resources. Limits are 64 tiles, 4 million pixels, 180 seconds, and three fetch jobs per account per day, with one public fetch running at a time. For other sources or larger downloads, use the local package where the user controls the data source and machine.
+Anonymous clients can plan and download imagery through zoom 5. A higher zoom fetch returns an OAuth challenge; after the user logs in or registers, the server issues a GeoD-specific token and keeps their jobs in a separate workspace. The hosted source is `nasa_gibs_blue_marble`, with optional DataV administrative GeoJSON boundaries. Hosted custom source registration is unavailable because hosted jobs use GeoD server resources. Limits are 64 tiles, 4 million pixels and 180 seconds per job; signed-in accounts have three fetch jobs per day, while the anonymous pool has a shared daily capacity. Only one public fetch runs at a time. For other sources or larger downloads, use the local package where the user controls the data source and machine.
 
 The hosted server has nine tools because it adds `geod_artifact_link`, which issues a signed HTTPS download URL valid for ten minutes. The local package has eight tools and returns local artifact paths. Neither exposes `geod_render`.
 

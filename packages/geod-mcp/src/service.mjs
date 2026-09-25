@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 let installedCliRoot;
 try { installedCliRoot = path.dirname(require.resolve('geod-cli/package.json')); } catch { /* Source checkout may use its own release binary. */ }
 const MAX_INLINE = 8 * 1024 * 1024;
-const MCP_VERSION = '0.1.5';
+const MCP_VERSION = '0.1.6';
 const PUBLIC_SOURCE = {
   id: 'nasa_gibs_blue_marble', name: 'NASA GIBS Blue Marble', kind: 'builtIn',
   attribution: 'NASA GIBS', maxZoom: 8, tileSize: 256, available: true, availabilityVerified: false, default: false, reason: null,
@@ -23,6 +23,12 @@ const terminal = status => ['completed', 'failed', 'cancelled'].includes(status)
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const inside = (root, target) => { const relative = path.relative(root, target); return !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative); };
 const sha256 = data => createHash('sha256').update(data).digest('hex');
+export const highestImageryZoom = request => {
+  const image = request?.imagery;
+  if (!image) return 0;
+  if (Array.isArray(image.zoomLevels)) return Math.max(...image.zoomLevels);
+  return image.zoomMax ?? image.zoom ?? 0;
+};
 
 export class GeoDService {
   constructor(env = process.env) {
@@ -58,6 +64,9 @@ export class GeoDService {
     return { ok: true, name: 'GeoD MCP', version: MCP_VERSION, transport: this.env.GEOD_TRANSPORT || 'stdio', workspace: this.workspace, outputDir: this.outputDir,
       cli: { path: this.bin, available: existsSync(this.bin) },
       limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: this.env.GEOD_PUBLIC_MCP === '1' ? 64 : 4096, maxPixels: this.env.GEOD_PUBLIC_MCP === '1' ? 4194304 : 67108864 },
+      account: { anonymousMaxZoom: 5, loginRequiredFromZoom: 6,
+        authenticated: this.env.GEOD_SERVER_AUTHENTICATED === '1' ? true : this.env.GEOD_ANONYMOUS_MCP === '1' ? false : null,
+        localAuthCommand: this.env.GEOD_TRANSPORT === 'stdio' ? 'geod-mcp auth login' : null },
       workflow: ['geod_sources list before choosing imagery', 'geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', ...(typeof this.artifactLink === 'function' ? ['geod_artifact_link for large downloads'] : [])],
       sources: { customRegistration: this.env.GEOD_PUBLIC_MCP !== '1', registry: this.env.GEOD_PUBLIC_MCP === '1' ? 'hosted allowlist' : 'current user GeoD CLI configuration' },
       behavior: { localPaths: 'workspace or configured output directory only', jobsSurviveClientTimeout: true, jobsRequireServerProcess: true, downloadsResumeAfterRestart: false, clipping: 'imagery.clipToLayer selects a polygon layer; PNG/GeoTIFF outside pixels become transparent; vectors unchanged' },
@@ -246,6 +255,8 @@ export class GeoDService {
 
   async startFetch(request) {
     await this.ready;
+    if (this.env.GEOD_ANONYMOUS_MCP === '1' && highestImageryZoom(request) > 5)
+      throw fail('LOGIN_REQUIRED', 'Zoom 6 and higher requires GeoD login. Complete MCP OAuth authorization and retry.');
     const value = await this.requestValue(request);
     // Business validation stays in geod-core and runs before accepting a job.
     await this.plan(value);

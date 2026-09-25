@@ -1,5 +1,6 @@
 import { BROWSER_SOURCE, browserTileUrl, type BrowserSource } from "./browser-sources";
 import { clipBounds, validateClipGeometry, type ClipGeometry } from "./browser-clip";
+import { requireBrowserZoomAccess } from "./browser-access";
 
 export type Bounds = [number, number, number, number];
 
@@ -185,6 +186,7 @@ export async function downloadBrowserImagery(
   onProgress: (done: number, total: number) => void,
   signal?: AbortSignal,
 ) {
+  await requireBrowserZoomAccess(plan.zoom);
   if (signal?.aborted) throw new DOMException("任务已取消。", "AbortError");
   const controller = new AbortController();
   const relayAbort = () => controller.abort();

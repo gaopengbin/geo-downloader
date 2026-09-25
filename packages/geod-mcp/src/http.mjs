@@ -6,7 +6,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import { GeoDService } from './service.mjs';
+import { GeoDService, highestImageryZoom } from './service.mjs';
 import { createServer } from './server.mjs';
 import { createOAuth } from './oauth.mjs';
 
@@ -24,7 +24,7 @@ export async function createGeoDHttpServer(env = process.env) {
   if (!/^[a-z0-9.-]+$/i.test(publicHost)) throw new Error('GEOD_MCP_PUBLIC_HOST is invalid');
   const allowedHosts = new Set([publicHost.toLowerCase(), `127.0.0.1:${port}`, `localhost:${port}`]);
   const allowedOrigins = new Set([`https://${publicHost.toLowerCase()}`, `http://127.0.0.1:${port}`, `http://localhost:${port}`]);
-  const service = new GeoDService({ ...env, GEOD_TRANSPORT: 'streamable-http' });
+  const service = new GeoDService({ ...env, GEOD_TRANSPORT: 'streamable-http', GEOD_SERVER_AUTHENTICATED: '1' });
   await service.ready;
   if (!existsSync(service.bin)) throw new Error('GEOD_BIN is unavailable');
   const signature = (userId, jobId, artifactId, expires) => createHmac('sha256', token).update(`${userId ? `${userId}\n` : ''}${jobId}\n${artifactId}\n${expires}`).digest('hex');
@@ -39,9 +39,40 @@ export async function createGeoDHttpServer(env = process.env) {
   const handler = createMcpHandler(() => createServer(service));
   const nodeHandler = toNodeHandler(handler);
   const oauth = env.GEOD_MCP_OAUTH_STATE_FILE ? await createOAuth({ file: env.GEOD_MCP_OAUTH_STATE_FILE, publicHost, accountApi: env.GEOD_ACCOUNT_API_URL }) : null;
+  let globalJobs = 0;
+  let guestDaily = { date: '', count: 0 };
+  const guestWorkspace = path.join(service.workspace, 'guests');
+  if (oauth) await mkdir(guestWorkspace, { recursive: true, mode: 0o700 });
+  const guestService = oauth ? new GeoDService({ ...env, GEOD_WORKSPACE: guestWorkspace, GEOD_OUTPUT_DIR: path.join(guestWorkspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1', GEOD_ANONYMOUS_MCP: '1', GEOD_SERVER_AUTHENTICATED: '0' }) : null;
+  if (guestService) {
+    await guestService.ready;
+    const start = guestService.startJob.bind(guestService);
+    guestService.startJob = async (kind, worker) => {
+      const date = new Date().toISOString().slice(0, 10);
+      if (guestDaily.date !== date) guestDaily = { date, count: 0 };
+      if (guestDaily.count >= 20) throw Object.assign(new Error('Anonymous hosted GeoD daily capacity reached; sign in or use local MCP'), { code: 'DAILY_LIMIT' });
+      if (globalJobs >= 1) throw Object.assign(new Error('Hosted GeoD is busy; retry shortly'), { code: 'BUSY' });
+      globalJobs++;
+      try {
+        const result = await start(kind, worker);
+        guestDaily.count++;
+        guestService.jobs.get(result.jobId).done.finally(() => { globalJobs--; });
+        return result;
+      } catch (cause) { globalJobs--; throw cause; }
+    };
+    guestService.artifactLink = async (jobId, artifactId) => {
+      const { artifact } = await guestService.artifactFile(jobId, artifactId);
+      const expires = Math.floor(Date.now() / 1000) + 600;
+      const url = new URL(`https://${publicHost}/geod-mcp/artifacts/guest/${encodeURIComponent(jobId)}/${encodeURIComponent(artifactId)}`);
+      url.searchParams.set('expires', String(expires));
+      url.searchParams.set('sig', signature('guest', jobId, artifactId, expires));
+      return { ok: true, url: url.href, expiresAt: new Date(expires * 1000).toISOString(), artifact: { id: artifact.id, name: artifact.name, bytes: artifact.bytes, sha256: artifact.sha256, mimeType: artifact.mimeType } };
+    };
+  }
+  const guestHandler = guestService ? createMcpHandler(() => createServer(guestService)) : null;
+  const guestNodeHandler = guestHandler ? toNodeHandler(guestHandler) : null;
   const userServices = new Map();
   const pendingUsers = new Map();
-  let globalJobs = 0;
   const userEntry = userId => {
     if (!/^user-[a-f0-9-]{36}$/i.test(userId)) throw new Error('Invalid user ID');
     if (userServices.has(userId)) return Promise.resolve(userServices.get(userId));
@@ -49,7 +80,7 @@ export async function createGeoDHttpServer(env = process.env) {
     const pending = (async () => {
     const workspace = path.join(service.workspace, 'users', userId);
     await mkdir(workspace, { recursive: true, mode: 0o700 });
-    const userService = new GeoDService({ ...env, GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1' });
+    const userService = new GeoDService({ ...env, GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1', GEOD_SERVER_AUTHENTICATED: '1' });
     await userService.ready;
     const startJob = userService.startJob.bind(userService);
     userService.startJob = async (kind, worker) => {
@@ -95,7 +126,7 @@ export async function createGeoDHttpServer(env = process.env) {
       void oauth.handle(req, res, parsed).then(handled => { if (!handled) { res.writeHead(404); res.end(); } }).catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
       return;
     }
-    const artifactMatch = /^\/artifacts\/(?:(?<user>user-[a-f0-9-]{36})\/)?(?<job>[a-zA-Z0-9_-]{1,160})\/(?<artifact>[a-zA-Z0-9_-]{1,160})$/.exec(pathname);
+    const artifactMatch = /^\/artifacts\/(?:(?<user>user-[a-f0-9-]{36}|guest)\/)?(?<job>[a-zA-Z0-9_-]{1,160})\/(?<artifact>[a-zA-Z0-9_-]{1,160})$/.exec(pathname);
     if (!artifactMatch && (pathname !== '/mcp' || !['POST', 'GET', 'DELETE'].includes(req.method))) { res.writeHead(404); res.end(); return; }
     if (artifactMatch) {
       if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
@@ -111,7 +142,7 @@ export async function createGeoDHttpServer(env = process.env) {
       }
       void (async () => {
         try {
-          const targetService = userId ? (await userEntry(userId)).service : service;
+          const targetService = userId === 'guest' ? guestService : userId ? (await userEntry(userId)).service : service;
           const { artifact, file } = await targetService.artifactFile(jobId, artifactId);
           const digest = createHash('sha256');
           for await (const chunk of createReadStream(file)) digest.update(chunk);
@@ -128,14 +159,31 @@ export async function createGeoDHttpServer(env = process.env) {
     const provided = typeof authorization === 'string' && authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
     const valid = provided.length >= 32 && timingSafeEqual(hash(provided), expected);
     const userId = valid ? null : oauth?.validate(provided);
-    if (!valid && !userId) {
+    if (!valid && !userId && !guestNodeHandler) {
       const challenge = oauth ? `Bearer resource_metadata="${oauth.metadataUrl}", scope="geod:tools"` : 'Bearer realm="GeoD MCP"';
       res.writeHead(401, { 'www-authenticate': challenge, 'cache-control': 'no-store' });
       res.end(); return;
     }
     if (userId) void userEntry(userId).then(entry => entry.nodeHandler(req, res)).catch(() => { if (!res.headersSent) { res.writeHead(503); res.end(); } });
-    else void nodeHandler(req, res);
+    else if (valid) void nodeHandler(req, res);
+    else if (req.method === 'POST') {
+      void (async () => {
+        let body = '';
+        for await (const chunk of req) {
+          body += chunk;
+          if (body.length > 2_100_000) { res.writeHead(413); res.end(); return; }
+        }
+        let message;
+        try { message = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
+        if (message?.method === 'tools/call' && message.params?.name === 'geod_fetch' &&
+            highestImageryZoom(message.params?.arguments?.request) > 5) {
+          res.writeHead(401, { 'www-authenticate': `Bearer resource_metadata="${oauth.metadataUrl}", scope="geod:tools"`, 'cache-control': 'no-store' });
+          res.end(); return;
+        }
+        await guestNodeHandler(req, res, message);
+      })().catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
+    } else void guestNodeHandler(req, res);
   });
-  server.on('close', () => { void handler.close(); void service.close(); for (const entry of userServices.values()) { void entry.handler.close(); void entry.service.close(); } });
+  server.on('close', () => { void handler.close(); void service.close(); void guestHandler?.close(); void guestService?.close(); for (const entry of userServices.values()) { void entry.handler.close(); void entry.service.close(); } });
   return { server, service, port };
 }

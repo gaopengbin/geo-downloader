@@ -204,7 +204,7 @@ pub(crate) fn footprint(b: &tile::TileBounds) -> [f64; 4] {
     [b.west, b.south, b.east, b.north]
 }
 
-pub(crate) fn selected_zooms(i: &ImageryRequest) -> Result<Vec<u8>, String> {
+pub fn selected_zooms(i: &ImageryRequest) -> Result<Vec<u8>, String> {
     if let Some(levels) = &i.zoom_levels {
         if levels.is_empty() || levels.len() > 23 || levels.iter().any(|&z| z > 22) {
             return Err("imagery.zoomLevels must contain 1..23 levels in 0..22".into());

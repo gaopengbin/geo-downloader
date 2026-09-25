@@ -3,7 +3,7 @@
 Install the GeoD command line on **Windows x64** with **Node.js 18 or newer**:
 
 ```powershell
-npm install --global https://laogao.xyz/geod-cli/geod-cli-0.3.1.tgz
+npm install --global https://laogao.xyz/geod-cli/geod-cli-0.3.2.tgz
 geod --version
 geod --help
 ```
@@ -11,10 +11,12 @@ geod --help
 Or run without a permanent global installation:
 
 ```powershell
-npx --yes https://laogao.xyz/geod-cli/geod-cli-0.3.1.tgz --help
+npx --yes https://laogao.xyz/geod-cli/geod-cli-0.3.2.tgz --help
 ```
 
 GeoD plans and acquires geodata from a JSON request, writes imagery and GeoJSON with source metadata, and inspects existing bundles:
+
+Imagery levels 0–5 can be downloaded anonymously. If any selected level is 6 or higher, run `geod auth login` once and complete GeoD account authorization in your own browser. `geod auth status` checks the current session; `geod auth logout` removes the local credentials. `geod plan` remains available without login and reports `loginRequired` for the requested levels. The imagery download still runs locally.
 
 ```powershell
 geod plan --request request.json
@@ -36,14 +38,14 @@ Requests may use `imagery.sourceId` (and `overlays[].sourceId`) instead of a URL
 
 Imagery requests support multiple zoom levels, GeoTIFF/PNG/JPEG mosaics, MBTiles, GeoPackage, raw XYZ tiles, overlays, polygon clipping, TIFF compression and overviews. Add `--work-dir ./geod-work` to `fetch` to reuse validated tiles after an interruption. The download and export run on your own computer.
 
-See the [GeoD CLI 0.3 guide](https://github.com/gaopengbin/geo-downloader/blob/geod-cli-v0.3.1/docs/geod-cli-0.3.md) for request examples and limits.
+See the [GeoD CLI 0.3 guide](https://github.com/gaopengbin/geo-downloader/blob/geod-cli-v0.3.2/docs/geod-cli-0.3.md) for request examples and limits.
 
-Version 0.3.1 includes the Windows x64 `geod.exe` directly in this npm package. Installation does not fetch a binary from GitHub, run a postinstall script, or require Rust, Tauri, GDAL or a separate Visual C++ runtime installation. The Node launcher passes arguments directly to the executable, preserves the current directory and native stdout/stderr, and returns its exit code (including cancellation code 130).
+Version 0.3.2 includes the Windows x64 `geod.exe` directly in this npm package. Installation does not fetch a binary from GitHub, run a postinstall script, or require Rust, Tauri, GDAL or a separate Visual C++ runtime installation. The Node launcher passes arguments directly to the executable, preserves the current directory and native stdout/stderr, and returns its exit code (including cancellation code 130).
 
-macOS, Linux and Windows ARM64 are not supported by this package version. The npm launcher requires Node.js; the separately published [portable ZIP and Windows installer](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.1) run without Node.js. Fetching map data requires access to the sources in the request and remains subject to their terms and availability. This package does not include map data or an AI service.
+macOS, Linux and Windows ARM64 are not supported by this package version. The npm launcher requires Node.js; the separately published [portable ZIP and Windows installer](https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.2) run without Node.js. Fetching map data requires access to the sources in the request and remains subject to their terms and availability. This package does not include map data or an AI service.
 
 ## Package integrity
 
 The build verifies the frozen upstream portable ZIP, its executable and build metadata before packaging. `build-info.json` records the native source revision and executable hash. There are no runtime npm dependencies or install hooks.
 
-For maintainers, run `node scripts/package-geod-cli-npm.mjs` from the repository. The resulting tarball is staged under `output/geod-cli-public-0.3.1/npm/`; the executable is not checked into the package source directory. Direct packing without the verified executable fails.
+For maintainers, run `node scripts/package-geod-cli-npm.mjs` from the repository. The resulting tarball is staged under `output/geod-cli-public-0.3.2/npm/`; the executable is not checked into the package source directory. Direct packing without the verified executable fails.

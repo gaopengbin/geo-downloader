@@ -127,6 +127,13 @@ $('createBtn').onclick=()=>run(async()=>{const address=email();if(!challengeId)t
     if (pathname === '/.well-known/oauth-authorization-server/geod-mcp' && req.method === 'GET') {
       json(res, 200, { issuer, authorization_endpoint: `${issuer}/oauth/authorize`, token_endpoint: `${issuer}/oauth/token`, registration_endpoint: `${issuer}/oauth/register`, response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'], scopes_supported: ['geod:tools'] }); return true;
     }
+    if (pathname === '/oauth/session' && req.method === 'GET') {
+      const bearer = String(req.headers.authorization || '').match(/^Bearer ([A-Za-z0-9_-]{32,})$/)?.[1];
+      const userId = bearer && validate(bearer);
+      if (!userId) { error(res, 401, 'invalid_token', 'GeoD login required'); return true; }
+      json(res, 200, { authenticated: true });
+      return true;
+    }
     if (pathname === '/oauth/register' && req.method === 'POST') {
       try {
         const input = await body(req);

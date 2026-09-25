@@ -47,10 +47,20 @@ test('separate account OAuth uses PKCE, resource binding and isolated MCP worksp
   const base = 'http://127.0.0.1:19475';
   let client;
   try {
-    const unauth = await fetch(`${base}/mcp`, { method: 'POST' });
-    assert.equal(unauth.status, 401);
-    assert.equal((await fetch(`${base}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${legacyToken}` } })).status, 401);
-    assert.match(unauth.headers.get('www-authenticate'), /oauth-protected-resource/);
+    const anonymous = new Client({ name: 'guest-client', version: '1.0.0' });
+    await anonymous.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+    const guestCapabilities = (await anonymous.callTool({ name: 'geod_capabilities', arguments: {} })).structuredContent;
+    assert.equal(guestCapabilities.account.anonymousMaxZoom, 5);
+    assert.equal(guestCapabilities.account.authenticated, false);
+    const lowRequest = { schemaVersion: '1.0', name: 'anonymous low zoom', bounds: [110, 30, 110.01, 30.01], imagery: { sourceId: 'nasa_gibs_blue_marble', zoom: 5 } };
+    const lowPlan = (await anonymous.callTool({ name: 'geod_plan', arguments: { request: lowRequest } })).structuredContent;
+    assert.equal(lowPlan.ok, true);
+    const highRequest = { schemaVersion: '1.0', name: 'high zoom', bounds: [110, 30, 110.01, 30.01], imagery: { sourceId: 'nasa_gibs_blue_marble', zoom: 6 } };
+    const challenged = await post(`${base}/mcp`, { jsonrpc: '2.0', id: 71, method: 'tools/call', params: { name: 'geod_fetch', arguments: { request: highRequest } } });
+    assert.equal(challenged.status, 401);
+    assert.match(challenged.headers.get('www-authenticate'), /oauth-protected-resource/);
+    assert.equal((await post(`${base}/mcp`, { jsonrpc: '2.0', id: 72, method: 'tools/call', params: { name: 'geod_fetch', arguments: { request: highRequest } } }, false, { authorization: `Bearer ${legacyToken}` })).status, 401);
+    await anonymous.close();
     const resourceDoc = await fetch(`${base}/.well-known/oauth-protected-resource/geod-mcp/mcp`).then(r => r.json());
     assert.equal(resourceDoc.resource, 'https://laogao.xyz/geod-mcp/mcp');
     const issuerDoc = await fetch(`${base}/.well-known/oauth-authorization-server/geod-mcp`).then(r => r.json());
@@ -96,6 +106,7 @@ test('separate account OAuth uses PKCE, resource binding and isolated MCP worksp
     const grant = await post(`${base}/oauth/token`, { grant_type: 'authorization_code', client_id: clientId, redirect_uri: 'http://127.0.0.1:49152/callback', code, code_verifier: verifier, resource: resourceDoc.resource }, true);
     assert.equal(grant.status, 200);
     const token = (await grant.json()).access_token;
+    assert.equal((await fetch(`${base}/oauth/session`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
     assert.equal((await post(`${base}/oauth/token`, { grant_type: 'authorization_code', client_id: clientId, redirect_uri: 'http://127.0.0.1:49152/callback', code, code_verifier: verifier, resource: resourceDoc.resource }, true)).status, 400);
     client = new Client({ name: 'oauth-client', version: '1.0.0' });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}` } } }));

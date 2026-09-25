@@ -5,6 +5,7 @@ import { Download, MapPinned, Plus, Square, Trash2, Zap } from "lucide-react";
 import { downloadBrowserImagery, planBrowserImagery, type Bounds, type ImageryPlan } from "../../lib/browser-imagery";
 import { BROWSER_SOURCE, probeBrowserSource, readBrowserSources, saveBrowserSources, validateBrowserSource, type BrowserSource, type BrowserSourceStore } from "../../lib/browser-sources";
 import { clipBounds, validateClipGeometry, type ClipGeometry } from "../../lib/browser-clip";
+import { browserAccount, FREE_MAX_ZOOM } from "../../lib/browser-access";
 import styles from "./browser.module.css";
 
 type Tool = { name: string; description: string; inputSchema: object; annotations?: object; execute: (input: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<object> };
@@ -49,6 +50,7 @@ const sourcesSchema = { type: "object", properties: {
 
 function planSummary(plan: ImageryPlan) {
   return { sourceId: plan.sourceId, source: plan.source, attribution: plan.attribution, bounds: plan.bounds, zoom: plan.zoom,
+    loginRequired: plan.zoom > FREE_MAX_ZOOM, anonymousMaxZoom: FREE_MAX_ZOOM,
     tileCount: plan.tiles, tileSize: plan.tileSize, width: plan.width, height: plan.height,
     clip: plan.clipGeometry ? `${plan.clipGeometry.type}；边界外透明，附带 clip.geojson` : "无多边形裁剪",
     clipAttribution: plan.clipAttribution ?? null,
@@ -77,6 +79,7 @@ export default function BrowserImagery() {
   const [busy, setBusy] = useState(false);
   const [ready, setReady] = useState<{ preview: string; archive: string; source: string; clipped: boolean } | null>(null);
   const [webMcpStatus, setWebMcpStatus] = useState("检测中");
+  const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
   const busyRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const urlsRef = useRef<string[]>([]);
@@ -97,6 +100,11 @@ export default function BrowserImagery() {
   useEffect(() => {
     const saved = readBrowserSources(); storeRef.current = saved; setStore(saved);
     activeRef.current = saved.defaultSourceId; setActiveId(saved.defaultSourceId);
+  }, []);
+  useEffect(() => {
+    const refresh = () => { void browserAccount().then(setLoggedIn).catch(() => setLoggedIn(null)); };
+    refresh(); window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, []);
 
   const makePlan = useCallback((bounds: Bounds, level: number, sourceId: string, clipGeometry?: unknown, clipAttribution?: string) =>
@@ -260,6 +268,10 @@ export default function BrowserImagery() {
           aria-pressed={zoom === level} disabled={busy} onClick={() => { setZoom(level); setPlan(null); clearReady(); }}>{level}</button>)}
         {![0, 2, 4, 5, 6, 7, 8, 10, 12, 14, 16, 18, 20, 22].includes(active.maxZoom) && <button type="button" aria-pressed={zoom === active.maxZoom}
           disabled={busy} onClick={() => { setZoom(active.maxZoom); setPlan(null); clearReady(); }}>{active.maxZoom}</button>}
+      </div>
+      <div className={styles.accessNote}>
+        <span>未登录可下载 0–{FREE_MAX_ZOOM} 级；6 级及以上需要 GeoD 账号。{loggedIn === true ? "当前已登录。" : loggedIn === false ? "当前未登录。" : "正在确认登录状态。"}</span>
+        {loggedIn !== true && <a href="/geod" target="_blank" rel="noopener noreferrer">登录或注册 GeoD</a>}
       </div>
       <div className={styles.actionRow}><button type="button" className={styles.secondary} disabled={busy} onClick={handlePlan}>估算大小</button>
         <button type="button" className={styles.primary} disabled={busy} onClick={handleFetch}><Zap size={17} aria-hidden="true" />在本机下载并拼接</button>

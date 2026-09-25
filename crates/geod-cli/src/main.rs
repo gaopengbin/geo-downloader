@@ -1,5 +1,6 @@
 use geod_core::pipeline;
 mod sources;
+mod auth;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -15,6 +16,7 @@ const HELP: &str = r#"Download and inspect imagery and boundary data
   geod sources register --id my_source --name "My imagery" --url "https://example.com/{z}/{x}/{y}.png" --attribution "Provider"
   geod sources default --id my_source
   geod sources probe --id my_source [--zoom 0 --x 0 --y 0]
+  geod auth login|status|logout
 Use --source ID with plan/fetch, or imagery.sourceId in job.json. A default
 source is used when imagery has no url/sourceId. Registered sources are local
 to this user's GeoD CLI configuration; they are not uploaded to GeoD.
@@ -70,13 +72,21 @@ async fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 Path::new(required(&options, "--request")?),
                 options.get("--source").map(String::as_str),
             )?;
-            pipeline::plan_local(&request)
+            let mut plan = pipeline::plan_local(&request)?;
+            let highest = request.imagery.as_ref().map(|image| pipeline::selected_zooms(image))
+                .transpose()?.and_then(|levels| levels.into_iter().max()).unwrap_or(0);
+            if let Some(object) = plan.as_object_mut() {
+                object.insert("loginRequired".into(), json!(highest > auth::FREE_MAX_ZOOM));
+                object.insert("anonymousMaxZoom".into(), json!(auth::FREE_MAX_ZOOM));
+            }
+            Ok(plan)
         }
         "fetch" => {
             let options = options(args, &["--request", "--out", "--work-dir", "--source"])?;
             let path = absolute(required(&options, "--request")?)?;
             let request =
                 sources::read_request(&path, options.get("--source").map(String::as_str))?;
+            auth::require_request(&request).await?;
             let out = absolute(required(&options, "--out")?)?;
             let work_dir = options
                 .get("--work-dir")
@@ -100,6 +110,7 @@ async fn run(command: &str, args: &[String]) -> Result<Value, String> {
             )
         }
         "sources" => sources::run(args).await,
+        "auth" => auth::run(args).await,
         "geostyle-import" => {
             let options = options(args, &["--bundle", "--url", "--token-env", "--style"])?;
             let token = options

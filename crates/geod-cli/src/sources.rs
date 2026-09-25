@@ -47,7 +47,7 @@ impl SourceStore {
     }
 }
 
-fn home() -> Result<PathBuf, String> {
+pub(crate) fn home() -> Result<PathBuf, String> {
     if let Some(value) = env::var_os("GEOD_CLI_HOME") {
         if value.is_empty() {
             return Err("GEOD_CLI_HOME is empty".into());
@@ -438,8 +438,10 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
         }
         "analyze" => {
             let options = crate::options(&args[1..], &["--url"])?;
-            let result =
-                source_analyzer::analyze(crate::required(&options, "--url")?, None).await?;
+            let url = crate::required(&options, "--url")?;
+            let zoom = source_analyzer::detected_zoom(url)?.unwrap_or(6);
+            crate::auth::require_zoom(zoom).await?;
+            let result = source_analyzer::analyze(url, None).await?;
             Ok(
                 json!({"ok":true,"urlTemplate":result.url_template,"suggestedName":result.suggested_name,
                 "suggestedMaxZoom":result.suggested_max_zoom,"testOk":result.test_ok,
@@ -473,6 +475,7 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
             if z > 22 || u64::from(x) >= (1u64 << z) || u64::from(y) >= (1u64 << z) {
                 return Err("Tile coordinates outside zoom level".into());
             }
+            crate::auth::require_zoom(z).await?;
             let url = TileDownloader::new_preview(source.clone(), None)?
                 .get_tile_url_public(&TileCoord { x, y, z });
             let client = reqwest::Client::builder()

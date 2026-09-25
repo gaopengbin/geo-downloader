@@ -13,6 +13,8 @@ geod inspect --bundle .\output\job-001
 
 `plan` 只校验参数、估算瓦片数量及范围，不访问图源。`fetch` 同步下载，且不覆盖已有输出目录。`--work-dir` 可选，会持久保存已验证的主图层和叠加图层瓦片；中断后用**同一请求**、新的 `--out` 重跑即可复用。工作目录绑定请求内容，图源或范围变更后不能复用。`inspect` 按清单复核所有资产的大小和 SHA-256。stdout 返回单个 JSON，stderr 输出 JSON 行进度。错误退出码为 1，Ctrl+C 为 130。
 
+未登录可下载 0–5 级瓦片。只要任务的有效级别包含 6 级及以上，就要先执行 `geod auth login` 并在自己的浏览器完成 GeoD 账号授权；`geod auth status` 查看状态，`geod auth logout` 删除本机凭证。`zoomLevels` 优先于 `zoom`、`zoomMax`。`plan` 无需登录，会返回 `loginRequired`；`fetch`、`sources probe` 和 `sources analyze` 在取瓦片前检查登录。若无法从分析 URL 确定级别，`sources analyze` 要求先登录。桌面端当前不受这项规则影响。
+
 ## 影像请求
 
 示例使用 NASA GIBS Blue Marble **概览底图**，不代表实时或高清卫星影像。替换图源时请填写实际来源与署名。
@@ -39,7 +41,7 @@ geod inspect --bundle .\output\job-001
 }
 ```
 
-`bounds` 为 WGS84 `[西, 南, 东, 北]`，不能跨反经线。模板须为 HTTP(S)，包含 `{z}`、`{x}` 和 `{y}` 或 `{-y}`；使用 `{s}` 时需给 `subdomains` 数组。每张瓦片必须解码为 256×256 像素。输出按瓦片边界对齐，实际足迹在清单 `assets[].bounds`；GeoTIFF 和瓦片包采用 EPSG:3857。
+`bounds` 为 WGS84 `[西, 南, 东, 北]`，不能跨反经线。模板须为 HTTP(S)，包含 `{z}`、`{x}` 和 `{y}` 或 `{-y}`；使用 `{s}` 时需给 `subdomains` 数组。每张瓦片必须解码为 256×256 或 512×512 像素，并正确填写 `tileSize`。输出按瓦片边界对齐，实际足迹在清单 `assets[].bounds`；GeoTIFF 和瓦片包采用 EPSG:3857。
 
 | 能力 | 字段 | 说明 |
 | --- | --- | --- |

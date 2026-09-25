@@ -1,3 +1,5 @@
+import { requireBrowserZoomAccess } from "./browser-access";
+
 export type BrowserSource = {
   id: string;
   name: string;
@@ -98,6 +100,7 @@ export function saveBrowserSources(store: BrowserSourceStore): BrowserSourceStor
 }
 
 export async function probeBrowserSource(source: BrowserSource, zoom: number, x: number, y: number, signal?: AbortSignal) {
+  await requireBrowserZoomAccess(zoom);
   if (![zoom, x, y].every(Number.isInteger) || zoom < 0 || zoom > source.maxZoom || x < 0 || y < 0 || x >= 2 ** zoom || y >= 2 ** zoom) {
     throw new Error("检测瓦片坐标超出图源支持的范围。");
   }
