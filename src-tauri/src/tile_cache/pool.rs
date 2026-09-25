@@ -162,7 +162,7 @@ impl Store {
     }
 
     pub fn get(&self, src: &SourceKey, coord: TileCoord) -> Result<Option<StoredTile>, String> {
-        let Some(_access) = crate::cache_migration::begin_cache_access() else {
+        let Some(_access) = crate::cache_access::begin_cache_access() else {
             return Ok(None);
         };
         if !get_config().enabled {
@@ -186,7 +186,7 @@ impl Store {
     ) -> Result<(), String> {
         let written_bytes = tile.bytes.len() as u64;
         {
-            let Some(_access) = crate::cache_migration::begin_cache_access() else {
+            let Some(_access) = crate::cache_access::begin_cache_access() else {
                 return Ok(());
             };
             if !get_config().enabled {
@@ -217,7 +217,7 @@ impl Store {
         }
         let written_bytes = batch.iter().map(|(_, tile)| tile.bytes.len() as u64).sum();
         {
-            let Some(_access) = crate::cache_migration::begin_cache_access() else {
+            let Some(_access) = crate::cache_access::begin_cache_access() else {
                 return Ok(());
             };
             if !get_config().enabled {
@@ -245,7 +245,7 @@ impl Store {
         src: &SourceKey,
         coords: &[TileCoord],
     ) -> Result<HashSet<TileCoord>, String> {
-        let Some(_access) = crate::cache_migration::begin_cache_access() else {
+        let Some(_access) = crate::cache_access::begin_cache_access() else {
             return Ok(HashSet::new());
         };
         if !get_config().enabled || coords.is_empty() {
@@ -261,7 +261,7 @@ impl Store {
     }
 
     pub fn ensure_source(&self, src: &SourceKey, info: SourceInfo) -> Result<(), String> {
-        let Some(_access) = crate::cache_migration::begin_cache_access() else {
+        let Some(_access) = crate::cache_access::begin_cache_access() else {
             return Ok(());
         };
         let handle = self.handle(src)?;
@@ -271,7 +271,7 @@ impl Store {
 
     /// 列出磁盘上所有 source 的统计信息（包括未在连接池中的）。
     pub fn stats(&self) -> Result<Vec<SourceStats>, String> {
-        let _access = crate::cache_migration::begin_cache_access()
+        let _access = crate::cache_access::begin_cache_access()
             .ok_or_else(|| "缓存正在迁移".to_string())?;
         self.stats_inner()
     }
@@ -322,7 +322,7 @@ impl Store {
             .prune_gate
             .lock()
             .map_err(|_| "prune lock poisoned".to_string())?;
-        let _access = crate::cache_migration::begin_cache_access()
+        let _access = crate::cache_access::begin_cache_access()
             .ok_or_else(|| "缓存正在迁移".to_string())?;
         self.clear_inner(src)
     }
@@ -363,7 +363,7 @@ impl Store {
             .prune_gate
             .lock()
             .map_err(|_| "prune lock poisoned".to_string())?;
-        let _access = crate::cache_migration::begin_cache_access()
+        let _access = crate::cache_access::begin_cache_access()
             .ok_or_else(|| "缓存正在迁移".to_string())?;
         self.prune_inner(max_total_bytes)
     }
@@ -524,7 +524,7 @@ impl Store {
         let Ok(_prune) = self.prune_gate.try_lock() else {
             return;
         };
-        let Some(_access) = crate::cache_migration::begin_cache_access() else {
+        let Some(_access) = crate::cache_access::begin_cache_access() else {
             return;
         };
         let target = config

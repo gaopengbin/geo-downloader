@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "name": "Blue Marble 图源目录示例",
+  "bounds": [116.3, 39.8, 116.5, 40.0],
+  "imagery": {
+    "sourceId": "nasa_gibs_blue_marble",
+    "zoom": 5,
+    "zoomLevels": [5, 6],
+    "format": "geotiff",
+    "compression": "deflate",
+    "generateSidecars": true,
+    "concurrency": 4
+  }
+}

@@ -1,0 +1,261 @@
+import { BROWSER_SOURCE, browserTileUrl, type BrowserSource } from "./browser-sources";
+import { clipBounds, validateClipGeometry, type ClipGeometry } from "./browser-clip";
+import { requireBrowserZoomAccess } from "./browser-access";
+
+export type Bounds = [number, number, number, number];
+
+export type ImageryPlan = {
+  bounds: Bounds;
+  zoom: number;
+  tileSize: 256 | 512;
+  firstX: number;
+  lastX: number;
+  firstY: number;
+  lastY: number;
+  tiles: number;
+  width: number;
+  height: number;
+  westPixel: number;
+  northPixel: number;
+  source: string;
+  sourceId: string;
+  sourceSpec: BrowserSource;
+  attribution: string;
+  clipGeometry?: ClipGeometry;
+  clipAttribution?: string;
+};
+
+const MAX_LAT = 85.05112878;
+const MAX_TILES = 256;
+const MAX_PIXELS = 16_777_216;
+const EARTH_RADIUS = 6_378_137;
+
+function longitudePixel(longitude: number, zoom: number, tileSize: number) {
+  return ((longitude + 180) / 360) * tileSize * 2 ** zoom;
+}
+
+function latitudePixel(latitude: number, zoom: number, tileSize: number) {
+  const radians = (latitude * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * tileSize * 2 ** zoom;
+}
+
+export function planBrowserImagery(bounds: Bounds, zoom: number, source: BrowserSource = BROWSER_SOURCE, clipInput?: unknown, clipAttribution?: string): ImageryPlan {
+  if (!Array.isArray(bounds) || bounds.length !== 4 || bounds.some(value => !Number.isFinite(value))) {
+    throw new Error("请输入有效的西、南、东、北经纬度。");
+  }
+  const [west, south, east, north] = bounds;
+  if (west < -180 || east > 180 || west >= east || south < -MAX_LAT || north > MAX_LAT || south >= north) {
+    throw new Error("范围需为 WGS84 经纬度，且满足西 < 东、南 < 北；跨 180° 经线请拆成两个任务。");
+  }
+  if (!Number.isInteger(zoom) || zoom < 0 || zoom > source.maxZoom) {
+    throw new Error(`${source.name} 支持 0–${source.maxZoom} 级。`);
+  }
+  const maxIndex = 2 ** zoom - 1;
+  const tileSize = source.tileSize;
+  const westPixel = longitudePixel(west, zoom, tileSize);
+  const eastPixel = longitudePixel(east, zoom, tileSize);
+  const northPixel = latitudePixel(north, zoom, tileSize);
+  const southPixel = latitudePixel(south, zoom, tileSize);
+  const firstX = Math.max(0, Math.floor(westPixel / tileSize));
+  const lastX = Math.min(maxIndex, Math.ceil(eastPixel / tileSize) - 1);
+  const firstY = Math.max(0, Math.floor(northPixel / tileSize));
+  const lastY = Math.min(maxIndex, Math.ceil(southPixel / tileSize) - 1);
+  const width = Math.ceil(eastPixel - westPixel);
+  const height = Math.ceil(southPixel - northPixel);
+  const tiles = (lastX - firstX + 1) * (lastY - firstY + 1);
+  if (width < 1 || height < 1) throw new Error("范围过小，请扩大范围或提高级别。");
+  if (tiles > MAX_TILES || width * height > MAX_PIXELS) {
+    throw new Error(`本机浏览器单次最多 ${MAX_TILES} 块瓦片、约 1600 万像素；请缩小范围或降低级别。`);
+  }
+  const clipGeometry = clipInput === undefined ? undefined : validateClipGeometry(clipInput);
+  if (clipGeometry) {
+    const [clipWest, clipSouth, clipEast, clipNorth] = clipBounds(clipGeometry);
+    if (clipWest >= east || clipEast <= west || clipSouth >= north || clipNorth <= south) {
+      throw new Error("裁剪边界与下载范围没有交集；请用边界填入范围，或调整经纬度框。");
+    }
+  }
+  return {
+    bounds, zoom, tileSize, firstX, lastX, firstY, lastY, tiles, width, height,
+    westPixel, northPixel, source: source.name, sourceId: source.id, sourceSpec: source, attribution: source.attribution,
+    clipGeometry, clipAttribution: clipGeometry ? clipAttribution : undefined,
+  };
+}
+
+function applyClipMask(canvas: HTMLCanvasElement, plan: ImageryPlan) {
+  const geometry = plan.clipGeometry;
+  if (!geometry) return;
+  const mask = document.createElement("canvas");
+  mask.width = plan.width;
+  mask.height = plan.height;
+  const maskContext = mask.getContext("2d");
+  const context = canvas.getContext("2d");
+  if (!maskContext || !context) throw new Error("浏览器无法创建裁剪画布。");
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  maskContext.fillStyle = "#fff";
+  for (const polygon of polygons) {
+    const path = new Path2D();
+    for (const ring of polygon) {
+      ring.forEach(([lon, lat], index) => {
+        const x = longitudePixel(lon, plan.zoom, plan.tileSize) - plan.westPixel;
+        const y = latitudePixel(lat, plan.zoom, plan.tileSize) - plan.northPixel;
+        if (index === 0) path.moveTo(x, y); else path.lineTo(x, y);
+      });
+      path.closePath();
+    }
+    maskContext.fill(path, "evenodd");
+  }
+  context.save();
+  context.globalCompositeOperation = "destination-in";
+  context.drawImage(mask, 0, 0);
+  context.restore();
+}
+
+function mercatorX(longitude: number) {
+  return EARTH_RADIUS * longitude * Math.PI / 180;
+}
+
+function mercatorY(latitude: number) {
+  const radians = latitude * Math.PI / 180;
+  return EARTH_RADIUS * Math.log(Math.tan(Math.PI / 4 + radians / 2));
+}
+
+function worldFile(plan: ImageryPlan) {
+  const [west, south, east, north] = plan.bounds;
+  const pixelX = (mercatorX(east) - mercatorX(west)) / plan.width;
+  const pixelY = (mercatorY(south) - mercatorY(north)) / plan.height;
+  return [pixelX, 0, 0, pixelY, mercatorX(west) + pixelX / 2, mercatorY(north) + pixelY / 2]
+    .map(value => value.toFixed(12)).join("\n") + "\n";
+}
+
+const WEB_MERCATOR_WKT = 'PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Mercator_1SP"],PARAMETER["central_meridian",0],PARAMETER["scale_factor",1],PARAMETER["false_easting",0],PARAMETER["false_northing",0],UNIT["metre",1],AUTHORITY["EPSG","3857"]]\n';
+
+function crc32(data: Uint8Array) {
+  let crc = 0xffffffff;
+  for (let index = 0; index < data.length; index++) {
+    crc ^= data[index];
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export function makeZip(files: { name: string; data: Uint8Array }[]) {
+  const encoder = new TextEncoder();
+  const parts: BlobPart[] = [];
+  const directory: BlobPart[] = [];
+  let offset = 0;
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const checksum = crc32(file.data);
+    const local = new Uint8Array(30 + name.length);
+    const head = new DataView(local.buffer);
+    head.setUint32(0, 0x04034b50, true);
+    head.setUint16(4, 20, true);
+    head.setUint16(26, name.length, true);
+    head.setUint32(14, checksum, true);
+    head.setUint32(18, file.data.length, true);
+    head.setUint32(22, file.data.length, true);
+    local.set(name, 30);
+    parts.push(local, file.data);
+    const central = new Uint8Array(46 + name.length);
+    const entry = new DataView(central.buffer);
+    entry.setUint32(0, 0x02014b50, true);
+    entry.setUint16(4, 20, true);
+    entry.setUint16(6, 20, true);
+    entry.setUint32(16, checksum, true);
+    entry.setUint32(20, file.data.length, true);
+    entry.setUint32(24, file.data.length, true);
+    entry.setUint16(28, name.length, true);
+    entry.setUint32(42, offset, true);
+    central.set(name, 46);
+    directory.push(central);
+    offset += local.length + file.data.length;
+  }
+  const directorySize = directory.reduce((total, part) => total + (part as Uint8Array).length, 0);
+  const end = new Uint8Array(22);
+  const footer = new DataView(end.buffer);
+  footer.setUint32(0, 0x06054b50, true);
+  footer.setUint16(8, files.length, true);
+  footer.setUint16(10, files.length, true);
+  footer.setUint32(12, directorySize, true);
+  footer.setUint32(16, offset, true);
+  return new Blob([...parts, ...directory, end], { type: "application/zip" });
+}
+
+export async function downloadBrowserImagery(
+  plan: ImageryPlan,
+  onProgress: (done: number, total: number) => void,
+  signal?: AbortSignal,
+) {
+  await requireBrowserZoomAccess(plan.zoom);
+  if (signal?.aborted) throw new DOMException("任务已取消。", "AbortError");
+  const controller = new AbortController();
+  const relayAbort = () => controller.abort();
+  signal?.addEventListener("abort", relayAbort, { once: true });
+  const canvas = document.createElement("canvas");
+  canvas.width = plan.width;
+  canvas.height = plan.height;
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) throw new Error("浏览器无法创建影像画布。");
+  const jobs: { x: number; y: number }[] = [];
+  for (let y = plan.firstY; y <= plan.lastY; y++) {
+    for (let x = plan.firstX; x <= plan.lastX; x++) jobs.push({ x, y });
+  }
+  let next = 0;
+  let done = 0;
+  onProgress(0, jobs.length);
+  async function worker() {
+    while (next < jobs.length) {
+      if (signal?.aborted) throw new DOMException("任务已取消。", "AbortError");
+      const { x, y } = jobs[next++];
+      let response: Response;
+      try { response = await fetch(browserTileUrl(plan.sourceSpec, plan.zoom, x, y), { mode: "cors", credentials: "omit", signal: controller.signal }); }
+      catch (error) {
+        if (controller.signal.aborted) throw error;
+        throw new Error(`浏览器无法读取 ${plan.source} 的瓦片，请检查地址、网络和 CORS 设置。`);
+      }
+      if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) {
+        throw new Error(`图源瓦片 ${plan.zoom}/${x}/${y} 获取失败（HTTP ${response.status}）。`);
+      }
+      const bitmap = await createImageBitmap(await response.blob());
+      if (bitmap.width !== plan.tileSize || bitmap.height !== plan.tileSize) {
+        bitmap.close();
+        throw new Error(`图源瓦片 ${plan.zoom}/${x}/${y} 尺寸异常；规划尺寸为 ${plan.tileSize} × ${plan.tileSize}。`);
+      }
+      context!.drawImage(bitmap, x * plan.tileSize - plan.westPixel, y * plan.tileSize - plan.northPixel);
+      bitmap.close();
+      onProgress(++done, jobs.length);
+      if (done % 4 === 0) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    }
+  }
+  try {
+    await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, () => worker()));
+  } catch (error) {
+    controller.abort();
+    throw error;
+  } finally {
+    signal?.removeEventListener("abort", relayAbort);
+  }
+  if (signal?.aborted) throw new DOMException("任务已取消。", "AbortError");
+  applyClipMask(canvas, plan);
+  const png = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("PNG 导出失败。")), "image/png");
+  });
+  const encoder = new TextEncoder();
+  const manifest = {
+    schemaVersion: "geod-browser-1", generatedAt: new Date().toISOString(),
+    bounds: plan.bounds, crs: "EPSG:3857", zoom: plan.zoom,
+    width: plan.width, height: plan.height, tileCount: plan.tiles, tileSize: plan.tileSize,
+    sourceId: plan.sourceId, source: plan.source, attribution: plan.attribution,
+    clip: plan.clipGeometry ? { type: plan.clipGeometry.type, outside: "transparent", geometryFile: "clip.geojson", attribution: plan.clipAttribution ?? null } : null,
+    files: ["imagery.png", "imagery.pgw", "imagery.prj", ...(plan.clipGeometry ? ["clip.geojson"] : [])],
+    note: "影像由当前浏览器直接从所选图源下载和拼接，未上传到 GeoD 服务器。拍摄时间和使用许可请核对图源方说明。",
+  };
+  const zip = makeZip([
+    { name: "imagery.png", data: new Uint8Array(await png.arrayBuffer()) },
+    { name: "imagery.pgw", data: encoder.encode(worldFile(plan)) },
+    { name: "imagery.prj", data: encoder.encode(WEB_MERCATOR_WKT) },
+    ...(plan.clipGeometry ? [{ name: "clip.geojson", data: encoder.encode(JSON.stringify({ type: "Feature", properties: plan.clipAttribution ? { attribution: plan.clipAttribution } : {}, geometry: plan.clipGeometry }, null, 2)) }] : []),
+    { name: "manifest.json", data: encoder.encode(JSON.stringify(manifest, null, 2)) },
+  ]);
+  return { png, zip, manifest };
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "geod": {
+      "command": "node",
+      "args": ["C:/absolute/path/to/geo-downloader/packages/geod-mcp/src/index.mjs"],
+      "env": {
+        "GEOD_WORKSPACE": "C:/path/to/your/workspace",
+        "GEOD_BIN": "C:/absolute/path/to/geod.exe"
+      }
+    }
+  }
+}

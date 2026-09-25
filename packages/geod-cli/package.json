@@ -1,0 +1,33 @@
+{
+  "name": "geod-cli",
+  "version": "0.3.2",
+  "description": "GeoD command-line geodata acquisition for Windows x64, with the native executable included",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gaopengbin/geo-downloader.git",
+    "directory": "packages/geod-cli"
+  },
+  "homepage": "https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.2",
+  "bugs": "https://github.com/gaopengbin/geo-downloader/issues",
+  "engines": { "node": ">=18" },
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "bin": { "geod": "bin/geod.cjs" },
+  "files": [
+    "bin/",
+    "lib/",
+    "native/geod.exe",
+    "build-info.json",
+    "docs/",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "prepack": "node lib/verify-package.cjs"
+  },
+  "publishConfig": { "access": "public" },
+  "keywords": ["geod", "gis", "map", "geotiff", "geojson", "cli", "windows"]
+}

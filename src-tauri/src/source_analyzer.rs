@@ -133,6 +133,10 @@ pub async fn analyze(raw_url: &str, proxy: Option<&str>) -> Result<SourceUrlAnal
     })
 }
 
+pub fn detected_zoom(raw_url: &str) -> Result<Option<u8>, String> {
+    Ok(parse_tile_url(raw_url)?.zoom)
+}
+
 fn parse_tile_url(raw_url: &str) -> Result<ParsedTileUrl, String> {
     let input = raw_url
         .trim()

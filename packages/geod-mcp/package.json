@@ -1,0 +1,59 @@
+{
+  "name": "geod-mcp",
+  "version": "0.1.6",
+  "description": "GeoD CLI imagery download tools for local and remote MCP clients",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gaopengbin/geo-downloader.git",
+    "directory": "packages/geod-mcp"
+  },
+  "homepage": "https://github.com/gaopengbin/geo-downloader",
+  "bugs": "https://github.com/gaopengbin/geo-downloader/issues",
+  "keywords": [
+    "geod",
+    "mcp",
+    "agent",
+    "gis",
+    "geotiff",
+    "geojson"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "scripts/",
+    "examples/",
+    "skill/",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "geod-mcp": "bin/geod-mcp.mjs"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:live": "node scripts/live-smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.4.2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
+  }
+}

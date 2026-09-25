@@ -1,0 +1,35 @@
+[package]
+name = "geod-core"
+version = "0.2.0"
+description = "Headless GeoD download and export engine shared with the desktop app"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+tokio = { version = "=1.49.0", features = ["full"] }
+tokio-util = "=0.7.18"
+futures = "=0.3.31"
+reqwest = { version = "=0.12.28", features = ["json", "stream", "http2", "gzip", "deflate"] }
+image = { version = "=0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
+png = "=0.17.16"
+rayon = "=1.11.0"
+weezl = "=0.1.12"
+flate2 = "=1.1.9"
+tiff = "=0.9.1"
+rand = "=0.8.5"
+dashmap = "=6.1.0"
+rusqlite = { version = "=0.32.1", features = ["bundled"] }
+chrono = { version = "=0.4.43", features = ["serde"] }
+dirs = "=5.0.1"
+log = "=0.4.29"
+gdal = { version = "=0.17.1", optional = true }
+base64 = "=0.22.1"
+sha2 = "=0.10.9"
+uuid = { version = "=1.20.0", features = ["v4", "serde"] }
+tempfile = "=3.24.0"
+
+[features]
+default = []
+geotiff = ["dep:gdal"]

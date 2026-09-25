@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "name": "Blue Marble 多边形裁剪示例",
+  "bounds": [116.3, 39.8, 116.5, 40.0],
+  "imagery": {
+    "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg",
+    "source": "NASA GIBS Blue Marble Shaded Relief Bathymetry",
+    "attribution": "NASA GIBS",
+    "zoom": 6,
+    "format": "png",
+    "cropToShape": true,
+    "polygon": [[
+      {"lat": 39.84, "lng": 116.33},
+      {"lat": 39.84, "lng": 116.47},
+      {"lat": 39.97, "lng": 116.47},
+      {"lat": 39.97, "lng": 116.33}
+    ]],
+    "concurrency": 4
+  }
+}
