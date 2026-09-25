@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 import zipfile
 
-VERSION = '0.3.0'
+VERSION = '0.3.2'
 LIMIT = 128 * 1024 * 1024
 
 

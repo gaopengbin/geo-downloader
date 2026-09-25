@@ -12,9 +12,9 @@ are needed. Do not build from a ZIP whose provenance has not been checked.
 
 ```powershell
 powershell -NoProfile -File scripts/installer/build-geod-cli-installer.ps1 `
-  -PackageZip C:/releases/geod-cli-0.3.0-windows-x64.zip `
+  -PackageZip C:/releases/geod-cli-0.3.2-windows-x64.zip `
   -ExpectedSha256 <verified-64-character-sha256> `
-  -OutputDirectory C:/releases/geod-cli-installer-0.3.0
+  -OutputDirectory C:/releases/geod-cli-installer-0.3.2
 ```
 
 The output directory must not exist. The builder checks ZIP paths, expected
@@ -51,7 +51,7 @@ Windows may display an unknown-publisher warning. This is not a signed release.
 ## Silent installation and removal
 
 ```powershell
-powershell -NoProfile -Command "Start-Process -FilePath 'C:/releases/geod-cli-0.3.0-windows-x64-setup.exe' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-' -WindowStyle Hidden -Wait"
+powershell -NoProfile -Command "Start-Process -FilePath 'C:/releases/geod-cli-0.3.2-windows-x64-setup.exe' -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-' -WindowStyle Hidden -Wait"
 ```
 
 For automated verification, use `subprocess.run` with separate arguments or

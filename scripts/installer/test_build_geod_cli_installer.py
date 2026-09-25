@@ -14,7 +14,7 @@ def fixture():
     binary = b'frozen-test-binary'
     return {'geod.exe': binary, 'LICENSE': b'license', 'README.txt': b'readme',
             'docs/geod-cli-0.3.md': b'docs', 'scripts/geod-render.mjs': b'script',
-            'build-info.json': json.dumps({'name': 'geod-cli', 'version': '0.3.0',
+            'build-info.json': json.dumps({'name': 'geod-cli', 'version': '0.3.2',
                 'platform': 'windows-x64', 'sourceRevision': 'a' * 40,
                 'binarySha256': hashlib.sha256(binary).hexdigest()}).encode()}
 
