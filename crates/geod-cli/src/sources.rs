@@ -22,8 +22,12 @@ struct CustomSource {
     #[serde(default)]
     subdomains: Vec<String>,
     max_zoom: u8,
+    #[serde(default = "default_tile_size")]
+    tile_size: u32,
     scheme: String,
 }
+
+fn default_tile_size() -> u32 { 256 }
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -111,6 +115,9 @@ fn validate_custom(source: &CustomSource) -> Result<(), String> {
     if source.max_zoom > 22 {
         return Err("maxZoom must be in 0..22".into());
     }
+    if ![256, 512].contains(&source.tile_size) {
+        return Err("tileSize must be 256 or 512".into());
+    }
     if !["xyz", "tms"].contains(&source.scheme.as_str()) {
         return Err("scheme must be xyz or tms".into());
     }
@@ -181,14 +188,16 @@ fn resolve(store: &SourceStore, id: &str) -> Result<config::TileSource, String> 
     Ok(source)
 }
 
-fn source_view(source: &config::TileSource, kind: &str, default_id: Option<&str>) -> Value {
+fn source_view(source: &config::TileSource, kind: &str, default_id: Option<&str>, tile_size: u32) -> Value {
     let blocked = tile_policy::ensure_offline_allowed(&source.url).err();
     let token_missing =
         source.id.starts_with("tianditu_") && env::var("GEOD_TIANDITU_TOKEN").is_err();
     json!({
         "id":source.id,"name":source.name,"kind":kind,"attribution":source.attribution,
-        "maxZoom":source.max_zoom,"default":default_id == Some(source.id.as_str()),
+        "maxZoom":source.max_zoom,"tileSize":tile_size,"default":default_id == Some(source.id.as_str()),
         "available":blocked.is_none() && !token_missing,
+        "availabilityVerified":false,
+        "availabilityState":if blocked.is_none() && !token_missing { "unverified" } else { "blocked" },
         "reason": if token_missing { Some("GEOD_TIANDITU_TOKEN is required".to_string()) } else { blocked },
     })
 }
@@ -240,6 +249,14 @@ pub fn read_request(
         imagery.insert("source".into(), json!(source.id));
         imagery.insert("attribution".into(), json!(source.attribution));
         imagery.insert("subdomains".into(), json!(source.subdomains));
+        let tile_size = store.custom_sources.iter().find(|item| item.id == id).map_or(256, |item| item.tile_size);
+        if let Some(requested) = imagery.get("tileSize") {
+            if requested.as_u64() != Some(u64::from(tile_size)) {
+                return Err(format!("imagery.tileSize does not match source {id}; configured size is {tile_size}"));
+            }
+        } else {
+            imagery.insert("tileSize".into(), json!(tile_size));
+        }
         Some(source)
     } else {
         None
@@ -325,7 +342,7 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
             crate::options(&args[1..], &[])?;
             let mut rows: Vec<Value> = builtins()
                 .values()
-                .map(|s| source_view(s, "builtIn", store.default_source_id.as_deref()))
+                .map(|s| source_view(s, "builtIn", store.default_source_id.as_deref(), 256))
                 .collect();
             rows.extend(store.custom_sources.iter().map(|s| {
                 let tile = config::TileSource {
@@ -336,7 +353,7 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
                     max_zoom: s.max_zoom,
                     attribution: s.attribution.clone(),
                 };
-                source_view(&tile, "custom", store.default_source_id.as_deref())
+                source_view(&tile, "custom", store.default_source_id.as_deref(), s.tile_size)
             }));
             rows.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
             Ok(json!({"ok":true,"defaultSourceId":store.default_source_id,"sources":rows}))
@@ -350,6 +367,7 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
                     "--url",
                     "--attribution",
                     "--max-zoom",
+                    "--tile-size",
                     "--subdomains",
                     "--scheme",
                 ],
@@ -361,6 +379,7 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
                 url: crate::required(&options, "--url")?.to_string(),
                 attribution: crate::required(&options, "--attribution")?.to_string(),
                 max_zoom: optional_u8(options.get("--max-zoom"), "--max-zoom", 18)?,
+                tile_size: options.get("--tile-size").map(|v| v.parse::<u32>().map_err(|_| "--tile-size must be 256 or 512".to_string())).transpose()?.unwrap_or(256),
                 subdomains: options
                     .get("--subdomains")
                     .map(|s| s.split(',').map(|v| v.trim().to_string()).collect())
@@ -484,11 +503,13 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
             tile_payload::validate(&bytes, mime.as_deref())?;
             let image = image::load_from_memory(&bytes)
                 .map_err(|_| "Source returned a non-raster tile".to_string())?;
-            if image.width() != 256 || image.height() != 256 {
-                return Err("Source tile must be 256x256 pixels".into());
+            if image.width() != image.height() || ![256, 512].contains(&image.width()) {
+                return Err("Source tile must be 256x256 or 512x512 pixels".into());
             }
+            let configured = store.custom_sources.iter().find(|item| item.id == source.id).map_or(256, |item| item.tile_size);
             Ok(
-                json!({"ok":true,"id":source.id,"zoom":z,"x":x,"y":y,"bytes":bytes.len(),"width":256,"height":256}),
+                json!({"ok":image.width() == configured,"id":source.id,"zoom":z,"x":x,"y":y,"bytes":bytes.len(),"width":image.width(),"height":image.height(),"configuredTileSize":configured,
+                    "message":if image.width() == configured { None } else { Some(format!("Detected {}x{} tiles; register or update this source with --tile-size {} before downloading", image.width(), image.height(), image.width())) }}),
             )
         }
         _ => Err(format!("Unknown sources command: {action}")),

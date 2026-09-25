@@ -26,7 +26,7 @@ const remoteConfig = `{
 }`;
 const skillUrl = "https://geod.laogao.xyz/skills/geod-agent/SKILL.md";
 const skillZipUrl = "https://geod.laogao.xyz/skills/geod-agent.zip";
-const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.4.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
+const localInstall = '$pkg = "https://laogao.xyz/geod-mcp/geod-mcp-0.1.5.tgz"\nnpx --yes --package $pkg geod-mcp install codex --package $pkg';
 const agentPrompt = `请从 ${skillUrl} 安装 GeoD Skill，并为当前 Agent 配置 GeoD MCP；通过 MCP 工具完成一次只读规划验证。`;
 
 export default function McpPage() {
@@ -66,7 +66,7 @@ export default function McpPage() {
                   <span className={styles.kicker}>CONNECT / AGENT TOOLS</span>
                   <h2 id="connect-title">选择 MCP 接入方式</h2>
                 </div>
-                <span className={styles.version}>MCP 0.1.4 · HTTPS 或本机</span>
+                <span className={styles.version}>MCP 0.1.5 · HTTPS 或本机</span>
               </div>
               <p className={styles.description}>在用户电脑运行的 Agent 优先接入本机 MCP；云端 Agent 可接入 HTTPS MCP。浏览器 WebMCP 只在你主动选择网页处理时使用。</p>
               <div className={styles.methodGrid}>
@@ -99,7 +99,7 @@ export default function McpPage() {
                 <a href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
                   远端 MCP 安装器 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
-                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.4" target="_blank" rel="noopener noreferrer">
+                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.5" target="_blank" rel="noopener noreferrer">
                   查看 MCP 安装包与校验值 <ArrowUpRight size={16} aria-hidden="true" />
                 </a>
               </div>

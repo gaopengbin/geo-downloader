@@ -74,7 +74,7 @@ export function createServer(service) {
     try { return publicError(typeof service.error === 'function' ? service.error(error) : error); }
     catch { return { code: 'GEOD_ERROR', message: 'GeoD could not complete this operation.' }; }
   };
-  const server = new McpServer({ name: 'geod-mcp', version: '0.1.4' }, {
+  const server = new McpServer({ name: 'geod-mcp', version: '0.1.5' }, {
     instructions: 'GeoD downloads real geographic imagery through the GeoD CLI. Start with geod_capabilities and geod_sources list, then geod_plan. Local MCP can register a user-owned imagery source and use imagery.sourceId. Hosted MCP only allows its NASA GIBS source and does not register custom sources. geod_fetch returns a background job ID; poll geod_job_status, then inspect source, coverage, quality and warnings.',
   });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

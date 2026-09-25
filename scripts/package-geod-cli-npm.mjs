@@ -66,7 +66,7 @@ function main() {
   copy(sourceExe, path.join(stage, "native/geod.exe"));
   copy(path.join(portableDirectory, "build-info.json"), path.join(stage, "build-info.json"));
   // Explicit public documents only; do not copy repository directories, env files or caches.
-  for (const name of ["geod-cli-0.3.md", "geod-cli-package-managers.md"]) {
+  for (const name of ["geod-cli.md", "geod-cli-0.3.md", "geod-cli-package-managers.md"]) {
     copy(path.join(root, "docs", name), path.join(stage, "docs", name));
   }
   for (const name of exampleNames) {
@@ -83,7 +83,7 @@ function main() {
   if (packInfo.length !== 1 || packInfo[0].name !== "geod-cli" || packInfo[0].version !== release.version) throw new Error("Unexpected npm pack metadata.");
   const allowed = new Set([
     ...sourceFiles, "native/geod.exe", "build-info.json",
-    "docs/geod-cli-0.3.md", "docs/geod-cli-package-managers.md",
+    "docs/geod-cli.md", "docs/geod-cli-0.3.md", "docs/geod-cli-package-managers.md",
     ...exampleNames.map((name) => `examples/geod-cli/${name}`),
   ]);
   for (const file of packInfo[0].files) {

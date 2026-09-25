@@ -1,5 +1,11 @@
 # GeoD CLI：下载影像与边界数据
 
+## 256 与 512 像素瓦片
+
+自定义图源注册时可加 `--tile-size 512`；默认是 256。`geod sources probe` 会返回实际 `width`、`height` 与 `configuredTileSize`。若不一致，先更新图源尺寸，再规划或下载。直接填写 URL 的请求可在 `imagery` 中使用 `"tileSize": 512`。规划、原始瓦片、预览、PNG/JPEG/GeoTIFF 拼接和地理定位均按原生尺寸计算；512 瓦片暂不导出为 MBTiles 或 GeoPackage。对 512 拼接每级最多 67,108,864 像素，以免内存过载。
+
+`sources list` 中的 `available` 只表示未被下载政策拦截；`availabilityVerified: false` 表示尚未实际访问图源。CARTO Basemaps 当前要求用户 API Key，且其条款禁止批量提取，因此 GeoD 拒绝该图源的离线下载。不要把返回的水印瓦片当作成功影像。
+
 GeoD CLI 0.1.1 是 Windows x64 独立命令行工具。它根据 JSON 请求规划并下载影像或边界数据，输出 GeoTIFF、PNG、GeoJSON 和可校验的 `manifest.json`。AI 和脚本可以运行命令、解析 JSON，并读取实际生成的文件。
 
 原生安装版和便携版获取数据不需要安装 GeoD 桌面端、Rust、Node.js 或 GDAL；npm 安装方式需要 Node.js 18+。下载与校验不要求安装地图编辑器或运行浏览器服务。

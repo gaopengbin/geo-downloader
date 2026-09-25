@@ -165,20 +165,31 @@ pub fn merge_tiles(
     x_max: u32,
     y_max: u32,
 ) -> RgbImage {
+    merge_tiles_sized(tile_files, x_min, y_min, x_max, y_max, TILE_SIZE)
+}
+
+pub fn merge_tiles_sized(
+    tile_files: &HashMap<(u32, u32), TileSource>,
+    x_min: u32,
+    y_min: u32,
+    x_max: u32,
+    y_max: u32,
+    tile_size: u32,
+) -> RgbImage {
     // 防御：异常坐标范围用 saturating 避免算术溢出 panic（正常范围行为完全不变）
     let cols = x_max.saturating_sub(x_min).saturating_add(1);
     let rows = y_max.saturating_sub(y_min).saturating_add(1);
 
-    let width = cols.saturating_mul(TILE_SIZE);
-    let height = rows.saturating_mul(TILE_SIZE);
+    let width = cols.saturating_mul(tile_size);
+    let height = rows.saturating_mul(tile_size);
 
     // 创建白色背景
     let mut merged = RgbImage::from_pixel(width, height, image::Rgb([255, 255, 255]));
 
     for x in x_min..=x_max {
         for y in y_min..=y_max {
-            let px = (x - x_min) * TILE_SIZE;
-            let py = (y - y_min) * TILE_SIZE;
+            let px = (x - x_min) * tile_size;
+            let py = (y - y_min) * tile_size;
 
             if let Some(source) = tile_files.get(&(x, y)) {
                 // 从瓦片源（Path 或 Bytes）读取并解码单个瓦片
@@ -192,11 +203,11 @@ pub fn merge_tiles(
                 };
                 let rgb = img.to_rgb8();
                 
-                let rgb = if rgb.width() != TILE_SIZE || rgb.height() != TILE_SIZE {
+                let rgb = if rgb.width() != tile_size || rgb.height() != tile_size {
                     image::imageops::resize(
                         &rgb,
-                        TILE_SIZE,
-                        TILE_SIZE,
+                        tile_size,
+                        tile_size,
                         image::imageops::FilterType::Triangle,
                     )
                 } else {

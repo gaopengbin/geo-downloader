@@ -4,6 +4,7 @@ export type BrowserSource = {
   url: string;
   attribution: string;
   maxZoom: number;
+  tileSize: 256 | 512;
   scheme: "xyz" | "tms";
   subdomains: string[];
 };
@@ -19,6 +20,7 @@ export const BROWSER_SOURCE: BrowserSource = {
   url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg",
   attribution: "NASA GIBS / Blue Marble；地形概览图，不是近期卫星影像",
   maxZoom: 8,
+  tileSize: 256,
   scheme: "xyz",
   subdomains: [],
 };
@@ -31,12 +33,14 @@ export function validateBrowserSource(value: unknown): BrowserSource {
   const url = String(input.url ?? "").trim();
   const attribution = String(input.attribution ?? "").trim();
   const maxZoom = Number(input.maxZoom);
+  const tileSize = Number(input.tileSize ?? 256);
   const scheme = input.scheme ?? "xyz";
   const subdomains = input.subdomains ?? [];
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || id === BROWSER_SOURCE.id) throw new Error("图源 ID 需为 1–64 位英文字母、数字、- 或 _，且不能占用内置图源 ID。");
   if (!name || name.length > 128) throw new Error("图源名称需为 1–128 个字符。");
   if (!attribution || attribution.length > 1024) throw new Error("请填写图源来源和署名，不超过 1024 个字符。");
   if (!Number.isInteger(maxZoom) || maxZoom < 0 || maxZoom > 22) throw new Error("最大级别需为 0–22 的整数。");
+  if (tileSize !== 256 && tileSize !== 512) throw new Error("瓦片尺寸只能是 256 或 512 像素。");
   if (scheme !== "xyz" && scheme !== "tms") throw new Error("瓦片行号方式只能是 XYZ 或 TMS。");
   if (!Array.isArray(subdomains) || subdomains.length > 8 || subdomains.some(item => typeof item !== "string" || !/^[A-Za-z0-9]{1,16}$/.test(item))) {
     throw new Error("子域名最多 8 个，每个只能含英文字母或数字。");
@@ -54,7 +58,10 @@ export function validateBrowserSource(value: unknown): BrowserSource {
   if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password || parsed.hash) {
     throw new Error("浏览器图源必须使用 HTTPS，且不能包含 URL 用户名、密码或片段。");
   }
-  return { id, name, url, attribution, maxZoom, scheme, subdomains: [...subdomains] };
+  if (parsed.hostname === "basemaps.cartocdn.com" || parsed.hostname.endsWith(".basemaps.cartocdn.com")) {
+    throw new Error("CARTO Basemaps 需要用户自己的 API Key，且当前条款禁止批量提取；请使用明确允许下载的图源。");
+  }
+  return { id, name, url, attribution, maxZoom, tileSize, scheme, subdomains: [...subdomains] };
 }
 
 export function browserTileUrl(source: BrowserSource, zoom: number, x: number, y: number): string {
@@ -103,6 +110,8 @@ export async function probeBrowserSource(source: BrowserSource, zoom: number, x:
   const bitmap = await createImageBitmap(await response.blob());
   const size = { width: bitmap.width, height: bitmap.height };
   bitmap.close();
-  if (size.width !== 256 || size.height !== 256) throw new Error("当前浏览器拼接器只支持 256 × 256 瓦片。");
-  return { ok: true, sourceId: source.id, zoom, x, y, ...size, browserReadable: true };
+  if (size.width !== size.height || ![256, 512].includes(size.width)) throw new Error("图源瓦片需为 256 × 256 或 512 × 512 的正方形图片。");
+  return { ok: size.width === source.tileSize, sourceId: source.id, zoom, x, y, ...size,
+    configuredTileSize: source.tileSize, browserReadable: true,
+    ...(size.width === source.tileSize ? {} : { message: `检测到 ${size.width} × ${size.height} 瓦片；请把图源瓦片尺寸改为 ${size.width} 后再规划下载。` }) };
 }

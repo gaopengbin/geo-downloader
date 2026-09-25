@@ -12,10 +12,10 @@ const require = createRequire(import.meta.url);
 let installedCliRoot;
 try { installedCliRoot = path.dirname(require.resolve('geod-cli/package.json')); } catch { /* Source checkout may use its own release binary. */ }
 const MAX_INLINE = 8 * 1024 * 1024;
-const MCP_VERSION = '0.1.4';
+const MCP_VERSION = '0.1.5';
 const PUBLIC_SOURCE = {
   id: 'nasa_gibs_blue_marble', name: 'NASA GIBS Blue Marble', kind: 'builtIn',
-  attribution: 'NASA GIBS', maxZoom: 8, available: true, default: false, reason: null,
+  attribution: 'NASA GIBS', maxZoom: 8, tileSize: 256, available: true, availabilityVerified: false, default: false, reason: null,
 };
 const PUBLIC_SOURCE_URL = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg';
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/;
@@ -60,7 +60,7 @@ export class GeoDService {
       limits: { concurrentJobs: this.maxJobs, inlineArtifactBytes: MAX_INLINE, serializedMcpResponseBytes: 9_000_000, maxTiles: this.env.GEOD_PUBLIC_MCP === '1' ? 64 : 4096, maxPixels: this.env.GEOD_PUBLIC_MCP === '1' ? 4194304 : 67108864 },
       workflow: ['geod_sources list before choosing imagery', 'geod_plan', 'geod_fetch', 'geod_job_status until completed', 'geod_get_artifact for small files', ...(typeof this.artifactLink === 'function' ? ['geod_artifact_link for large downloads'] : [])],
       sources: { customRegistration: this.env.GEOD_PUBLIC_MCP !== '1', registry: this.env.GEOD_PUBLIC_MCP === '1' ? 'hosted allowlist' : 'current user GeoD CLI configuration' },
-      behavior: { localPaths: 'workspace or configured output directory only', jobsSurviveClientTimeout: true, downloadsResumeAfterRestart: false, clipping: 'imagery.clipToLayer selects a polygon layer; PNG/GeoTIFF outside pixels become transparent; vectors unchanged' },
+      behavior: { localPaths: 'workspace or configured output directory only', jobsSurviveClientTimeout: true, jobsRequireServerProcess: true, downloadsResumeAfterRestart: false, clipping: 'imagery.clipToLayer selects a polygon layer; PNG/GeoTIFF outside pixels become transparent; vectors unchanged' },
       examples: this.examples };
   }
 
@@ -104,7 +104,7 @@ export class GeoDService {
       return { ok: true, defaultSourceId: null, sources: [PUBLIC_SOURCE] };
     }
     const args = [input.action];
-    for (const [key, flag] of Object.entries({ id: '--id', name: '--name', url: '--url', attribution: '--attribution', maxZoom: '--max-zoom', scheme: '--scheme', zoom: '--zoom', x: '--x', y: '--y' })) {
+    for (const [key, flag] of Object.entries({ id: '--id', name: '--name', url: '--url', attribution: '--attribution', maxZoom: '--max-zoom', tileSize: '--tile-size', scheme: '--scheme', zoom: '--zoom', x: '--x', y: '--y' })) {
       if (input[key] !== undefined) args.push(flag, String(input[key]));
     }
     if (input.subdomains?.length) args.push('--subdomains', input.subdomains.join(','));
@@ -193,7 +193,8 @@ export class GeoDService {
   }
 
   snapshot(job) {
-    return structuredClone({ ok: true, ...job.record, elapsedMs: Date.parse(job.record.finishedAt || new Date().toISOString()) - Date.parse(job.record.createdAt) });
+    return structuredClone({ ok: true, ...job.record, manifestPath: job.record.result?.manifestPath ?? null,
+      elapsedMs: Date.parse(job.record.finishedAt || new Date().toISOString()) - Date.parse(job.record.createdAt) });
   }
 
   async persist(job) {

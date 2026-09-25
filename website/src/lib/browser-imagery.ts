@@ -6,6 +6,7 @@ export type Bounds = [number, number, number, number];
 export type ImageryPlan = {
   bounds: Bounds;
   zoom: number;
+  tileSize: 256 | 512;
   firstX: number;
   lastX: number;
   firstY: number;
@@ -23,19 +24,18 @@ export type ImageryPlan = {
   clipAttribution?: string;
 };
 
-const TILE_SIZE = 256;
 const MAX_LAT = 85.05112878;
 const MAX_TILES = 256;
 const MAX_PIXELS = 16_777_216;
 const EARTH_RADIUS = 6_378_137;
 
-function longitudePixel(longitude: number, zoom: number) {
-  return ((longitude + 180) / 360) * TILE_SIZE * 2 ** zoom;
+function longitudePixel(longitude: number, zoom: number, tileSize: number) {
+  return ((longitude + 180) / 360) * tileSize * 2 ** zoom;
 }
 
-function latitudePixel(latitude: number, zoom: number) {
+function latitudePixel(latitude: number, zoom: number, tileSize: number) {
   const radians = (latitude * Math.PI) / 180;
-  return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * TILE_SIZE * 2 ** zoom;
+  return ((1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2) * tileSize * 2 ** zoom;
 }
 
 export function planBrowserImagery(bounds: Bounds, zoom: number, source: BrowserSource = BROWSER_SOURCE, clipInput?: unknown, clipAttribution?: string): ImageryPlan {
@@ -50,14 +50,15 @@ export function planBrowserImagery(bounds: Bounds, zoom: number, source: Browser
     throw new Error(`${source.name} 支持 0–${source.maxZoom} 级。`);
   }
   const maxIndex = 2 ** zoom - 1;
-  const westPixel = longitudePixel(west, zoom);
-  const eastPixel = longitudePixel(east, zoom);
-  const northPixel = latitudePixel(north, zoom);
-  const southPixel = latitudePixel(south, zoom);
-  const firstX = Math.max(0, Math.floor(westPixel / TILE_SIZE));
-  const lastX = Math.min(maxIndex, Math.ceil(eastPixel / TILE_SIZE) - 1);
-  const firstY = Math.max(0, Math.floor(northPixel / TILE_SIZE));
-  const lastY = Math.min(maxIndex, Math.ceil(southPixel / TILE_SIZE) - 1);
+  const tileSize = source.tileSize;
+  const westPixel = longitudePixel(west, zoom, tileSize);
+  const eastPixel = longitudePixel(east, zoom, tileSize);
+  const northPixel = latitudePixel(north, zoom, tileSize);
+  const southPixel = latitudePixel(south, zoom, tileSize);
+  const firstX = Math.max(0, Math.floor(westPixel / tileSize));
+  const lastX = Math.min(maxIndex, Math.ceil(eastPixel / tileSize) - 1);
+  const firstY = Math.max(0, Math.floor(northPixel / tileSize));
+  const lastY = Math.min(maxIndex, Math.ceil(southPixel / tileSize) - 1);
   const width = Math.ceil(eastPixel - westPixel);
   const height = Math.ceil(southPixel - northPixel);
   const tiles = (lastX - firstX + 1) * (lastY - firstY + 1);
@@ -73,7 +74,7 @@ export function planBrowserImagery(bounds: Bounds, zoom: number, source: Browser
     }
   }
   return {
-    bounds, zoom, firstX, lastX, firstY, lastY, tiles, width, height,
+    bounds, zoom, tileSize, firstX, lastX, firstY, lastY, tiles, width, height,
     westPixel, northPixel, source: source.name, sourceId: source.id, sourceSpec: source, attribution: source.attribution,
     clipGeometry, clipAttribution: clipGeometry ? clipAttribution : undefined,
   };
@@ -94,8 +95,8 @@ function applyClipMask(canvas: HTMLCanvasElement, plan: ImageryPlan) {
     const path = new Path2D();
     for (const ring of polygon) {
       ring.forEach(([lon, lat], index) => {
-        const x = longitudePixel(lon, plan.zoom) - plan.westPixel;
-        const y = latitudePixel(lat, plan.zoom) - plan.northPixel;
+        const x = longitudePixel(lon, plan.zoom, plan.tileSize) - plan.westPixel;
+        const y = latitudePixel(lat, plan.zoom, plan.tileSize) - plan.northPixel;
         if (index === 0) path.moveTo(x, y); else path.lineTo(x, y);
       });
       path.closePath();
@@ -214,11 +215,11 @@ export async function downloadBrowserImagery(
         throw new Error(`图源瓦片 ${plan.zoom}/${x}/${y} 获取失败（HTTP ${response.status}）。`);
       }
       const bitmap = await createImageBitmap(await response.blob());
-      if (bitmap.width !== TILE_SIZE || bitmap.height !== TILE_SIZE) {
+      if (bitmap.width !== plan.tileSize || bitmap.height !== plan.tileSize) {
         bitmap.close();
-        throw new Error(`图源瓦片 ${plan.zoom}/${x}/${y} 尺寸异常。`);
+        throw new Error(`图源瓦片 ${plan.zoom}/${x}/${y} 尺寸异常；规划尺寸为 ${plan.tileSize} × ${plan.tileSize}。`);
       }
-      context!.drawImage(bitmap, x * TILE_SIZE - plan.westPixel, y * TILE_SIZE - plan.northPixel);
+      context!.drawImage(bitmap, x * plan.tileSize - plan.westPixel, y * plan.tileSize - plan.northPixel);
       bitmap.close();
       onProgress(++done, jobs.length);
       if (done % 4 === 0) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
@@ -241,7 +242,7 @@ export async function downloadBrowserImagery(
   const manifest = {
     schemaVersion: "geod-browser-1", generatedAt: new Date().toISOString(),
     bounds: plan.bounds, crs: "EPSG:3857", zoom: plan.zoom,
-    width: plan.width, height: plan.height, tileCount: plan.tiles,
+    width: plan.width, height: plan.height, tileCount: plan.tiles, tileSize: plan.tileSize,
     sourceId: plan.sourceId, source: plan.source, attribution: plan.attribution,
     clip: plan.clipGeometry ? { type: plan.clipGeometry.type, outside: "transparent", geometryFile: "clip.geojson", attribution: plan.clipAttribution ?? null } : null,
     files: ["imagery.png", "imagery.pgw", "imagery.prj", ...(plan.clipGeometry ? ["clip.geojson"] : [])],

@@ -31,6 +31,7 @@ export const requestSchema = z.strictObject({
     source: z.string().min(1).max(4096).optional(),
     attribution: z.string().min(1).max(4096).optional(),
     zoom: z.number().int().min(0).max(22),
+    tileSize: z.union([z.literal(256), z.literal(512)]).optional().describe('Native pixel edge of each XYZ tile; use the value reported by geod_sources probe.'),
     zoomMax: z.number().int().min(0).max(22).optional(),
     zoomLevels: z.array(z.number().int().min(0).max(22)).min(1).max(23).optional(),
     format: z.enum(['png', 'jpeg', 'geotiff']).optional(),
@@ -69,6 +70,7 @@ export const toolSchemas = {
     action: z.enum(['list', 'register', 'update', 'remove', 'default', 'probe']),
     id: sourceId.optional(), name: z.string().min(1).max(128).optional(), url: httpUrl.optional(),
     attribution: z.string().min(1).max(4096).optional(), maxZoom: z.number().int().min(0).max(22).optional(),
+    tileSize: z.union([z.literal(256), z.literal(512)]).optional(),
     subdomains: z.array(z.string().min(1).max(128)).max(8).optional(), scheme: z.enum(['xyz', 'tms']).optional(),
     zoom: z.number().int().min(0).max(22).optional(), x: z.number().int().min(0).max(4_194_303).optional(), y: z.number().int().min(0).max(4_194_303).optional(),
   }).superRefine((value, ctx) => {

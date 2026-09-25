@@ -37,16 +37,16 @@ function chunk(type, bytes) {
 }
 
 // A valid deterministic 256x256 RGB PNG; no remote imagery or image library.
-function fixturePng() {
+function fixturePng(size = 256) {
   const header = Buffer.alloc(13);
-  header.writeUInt32BE(256, 0);
-  header.writeUInt32BE(256, 4);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
   header[8] = 8;
   header[9] = 2;
-  const scanlines = Buffer.alloc(256 * (1 + 256 * 3));
-  for (let y = 0; y < 256; y++) {
-    const offset = y * (1 + 256 * 3) + 1;
-    for (let x = 0; x < 256; x++) {
+  const scanlines = Buffer.alloc(size * (1 + size * 3));
+  for (let y = 0; y < size; y++) {
+    const offset = y * (1 + size * 3) + 1;
+    for (let x = 0; x < size; x++) {
       for (let channel = 0; channel < 3; channel++) scanlines[offset + x * 3 + channel] = color[channel];
     }
   }
@@ -109,6 +109,7 @@ function pixelAt(image, lon, lat) {
 
 async function fixtureService() {
   const png = fixturePng();
+  const png512 = fixturePng(512);
   const geojson = Buffer.from(JSON.stringify({ type: 'FeatureCollection', features: [{
     type: 'Feature', properties: { layer: 'boundary', name: 'Synthetic mainland with lake' },
     geometry: { type: 'Polygon', coordinates: [
@@ -117,13 +118,17 @@ async function fixtureService() {
     ] },
   }] }));
   const sockets = new Set();
-  const state = { imageRequests: 0, vectorRequests: 0, hangingRequests: 0 };
+  const state = { imageRequests: 0, largeImageRequests: 0, vectorRequests: 0, hangingRequests: 0 };
   const server = createServer((request, response) => {
     if (request.url === '/hang/2/2/1.png') {
       state.hangingRequests += 1;
       return; // Deliberately hold the HTTP response open until cancellation.
     }
-    if (request.url === '/2/2/1.png') {
+    if (request.url === '/512/2/2/1.png') {
+      state.largeImageRequests += 1;
+      response.writeHead(200, { 'content-type': 'image/png', 'content-length': png512.length });
+      response.end(png512);
+    } else if (request.url === '/2/2/1.png') {
       state.imageRequests += 1;
       response.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length });
       response.end(png);
@@ -274,6 +279,29 @@ test('official MCP v2 stdio client completes GeoD jobs and reads native artifact
     const plan = structured(await client.callTool({ name: 'geod_plan', arguments: { request } }));
     assert.equal(plan.ok, true);
     assert.equal(fixture.state.imageRequests, 0);
+  });
+
+  await t.test('512px sources preserve native pixels and geographic footprint', async () => {
+    const registered = structured(await client.callTool({ name: 'geod_sources', arguments: {
+      action: 'register', id: 'mcp_512_fixture', name: 'Synthetic 512px fixture',
+      url: `${fixture.url}/512/{z}/{x}/{y}.png`, attribution: 'Automated test', maxZoom: 3, tileSize: 512,
+    } }));
+    assert.equal(registered.ok, true);
+    const request = { schemaVersion: '1.0', name: '512px native tile', bounds: [1, 1, 89, 65],
+      imagery: { sourceId: 'mcp_512_fixture', zoom: 2, format: 'png', concurrency: 1 },
+      limits: { maxTiles: 1, maxPixels: 262144, timeoutSeconds: 30 } };
+    const plan = structured(await client.callTool({ name: 'geod_plan', arguments: { request } }));
+    assert.equal(plan.imagery.tileSize, 512);
+    assert.equal(plan.imagery.width, 512);
+    assert.equal(plan.imagery.height, 512);
+    const job = structured(await client.callTool({ name: 'geod_fetch', arguments: { request } }));
+    const completed512 = await waitForJob(client, job.jobId);
+    assert.equal(completed512.manifestPath, completed512.result.manifestPath);
+    const manifest = completed512.result.manifest;
+    const raster = manifest.assets.find(asset => asset.id === 'imagery');
+    assert.equal(raster.width, 512);
+    assert.equal(raster.height, 512);
+    assert.equal(fixture.state.largeImageRequests, 1);
   });
 
   let completed;

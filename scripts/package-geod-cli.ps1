@@ -64,7 +64,7 @@ The package does not include map data.
 Portable ZIP: extract, then run geod.exe by its full path (PATH is unchanged).
 Windows installer: installs for the current user; open a new terminal afterward.
 Full installation and first-run examples: docs/geod-cli-0.3.md.
-Project and release: https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.0
+Project and release: https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.1
 '@, $utf8)
 $binaryStream = [System.IO.File]::OpenRead($BinaryPath)
 $binaryHasher = [System.Security.Cryptography.SHA256]::Create()

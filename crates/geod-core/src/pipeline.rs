@@ -30,6 +30,9 @@ pub struct ImageryRequest {
     pub source: String,
     pub attribution: String,
     pub zoom: u8,
+    /// Native square tile edge in pixels. Does not change XYZ coordinates.
+    #[serde(default = "default_tile_size")]
+    pub tile_size: u32,
     #[serde(default)]
     pub zoom_max: Option<u8>,
     /// When set, these discrete levels take precedence over zoom..=zoomMax.
@@ -84,6 +87,9 @@ fn default_compression() -> String {
 }
 fn default_concurrency() -> usize {
     4
+}
+fn default_tile_size() -> u32 {
+    256
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -301,6 +307,12 @@ fn plan_with_profile(request: &Request, profile: JobProfile) -> Result<serde_jso
     let mut imagery = serde_json::Value::Null;
     if let Some(i) = &request.imagery {
         let zooms = selected_zooms(i)?;
+        if ![256, 512].contains(&i.tile_size) {
+            return Err("imagery.tileSize must be 256 or 512".into());
+        }
+        if i.tile_size == 512 && matches!(i.format.as_str(), "mbtiles" | "gpkg") {
+            return Err("512px tiles are not yet supported in MBTiles or GeoPackage exports; choose PNG, JPEG, GeoTIFF, or raw tiles".into());
+        }
         if !(1..=32).contains(&i.concurrency) {
             return Err("imagery.concurrency must be 1..32".into());
         }
@@ -392,15 +404,15 @@ fn plan_with_profile(request: &Request, profile: JobProfile) -> Result<serde_jso
             let (x0, y0, x1, y1, cols, rows) =
                 tile::get_tile_matrix_size(&tile_bounds(request.bounds), zoom);
             let count = u64::from(cols) * u64::from(rows);
-            let pixels = count * 256 * 256;
-            if (i.format == "jpeg" || i.crop_to_shape || i.clip_to_layer.is_some())
+            let pixels = count * u64::from(i.tile_size) * u64::from(i.tile_size);
+            if (i.tile_size == 512 || i.format == "jpeg" || i.crop_to_shape || i.clip_to_layer.is_some())
                 && pixels > 67_108_864
             {
-                return Err("RESOURCE_LIMIT: JPEG and clipped rasters are limited to 67108864 pixels per zoom; use an unclipped streaming format or split the region".into());
+                return Err("RESOURCE_LIMIT: 512px, JPEG and clipped rasters are limited to 67108864 pixels per zoom; reduce zoom or split the region".into());
             }
             total_tiles += count;
             total_pixels += pixels;
-            level_plans.push(serde_json::json!({"zoom":zoom,"tileCount":count,"width":cols*256,"height":rows*256,
+            level_plans.push(serde_json::json!({"zoom":zoom,"tileCount":count,"width":cols*i.tile_size,"height":rows*i.tile_size,
                 "pixels":pixels,"actualBounds":footprint(&tile::get_merged_bounds(x0,y0,x1,y1,zoom))}));
         }
         if total_tiles > u64::from(limits.max_tiles) || total_pixels > limits.max_pixels {
@@ -409,7 +421,7 @@ fn plan_with_profile(request: &Request, profile: JobProfile) -> Result<serde_jso
         let last = level_plans.last().expect("zoom list is nonempty");
         imagery = serde_json::json!({"tileCount":total_tiles,"width":last["width"],"height":last["height"],"pixels":total_pixels,
             "estimatedRgbBytes":total_pixels*3,"actualBounds":last["actualBounds"],"crs":"EPSG:3857","zoom":last["zoom"],
-            "zoomLevels":zooms,"levels":level_plans,"format":i.format,"overlayCount":i.overlays.len(),
+            "zoomLevels":zooms,"levels":level_plans,"tileSize":i.tile_size,"format":i.format,"overlayCount":i.overlays.len(),
             "clip":if i.crop_to_shape { Some(serde_json::json!({"mode":"drawn-polygon-alpha","outside":"transparent"})) }
                 else {i.clip_to_layer.as_ref().map(|layer|serde_json::json!({"layer":layer,"mode":"polygon-union-alpha","outside":"transparent","vectorGeometriesUnchanged":true}))}});
     }

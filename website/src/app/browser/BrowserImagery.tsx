@@ -9,8 +9,8 @@ import styles from "./browser.module.css";
 
 type Tool = { name: string; description: string; inputSchema: object; annotations?: object; execute: (input: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<object> };
 type ModelContext = { registerTool: (tool: Tool, options?: { signal?: AbortSignal }) => Promise<unknown> };
-type SourceForm = { id: string; name: string; url: string; attribution: string; maxZoom: string; scheme: "xyz" | "tms"; subdomains: string };
-const EMPTY_FORM: SourceForm = { id: "", name: "", url: "", attribution: "", maxZoom: "18", scheme: "xyz", subdomains: "" };
+type SourceForm = { id: string; name: string; url: string; attribution: string; maxZoom: string; tileSize: "256" | "512"; scheme: "xyz" | "tms"; subdomains: string };
+const EMPTY_FORM: SourceForm = { id: "", name: "", url: "", attribution: "", maxZoom: "18", tileSize: "256", scheme: "xyz", subdomains: "" };
 const EXAMPLES = [{ name: "河南", id: "henan" }, { name: "四川", id: "sichuan" }] as const;
 const EXAMPLE_SOURCE_URL = "https://www.geoboundaries.org/api/current/gbOpen/CHN/ADM1/";
 const EXAMPLE_CREDIT = `geoBoundaries CHN ADM1 (2019), William & Mary geoLab, CC BY 4.0, ${EXAMPLE_SOURCE_URL}`;
@@ -31,7 +31,7 @@ const LABELS = ["西经度", "南纬度", "东经度", "北纬度"];
 const KEYS = ["west", "south", "east", "north"];
 const textError = (error: unknown) => error instanceof Error ? error.message : "操作失败，请重试。";
 const result = (value: unknown) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
-const sourceView = (source: BrowserSource, defaultId: string) => ({ id: source.id, name: source.name, attribution: source.attribution, maxZoom: source.maxZoom, scheme: source.scheme, default: source.id === defaultId, kind: source.id === BROWSER_SOURCE.id ? "builtIn" : "custom" });
+const sourceView = (source: BrowserSource, defaultId: string) => ({ id: source.id, name: source.name, attribution: source.attribution, maxZoom: source.maxZoom, tileSize: source.tileSize, scheme: source.scheme, default: source.id === defaultId, kind: source.id === BROWSER_SOURCE.id ? "builtIn" : "custom" });
 const requestSchema = { type: "object", properties: {
   west: { type: "number" }, south: { type: "number" }, east: { type: "number" }, north: { type: "number" },
   zoom: { type: "integer", minimum: 0, maximum: 22 }, sourceId: { type: "string", description: "geod_browser_sources list 返回的图源 ID；省略时使用页面当前图源" },
@@ -43,13 +43,13 @@ const requestSchema = { type: "object", properties: {
 const sourcesSchema = { type: "object", properties: {
   action: { type: "string", enum: ["list", "register", "update", "remove", "default", "probe"] }, id: { type: "string" },
   name: { type: "string" }, url: { type: "string", description: "用户获授权的 HTTPS 瓦片模板，只保存在当前浏览器" },
-  attribution: { type: "string" }, maxZoom: { type: "integer", minimum: 0, maximum: 22 }, scheme: { type: "string", enum: ["xyz", "tms"] },
+  attribution: { type: "string" }, maxZoom: { type: "integer", minimum: 0, maximum: 22 }, tileSize: { type: "integer", enum: [256, 512] }, scheme: { type: "string", enum: ["xyz", "tms"] },
   subdomains: { type: "array", items: { type: "string" }, maxItems: 8 }, zoom: { type: "integer" }, x: { type: "integer" }, y: { type: "integer" },
 }, required: ["action"], additionalProperties: false };
 
 function planSummary(plan: ImageryPlan) {
   return { sourceId: plan.sourceId, source: plan.source, attribution: plan.attribution, bounds: plan.bounds, zoom: plan.zoom,
-    tileCount: plan.tiles, width: plan.width, height: plan.height,
+    tileCount: plan.tiles, tileSize: plan.tileSize, width: plan.width, height: plan.height,
     clip: plan.clipGeometry ? `${plan.clipGeometry.type}；边界外透明，附带 clip.geojson` : "无多边形裁剪",
     clipAttribution: plan.clipAttribution ?? null,
     execution: "当前浏览器直接从所选图源下载、拼接并裁剪；GeoD 服务器不处理影像。" };
@@ -164,7 +164,7 @@ export default function BrowserImagery() {
     if (action === "probe") {
       const source = sourceById(id);
       const checked = await probeBrowserSource(source, Number(input.zoom ?? 0), Number(input.x ?? 0), Number(input.y ?? 0), signal);
-      setSourceMessage(`${source.name} 的检测瓦片可在此浏览器读取。`); return checked;
+      setSourceMessage(checked.ok ? `${source.name} 的 ${checked.width} × ${checked.height} 瓦片可在此浏览器读取。` : checked.message ?? "瓦片尺寸与图源配置不一致。"); return checked;
     }
     throw new Error("未知图源操作。");
   }, [chooseSource, persist, sourceById]);
@@ -219,7 +219,7 @@ export default function BrowserImagery() {
   const handleProbe = async () => { try { const next = currentPlan(); await sourceAction({ action: "probe", id: next.sourceId, zoom: next.zoom, x: next.firstX, y: next.firstY }); }
     catch (error) { setSourceMessage(textError(error)); } };
   const handleRegister = async () => {
-    try { const source = validateBrowserSource({ ...form, maxZoom: Number(form.maxZoom), subdomains: form.subdomains.split(",").map(part => part.trim()).filter(Boolean) });
+    try { const source = validateBrowserSource({ ...form, maxZoom: Number(form.maxZoom), tileSize: Number(form.tileSize), subdomains: form.subdomains.split(",").map(part => part.trim()).filter(Boolean) });
       const action = storeRef.current.customSources.some(item => item.id === source.id) ? "update" : "register";
       await sourceAction({ action, ...source }); setForm(EMPTY_FORM); setShowForm(false);
     } catch (error) { setSourceMessage(textError(error)); }
@@ -287,7 +287,7 @@ export default function BrowserImagery() {
       <div className={styles.sourceList}>{sources.map(source => <div className={styles.sourceRow} key={source.id}>
         <button type="button" className={styles.sourceChoice} aria-pressed={activeId === source.id} disabled={busy}
           onClick={() => { chooseSource(source.id); setSourceMessage(`已选择 ${source.name}。`); }}><strong>{source.name}</strong>
-          <span>{source.id} · 0–{source.maxZoom} 级 · {source.scheme.toUpperCase()}{store.defaultSourceId === source.id ? " · 默认" : ""}</span></button>
+          <span>{source.id} · 0–{source.maxZoom} 级 · {source.tileSize} 像素瓦片 · {source.scheme.toUpperCase()}{store.defaultSourceId === source.id ? " · 默认" : ""}</span></button>
         {source.id !== BROWSER_SOURCE.id && <button type="button" className={styles.sourceRemove} aria-label={`删除图源 ${source.name}`} disabled={busy}
           onClick={() => { void sourceAction({ action: "remove", id: source.id }).catch(error => setSourceMessage(textError(error))); }}><Trash2 size={16} aria-hidden="true" /></button>}
       </div>)}</div>
@@ -304,6 +304,7 @@ export default function BrowserImagery() {
           <label className={styles.fullField}>HTTPS 瓦片模板<input type="password" value={form.url} onChange={event => setForm(current => ({ ...current, url: event.target.value }))} placeholder="https://example.com/{z}/{x}/{y}.png" autoComplete="off" /></label>
           <label className={styles.fullField}>来源和署名<input value={form.attribution} onChange={event => setForm(current => ({ ...current, attribution: event.target.value }))} placeholder="数据提供方 / 授权说明" /></label>
           <label>最高级别<input type="number" min={0} max={22} value={form.maxZoom} onChange={event => setForm(current => ({ ...current, maxZoom: event.target.value }))} /></label>
+          <label>瓦片尺寸<select value={form.tileSize} onChange={event => setForm(current => ({ ...current, tileSize: event.target.value as "256" | "512" }))}><option value="256">256 × 256</option><option value="512">512 × 512</option></select></label>
           <label>子域名（可选，逗号分隔）<input value={form.subdomains} onChange={event => setForm(current => ({ ...current, subdomains: event.target.value }))} placeholder="a,b,c" /></label>
         </div>
         <div className={styles.schemeRow} role="group" aria-label="瓦片行号方式">{(["xyz", "tms"] as const).map(scheme => <button type="button" key={scheme}

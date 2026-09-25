@@ -12,6 +12,7 @@ foreach ($file in @('package.json', 'README.md')) { Copy-Item -LiteralPath (Join
 Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $source 'src') -Destination $stage -Recurse
 Copy-Item -LiteralPath (Join-Path $source 'bin') -Destination $stage -Recurse
+Copy-Item -LiteralPath (Join-Path $repoRoot 'target\x86_64-pc-windows-msvc\release\geod.exe') -Destination (Join-Path $stage 'bin\geod.exe')
 Copy-Item -LiteralPath (Join-Path $source 'skill') -Destination $stage -Recurse
 New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') | Out-Null
 Copy-Item -LiteralPath (Join-Path $source 'scripts\self-check.mjs') -Destination (Join-Path $stage 'scripts\self-check.mjs')

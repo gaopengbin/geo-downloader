@@ -7,7 +7,7 @@ use crate::{
     pipeline::{self, ImageryRequest, Manifest, OverlayRequest, Request},
     pyramid, streaming_raster, streaming_tiff, tile, tile_cache, tile_pack,
 };
-use image::{DynamicImage, GenericImageView, ImageFormat};
+use image::{DynamicImage, ImageFormat};
 use std::{collections::HashMap, fs, io::Cursor, path::Path};
 
 fn source(
@@ -27,12 +27,12 @@ fn source(
     }
 }
 
-fn valid_image(bytes: &[u8]) -> bool {
+fn valid_image(bytes: &[u8], tile_size: u32) -> bool {
     image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .ok()
         .and_then(|reader| reader.into_dimensions().ok())
-        == Some((256, 256))
+        == Some((tile_size, tile_size))
         && image::load_from_memory(bytes).is_ok()
 }
 
@@ -48,6 +48,7 @@ async fn add_overlay(
     overlay: &OverlayRequest,
     zoom: u8,
     concurrency: usize,
+    tile_size: u32,
     stage: &Path,
     work_dir: Option<&Path>,
     tiles: &mut HashMap<(u32, u32), merger::TileSource>,
@@ -102,14 +103,18 @@ async fn add_overlay(
         let Ok(top) = image::load_from_memory(overlay_bytes.as_ref()) else {
             continue;
         };
-        if top.dimensions() != (256, 256) {
+        if top.width() != top.height() || ![256, 512].contains(&top.width()) {
             continue;
         }
         let base_bytes = base.bytes().map_err(|e| e.to_string())?;
         let mut bottom = image::load_from_memory(base_bytes.as_ref())
             .map_err(|e| e.to_string())?
             .to_rgba8();
-        image::imageops::overlay(&mut bottom, &top.to_rgba8(), 0, 0);
+        if bottom.dimensions() != (tile_size, tile_size) { continue; }
+        let top = if top.width() == tile_size { top.to_rgba8() } else {
+            image::imageops::resize(&top.to_rgba8(), tile_size, tile_size, image::imageops::FilterType::Triangle)
+        };
+        image::imageops::overlay(&mut bottom, &top, 0, 0);
         *base = png_tile(bottom)?;
     }
     Ok(())
@@ -152,11 +157,12 @@ fn write_preview_from_tiles(
     y0: u32,
     x1: u32,
     y1: u32,
+    tile_size: u32,
     bounds: &tile::TileBounds,
     clip_data: Option<(&serde_json::Value, &str)>,
 ) -> Result<(), String> {
-    let full_width = (x1 - x0 + 1) * 256;
-    let full_height = (y1 - y0 + 1) * 256;
+    let full_width = (x1 - x0 + 1) * tile_size;
+    let full_height = (y1 - y0 + 1) * tile_size;
     let scale = (2048.0 / f64::from(full_width.max(full_height))).min(1.0);
     let width = (f64::from(full_width) * scale).round().max(1.0) as u32;
     let height = (f64::from(full_height) * scale).round().max(1.0) as u32;
@@ -166,11 +172,11 @@ fn write_preview_from_tiles(
         let tile = image::load_from_memory(bytes.as_ref())
             .map_err(|e| e.to_string())?
             .to_rgb8();
-        let left = (u64::from(x - x0) * 256 * u64::from(width) / u64::from(full_width)) as u32;
-        let right = (u64::from(x - x0 + 1) * 256 * u64::from(width) / u64::from(full_width)) as u32;
-        let top = (u64::from(y - y0) * 256 * u64::from(height) / u64::from(full_height)) as u32;
+        let left = (u64::from(x - x0) * u64::from(tile_size) * u64::from(width) / u64::from(full_width)) as u32;
+        let right = (u64::from(x - x0 + 1) * u64::from(tile_size) * u64::from(width) / u64::from(full_width)) as u32;
+        let top = (u64::from(y - y0) * u64::from(tile_size) * u64::from(height) / u64::from(full_height)) as u32;
         let bottom =
-            (u64::from(y - y0 + 1) * 256 * u64::from(height) / u64::from(full_height)) as u32;
+            (u64::from(y - y0 + 1) * u64::from(tile_size) * u64::from(height) / u64::from(full_height)) as u32;
         if right > left && bottom > top {
             let tile = image::imageops::resize(
                 &tile,
@@ -292,13 +298,13 @@ pub(crate) async fn execute(
         let mut valid = HashMap::new();
         for (key, item) in files {
             let bytes = item.bytes().map_err(|e| e.to_string())?;
-            if valid_image(bytes.as_ref()) {
+            if valid_image(bytes.as_ref(), i.tile_size) {
                 drop(bytes);
                 valid.insert(key, item);
             } else {
                 m.quality.warnings.push(format!(
-                    "Invalid or non-256px tile omitted at z{zoom}: {}/{}",
-                    key.0, key.1
+                    "Invalid or non-{}px tile omitted at z{zoom}: {}/{}",
+                    i.tile_size, key.0, key.1
                 ));
             }
         }
@@ -328,6 +334,7 @@ pub(crate) async fn execute(
                 overlay,
                 zoom,
                 i.concurrency,
+                i.tile_size,
                 stage,
                 overlay_work.as_deref(),
                 &mut valid,
@@ -405,14 +412,14 @@ pub(crate) async fn execute(
                         _ => "image/png",
                     },
                     pipeline::footprint(&tile_bounds),
-                    Some((256, 256)),
+                    Some((i.tile_size, i.tile_size)),
                 )?;
             }
         }
 
         if pack || raw {
             if zoom == last_zoom {
-                write_preview_from_tiles(stage, m, &valid, x0, y0, x1, y1, &bounds, None)?;
+                write_preview_from_tiles(stage, m, &valid, x0, y0, x1, y1, i.tile_size, &bounds, None)?;
             }
             continue;
         }
@@ -421,8 +428,8 @@ pub(crate) async fn execute(
             "{}",
             serde_json::json!({"phase":"export","zoom":zoom,"format":format})
         );
-        let width = (x1 - x0 + 1) * 256;
-        let height = (y1 - y0 + 1) * 256;
+        let width = (x1 - x0 + 1) * i.tile_size;
+        let height = (y1 - y0 + 1) * i.tile_size;
         let (export_format, ext, mime) = match format {
             "png" => (exporter::ExportFormat::Png, "png", "image/png"),
             "jpeg" => (exporter::ExportFormat::Jpeg, "jpg", "image/jpeg"),
@@ -447,11 +454,12 @@ pub(crate) async fn execute(
                 y0,
                 x1,
                 y1,
+                i.tile_size,
                 &bounds,
                 clip_layer.and_then(|layer| vector.as_ref().map(|data| (data, layer))),
             )?;
         }
-        if clip_layer.is_none() && format == "geotiff" {
+        if i.tile_size == 256 && clip_layer.is_none() && format == "geotiff" {
             streaming_tiff::merge_and_export_streaming_with_budget(
                 &valid,
                 x0,
@@ -464,7 +472,7 @@ pub(crate) async fn execute(
                 None,
                 64 * 1024 * 1024,
             )?;
-        } else if clip_layer.is_none() && format == "png" {
+        } else if i.tile_size == 256 && clip_layer.is_none() && format == "png" {
             streaming_raster::merge_and_export_streaming_png(
                 &valid,
                 x0,
@@ -477,7 +485,7 @@ pub(crate) async fn execute(
             )?;
         } else if let (Some(layer), Some(vectors)) = (clip_layer, &vector) {
             eprintln!("{}", serde_json::json!({"phase":"clip","zoom":zoom}));
-            let image = merger::merge_tiles(&valid, x0, y0, x1, y1);
+            let image = merger::merge_tiles_sized(&valid, x0, y0, x1, y1, i.tile_size);
             let clipped = clip::clip_raster(image, vectors, layer, &bounds)?;
             exporter::export_rgba_image_to_file(
                 clipped,
@@ -487,7 +495,7 @@ pub(crate) async fn execute(
                 &i.compression,
             )?;
         } else {
-            let image = merger::merge_tiles(&valid, x0, y0, x1, y1);
+            let image = merger::merge_tiles_sized(&valid, x0, y0, x1, y1, i.tile_size);
             exporter::export_image_to_file(
                 image,
                 export_format,

@@ -26,7 +26,7 @@ New-Item -ItemType Directory -Path $installPath -Force | Out-Null
 & npm.cmd install --prefix $installPath --ignore-scripts --no-audit --no-fund --no-save --no-package-lock $PackageSpec
 if ($LASTEXITCODE -ne 0) { throw 'GeoD MCP installation failed.' }
 $packageRoot = Join-Path $installPath 'node_modules\geod-mcp'
-$cli = Join-Path $installPath 'node_modules\geod-cli\native\geod.exe'
+$cli = Join-Path $packageRoot 'bin\geod.exe'
 if (-not (Test-Path -LiteralPath $entrypoint)) { throw 'Installed MCP entrypoint is missing.' }
 if (-not (Test-Path -LiteralPath $cli)) { throw 'Installed GeoD native executable is missing.' }
 $oldWorkspace = $env:GEOD_WORKSPACE
