@@ -6,6 +6,8 @@ import { downloadBrowserImagery, planBrowserImagery, type Bounds, type ImageryPl
 import { BROWSER_SOURCE, probeBrowserSource, readBrowserSources, saveBrowserSources, validateBrowserSource, type BrowserSource, type BrowserSourceStore } from "../../lib/browser-sources";
 import { clipBounds, validateClipGeometry, type ClipGeometry } from "../../lib/browser-clip";
 import { browserAccount, FREE_MAX_ZOOM } from "../../lib/browser-access";
+import { trackBrowserEvent } from "../../lib/browser-analytics";
+import { trackProductEvent } from "../../lib/product-analytics";
 import styles from "./browser.module.css";
 
 type Tool = { name: string; description: string; inputSchema: object; annotations?: object; execute: (input: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<object> };
@@ -77,7 +79,7 @@ export default function BrowserImagery() {
   const [plan, setPlan] = useState<ImageryPlan | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [ready, setReady] = useState<{ preview: string; archive: string; source: string; clipped: boolean } | null>(null);
+  const [ready, setReady] = useState<{ preview: string; archive: string; source: string; clipped: boolean; initiator: "page" | "webmcp" } | null>(null);
   const [webMcpStatus, setWebMcpStatus] = useState("检测中");
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
   const busyRef = useRef(false);
@@ -122,7 +124,7 @@ export default function BrowserImagery() {
       example?.geometry ?? input.clipGeometry, example ? EXAMPLE_CREDIT : undefined);
   }, [makePlan]);
 
-  const runFetch = useCallback(async (next: ImageryPlan, externalSignal?: AbortSignal) => {
+  const runFetch = useCallback(async (next: ImageryPlan, externalSignal?: AbortSignal, initiator: "page" | "webmcp" = "page") => {
     if (busyRef.current) throw new Error("已有下载任务正在运行，请先等待或取消。");
     busyRef.current = true; setBusy(true); chooseSource(next.sourceId);
     setValues(next.bounds.map(String)); setZoom(next.zoom); setClipText(next.clipGeometry ? JSON.stringify(next.clipGeometry) : "");
@@ -133,13 +135,21 @@ export default function BrowserImagery() {
     const controller = new AbortController(); abortRef.current = controller;
     const abort = () => controller.abort(); externalSignal?.addEventListener("abort", abort, { once: true });
     if (externalSignal?.aborted) controller.abort();
+    trackBrowserEvent("browser_download_started", next, initiator);
     try {
       const files = await downloadBrowserImagery(next, (done, total) => setProgress({ done, total }), controller.signal);
       const preview = URL.createObjectURL(files.png); const archive = URL.createObjectURL(files.zip);
-      urlsRef.current = [preview, archive]; setReady({ preview, archive, source: next.source, clipped: !!next.clipGeometry });
+      urlsRef.current = [preview, archive]; setReady({ preview, archive, source: next.source, clipped: !!next.clipGeometry, initiator });
+      trackBrowserEvent("browser_download_completed", next, initiator);
       setMessage(next.clipGeometry ? "裁剪完成。边界外已透明；保存数据包可获得影像和裁剪边界。" : "拼接完成。点击“保存数据包”把影像、定位文件和来源说明存到你的设备。");
       return { ...planSummary(next), archiveReady: true, archiveBytes: files.zip.size, nextStep: "请让用户在本页面点击保存数据包。" };
-    } catch (error) { setMessage(error instanceof Error && error.name === "AbortError" ? "任务已取消。" : textError(error)); throw error; }
+    } catch (error) {
+      const reason = error instanceof Error && error.name === "AbortError" ? "cancelled"
+        : error instanceof Error && /登录|授权/.test(error.message) ? "auth_required"
+        : error instanceof TypeError ? "network" : "other";
+      trackBrowserEvent("browser_download_failed", next, initiator, reason);
+      setMessage(error instanceof Error && error.name === "AbortError" ? "任务已取消。" : textError(error)); throw error;
+    }
     finally { externalSignal?.removeEventListener("abort", abort); abortRef.current = null; busyRef.current = false; setBusy(false); }
   }, [chooseSource]);
 
@@ -154,6 +164,7 @@ export default function BrowserImagery() {
       if (action === "register" && exists) throw new Error("图源 ID 已存在，请用 update 修改。");
       if (action === "update" && !exists) throw new Error("图源不存在，请用 register 添加。");
       persist({ defaultSourceId: storeRef.current.defaultSourceId, customSources: exists ? custom.map(item => item.id === id ? source : item) : [...custom, source] });
+      if (action === "register") void trackProductEvent("browser_source_registered");
       chooseSource(id); setSourceMessage(`${source.name} 已保存在当前浏览器。请检测一块瓦片确认跨域访问可用。`);
       return { ok: true, source: sourceView(source, storeRef.current.defaultSourceId), savedIn: "current browser only" };
     }
@@ -189,9 +200,13 @@ export default function BrowserImagery() {
         inputSchema: sourcesSchema, annotations: { readOnlyHint: false },
         execute: async (input, options) => result(await sourceAction(input, options?.signal)) },
       { name: "geod_browser_plan", description: "按 WGS84 范围、级别、可选 sourceId 和 clipGeometry 估算当前浏览器影像下载；也可用 exampleId=henan/sichuan 自动填入省界与范围。不会下载瓦片。先列出图源。",
-        inputSchema: requestSchema, annotations: { readOnlyHint: true }, execute: async input => result(planSummary(await toolPlan(input))) },
+        inputSchema: requestSchema, annotations: { readOnlyHint: true }, execute: async input => {
+          const next = await toolPlan(input);
+          trackBrowserEvent("browser_plan_created", next, "webmcp");
+          return result(planSummary(next));
+        } },
       { name: "geod_browser_fetch", description: "仅在用户要求下载时调用。可传 exampleId=henan/sichuan 自动使用省界，也可传范围与 clipGeometry。当前浏览器下载、拼接、裁剪后让用户保存 ZIP。不要用来测试连接。",
-        inputSchema: requestSchema, annotations: { readOnlyHint: false }, execute: async (input, options) => result(await runFetch(await toolPlan(input), options?.signal)) },
+        inputSchema: requestSchema, annotations: { readOnlyHint: false }, execute: async (input, options) => result(await runFetch(await toolPlan(input), options?.signal, "webmcp")) },
     ];
     Promise.all(tools.map(tool => context.registerTool(tool, { signal: controller.signal })))
       .then(() => setWebMcpStatus("WebMCP 工具已就绪（4 个）"))
@@ -221,7 +236,7 @@ export default function BrowserImagery() {
   const handleClipBounds = () => { try { const geometry = parseClip(); if (!geometry) throw new Error("请先粘贴 GeoJSON 裁剪边界。");
       const bounds = clipBounds(geometry); setValues(bounds.map(String)); setPlan(null); clearReady(); setMessage("已按裁剪边界填入经纬度范围；请先估算下载量。"); }
     catch (error) { setMessage(textError(error)); } };
-  const handlePlan = () => { try { const next = currentPlan(); setPlan(next); setMessage(`范围有效：${next.tiles} 块瓦片，输出约 ${next.width} × ${next.height} 像素${next.clipGeometry ? "；边界外将透明" : ""}。`); }
+  const handlePlan = () => { try { const next = currentPlan(); setPlan(next); trackBrowserEvent("browser_plan_created", next, "page"); setMessage(`范围有效：${next.tiles} 块瓦片，输出约 ${next.width} × ${next.height} 像素${next.clipGeometry ? "；边界外将透明" : ""}。`); }
     catch (error) { setPlan(null); setMessage(textError(error)); } };
   const handleFetch = async () => { try { await runFetch(currentPlan()); } catch (error) { setMessage(textError(error)); } };
   const handleProbe = async () => { try { const next = currentPlan(); await sourceAction({ action: "probe", id: next.sourceId, zoom: next.zoom, x: next.firstX, y: next.firstY }); }
@@ -284,7 +299,7 @@ export default function BrowserImagery() {
       <div className={styles.sectionTop}><span className={styles.sectionIcon}><Download size={20} aria-hidden="true" /></span>
         <div><span className={styles.kicker}>02 / RESULT</span><h2 id="browser-result-title">保存到你的设备</h2></div></div>
       {ready ? <><div className={styles.preview}><img src={ready.preview} alt={`当前浏览器拼接的 ${ready.source} 影像预览`} /></div>
-        <a className={styles.download} href={ready.archive} download={`geod-browser-${Date.now()}.zip`}><Download size={17} aria-hidden="true" />保存数据包</a>
+        <a className={styles.download} href={ready.archive} download={`geod-browser-${Date.now()}.zip`} onClick={() => { if (plan) trackBrowserEvent("browser_save_clicked", plan, ready.initiator); }}><Download size={17} aria-hidden="true" />保存数据包</a>
         <p className={styles.finePrint}>ZIP 包含 imagery.png、imagery.pgw、imagery.prj、manifest.json{ready.clipped ? " 和 clip.geojson" : ""}。文件不会经过 GeoD 服务器。</p></>
         : <div className={styles.empty}>{plan ? <><strong>{plan.tiles} 块瓦片</strong><span>{plan.width} × {plan.height} 像素 · RGBA 内存约 {Math.ceil(plan.width * plan.height * 4 / 1024 / 1024)} MiB{plan.clipGeometry ? " · 边界外透明" : ""}</span></>
           : <><strong>等待范围规划</strong><span>结果会在当前页面生成，不占用 GeoD 服务器的下载和拼接资源。</span></>}</div>}

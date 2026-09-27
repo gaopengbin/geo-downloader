@@ -2,14 +2,22 @@ const productionEndpoint = 'https://laogao.xyz/platform-api/v1/product-events'
 const visitorStorageKey = 'geod-web:analytics-visitor'
 const sessionStorageKey = 'geod-web:analytics-session'
 
-type EventName = 'page_view' | 'download_clicked'
+export type EventName =
+  | 'page_view' | 'download_clicked' | 'install_instructions_copied'
+  | 'account_login_submitted' | 'account_login_succeeded'
+  | 'account_registration_submitted' | 'account_registration_succeeded'
+  | 'account_password_reset_succeeded' | 'account_logout_succeeded'
+  | 'browser_plan_created' | 'browser_source_registered'
+  | 'browser_download_started' | 'browser_download_completed'
+  | 'browser_download_failed' | 'browser_save_clicked'
 type Properties = Record<string, string>
 
 function endpoint() {
   if (process.env.NEXT_PUBLIC_PRODUCT_ANALYTICS_ENDPOINT) {
     return process.env.NEXT_PUBLIC_PRODUCT_ANALYTICS_ENDPOINT
   }
-  return window.location.hostname === 'geodownloader.pages.dev' ? productionEndpoint : ''
+  return ['geod.laogao.xyz', 'geodownloader.pages.dev'].includes(window.location.hostname)
+    ? productionEndpoint : ''
 }
 
 function identifier(storage: Storage, key: string) {
@@ -39,7 +47,8 @@ function context(): Properties {
 
 export async function trackProductEvent(event: EventName, properties: Properties = {}) {
   const url = endpoint()
-  if (!url) return
+  const privacy = navigator as Navigator & { globalPrivacyControl?: boolean }
+  if (!url || privacy.doNotTrack === '1' || privacy.globalPrivacyControl === true) return
   try {
     await fetch(url, {
       method: 'POST',
