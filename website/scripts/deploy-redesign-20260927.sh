@@ -19,11 +19,12 @@ rollback() {
 trap rollback ERR
 
 [[ "$(readlink -f "$current")" == "$old" ]]
-[[ ! -e "$release" ]]
 printf '%s  %s\n' "$expected_hash" "$archive" | sha256sum -c -
 tar -tzf "$archive" >/dev/null
-mkdir -p "$release"
-tar -xzf "$archive" -C "$release"
+if [[ ! -e "$release" ]]; then
+  mkdir -p "$release"
+  tar -xzf "$archive" -C "$release"
+fi
 for page in index browser cli mcp login dashboard history disclaimer; do
   test -s "$release/$page.html"
 done
