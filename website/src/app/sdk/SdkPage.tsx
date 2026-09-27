@@ -33,6 +33,7 @@ import "../home.css";
 import styles from "../styles.module.css";
 
 const repositoryUrl = "https://github.com/gaopengbin/geo-downloader";
+const qrAssetBaseUrl = "https://laogao.xyz/packages/qr-assets";
 const productModules = [
   {
     id: "geotiff",
@@ -452,12 +453,12 @@ export default async function SDKPage() {
             </div>
             <div className={styles.qrGrid}>
               <div className={styles.qrCard}>
-                <img src="/geod-site/gzh.jpg" alt="GeoD 微信公众号二维码" loading="lazy" />
+                <img src={`${qrAssetBaseUrl}/gzh.jpg`} alt="GeoD 微信公众号二维码" loading="lazy" />
                 <strong>微信公众号</strong>
                 <span>版本更新、使用教程与问题说明</span>
               </div>
               <div className={styles.qrCard}>
-                <img src="/geod-site/wxq_sq.png" alt="GeoD 技术交流群二维码" loading="lazy" />
+                <img src={`${qrAssetBaseUrl}/wxq_sq.png`} alt="GeoD 技术交流群二维码" loading="lazy" />
                 <strong>技术交流群</strong>
                 <span>交流 GIS 数据下载、处理与交付经验</span>
               </div>
