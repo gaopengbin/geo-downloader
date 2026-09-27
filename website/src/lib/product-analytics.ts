@@ -3,7 +3,7 @@ const visitorStorageKey = 'geod-web:analytics-visitor'
 const sessionStorageKey = 'geod-web:analytics-session'
 
 export type EventName =
-  | 'page_view' | 'download_clicked' | 'install_instructions_copied'
+  | 'page_view' | 'download_clicked' | 'install_instructions_copied' | 'install_link_clicked'
   | 'account_login_submitted' | 'account_login_succeeded'
   | 'account_registration_submitted' | 'account_registration_succeeded'
   | 'account_password_reset_succeeded' | 'account_logout_succeeded'

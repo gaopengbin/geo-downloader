@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowUpRight, Bot } from "lucide-react";
 import Background from "../_components/Background";
+import { TrackedInstallLink } from "../_components/ProductAnalytics";
 import Footer from "../_components/Footer";
 import Header from "../_components/Header";
 import page from "../geod-page.module.css";
@@ -84,9 +85,9 @@ export default function McpPage() {
                   <h3>HTTPS MCP</h3>
                   <p>Marvis 等客户端可手动添加远端地址与 GeoD Skill。0–5 级可匿名使用；请求 6 级及以上时，支持 OAuth 的客户端会引导用户在浏览器中授权。下载和拼接在 GeoD 服务器上执行。</p>
                   <CodeBlock text={remoteUrl} label="MCP 服务地址" />
-                  <a href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></a>
+                  <TrackedInstallLink artifact="skill" channel="site" href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></TrackedInstallLink>
                   <CodeBlock text={remoteConfig} label="支持 mcpServers 的客户端示例" />
-                  <p className={styles.finePrint}>WorkBuddy 可在技能页面<a href={skillZipUrl}>导入 Skill ZIP</a>。远端 MCP 只开放 NASA GIBS 图源，不接受自定义图源注册；按账号隔离任务，每个账号每天最多 3 次下载任务。豆包工作的实际客户端兼容性仍需测试。</p>
+                  <p className={styles.finePrint}>WorkBuddy 可在技能页面<TrackedInstallLink artifact="skill" channel="site" href={skillZipUrl}>导入 Skill ZIP</TrackedInstallLink>。远端 MCP 只开放 NASA GIBS 图源，不接受自定义图源注册；按账号隔离任务，每个账号每天最多 3 次下载任务。豆包工作的实际客户端兼容性仍需测试。</p>
                 </article>
                 <article className={`${styles.method} ${styles.remoteMethod}`}>
                   <div className={styles.methodLabel}>按需选择 · 浏览器本机计算</div>
@@ -97,12 +98,12 @@ export default function McpPage() {
                 </article>
               </div>
               <div className={styles.linkRow}>
-                <a href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
+                <TrackedInstallLink artifact="mcp" channel="npm" href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
                   远端 MCP 安装器 <ArrowUpRight size={16} aria-hidden="true" />
-                </a>
-                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.6" target="_blank" rel="noopener noreferrer">
+                </TrackedInstallLink>
+                <TrackedInstallLink artifact="mcp" channel="github" className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.6" target="_blank" rel="noopener noreferrer">
                   查看 MCP 安装包与校验值 <ArrowUpRight size={16} aria-hidden="true" />
-                </a>
+                </TrackedInstallLink>
               </div>
             </section>
           </div>

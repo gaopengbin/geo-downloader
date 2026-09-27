@@ -46,3 +46,16 @@ export function TrackedDownloadLink({
     </a>
   );
 }
+
+type TrackedInstallLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  children: ReactNode;
+  artifact: "cli" | "mcp" | "skill";
+  channel: "npm" | "github" | "mirror" | "site";
+};
+
+export function TrackedInstallLink({ children, artifact, channel, onClick, ...props }: TrackedInstallLinkProps) {
+  return <a {...props} onClick={(event) => {
+    onClick?.(event);
+    if (!event.defaultPrevented) void trackProductEvent("install_link_clicked", { artifact, channel });
+  }}>{children}</a>;
+}

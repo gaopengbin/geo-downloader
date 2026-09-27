@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-release_id=geod-analytics-20260927-01
-archive=/srv/laogao/staging/geod-website-analytics-20260927-01/site.tar.gz
+release_id=geod-analytics-20260927-02
+archive=/srv/laogao/staging/geod-website-analytics-20260927-02/site.tar.gz
 release=/srv/laogao/releases/geod-website/$release_id
 current=/srv/laogao/current/geod-website
-old=/srv/laogao/releases/geod-website/geod-zoom5-4074940
-expected_hash=bc977f0a795d0870775a925e3d44cd183a3816f1dadd0e80ed3c15ab5f5d0502
+old=/srv/laogao/releases/geod-website/geod-analytics-20260927-01
+expected_hash=a31b20fba6d5299f0ded1c7e905e2915779c73caba71944f7d1926cf2b3aa027
 switched=false
 
 rollback() {
