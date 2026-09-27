@@ -1,41 +1,62 @@
+"use client";
+
 import cn from "classnames";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
-import { getCtaClassName } from "../CTALink";
 import Logo from "../Logo";
+import AccountMenu from "./AccountMenu";
 import MobileMenu, { type HeaderNavLink } from "./MobileMenu";
+import { accountRequest, type GeoDAccount } from "@/lib/account";
 import urls from "@/lib/urls";
-import { CLI_EXPERIENCE_URL } from "@/lib/site";
 import styles from "./styles.module.css";
 
 interface HeaderProps extends React.HTMLProps<HTMLElement> {
   isHome?: boolean;
 }
 
-const navLinks: HeaderNavLink[] = [
-  { content: "能力", href: "/#features" },
-  { content: "界面", href: "/#screenshots" },
-  { content: "GeoD CLI", href: "/cli" },
-  { content: "GeoD MCP", href: "/mcp" },
-  { content: "CLI 在线体验", href: CLI_EXPERIENCE_URL },
-  { content: "历史版本", href: "/history" },
-  { content: "免责声明", href: "/disclaimer" },
-  {
-    content: "GitHub",
-    href: urls.getGithubUrl(),
-    target: "_blank",
-  },
-  {
-    content: "下载 GeoD",
-    className: getCtaClassName({ variant: "primary" }),
-    href: "/#download",
-    isCta: true,
-  },
+const productLinks: HeaderNavLink[] = [
+  { content: "桌面端", href: "/#download" },
+  { content: "浏览器版", href: "/browser" },
+  { content: "CLI", href: "/cli" },
+  { content: "MCP", href: "/mcp" },
+  { content: "地图创作", href: "/geod" },
 ];
 
 const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
+  const [user, setUser] = useState<GeoDAccount["user"] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const account = await accountRequest<GeoDAccount>("/api/account");
+        if (active) setUser(account.user);
+      } catch {
+        if (active) setUser(current => current === undefined ? null : current);
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    void refresh();
+    window.addEventListener("focus", refresh);
+    window.addEventListener("geod:account-updated", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("geod:account-updated", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  const guestLink: HeaderNavLink = { content: "登录 / 注册", href: "/login", isCta: true };
+  const desktopLinks = user === null ? [...productLinks, guestLink] : productLinks;
+  const mobileLinks = user === undefined ? productLinks : [...productLinks, user ? { content: "个人控制台", href: "/dashboard" } : guestLink];
+
   return (
-    <header className={cn(styles.container)} {...rest}>
+    <header className={cn(styles.container, className)} {...rest}>
       <div className={styles.navbar}>
         <div className={styles.content}>
           <div className={cn(styles.logo, "z-10")}>
@@ -48,7 +69,7 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
               aria-label="Main"
               className={cn(styles.desktopLinks, "pointer-events-auto")}
             >
-              {navLinks.map(
+              {desktopLinks.map(
                 ({
                   href,
                   target,
@@ -58,7 +79,7 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
                   isCta,
                 }) => (
                   <a
-                  key={content}
+                    key={content}
                     href={href}
                     target={target}
                     rel={target === "_blank" ? "noopener noreferrer" : undefined}
@@ -79,9 +100,11 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
                   </a>
                 ),
               )}
+              {user === undefined && <span className={styles.authPlaceholder} aria-hidden="true" />}
             </nav>
           </div>
-          <MobileMenu isHome={isHome} links={navLinks} />
+          {user && <AccountMenu user={user} onLoggedOut={() => setUser(null)} />}
+          <MobileMenu isHome={isHome} links={mobileLinks} />
         </div>
       </div>
     </header>

@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next",
+    "dev": "node scripts/dev-account-proxy.mjs",
+    "dev:frontend": "next",
     "build": "next build",
     "serve": "npx serve@latest out"
   },
@@ -11,11 +12,14 @@
     "@mdi/js": "^7.4.47",
     "@mdi/react": "^1.6.1",
     "classnames": "^2.5.1",
+    "clsx": "^2.1.1",
     "lucide-react": "^0.484.0",
+    "motion": "^13.4.3",
     "next": "14.1.0",
     "react": "^18",
     "react-dom": "^18",
-    "simple-icons": "^16.28.0"
+    "simple-icons": "^16.28.0",
+    "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
     "@types/mdx": "^2.0.13",

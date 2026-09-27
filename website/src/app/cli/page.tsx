@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Download, Terminal } from "lucide-react";
 import Background from "../_components/Background";
+import { TrackedInstallLink } from "../_components/ProductAnalytics";
 import Footer from "../_components/Footer";
 import Header from "../_components/Header";
 import page from "../geod-page.module.css";
@@ -68,14 +69,14 @@ export default function CliPage() {
                 安装程序或便携包无需 Node.js；通过 npm 安装发布包需要 Node.js 18+。
               </p>
               <p className={styles.description}>未登录可下载 0–5 级瓦片；任务包含 6 级及以上时，先用自己的 GeoD 账号完成浏览器授权。授权后下载仍在本机进行。</p>
-                <CodeBlock text={cliInstall} label="PowerShell · 在线安装 0.3.2" />
+                <CodeBlock text={cliInstall} label="PowerShell · 在线安装 0.3.2" trackInstall />
                 <CodeBlock text={cliAuth} label="GeoD 账号授权 · 高级别下载" />
               <div className={styles.linkRow}>
-                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.2" target="_blank" rel="noopener noreferrer">
+                <TrackedInstallLink artifact="cli" channel="github" className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.2" target="_blank" rel="noopener noreferrer">
                   <Download size={17} aria-hidden="true" /> 下载 Windows 安装包与便携版
-                </a>
-                <a href="https://laogao.xyz/geod-cli/geod-cli-0.3.2.tgz" target="_blank" rel="noopener noreferrer">CLI 0.3.2 安装包 <ArrowUpRight size={15} aria-hidden="true" /></a>
-                <a href="https://github.com/gaopengbin/geo-downloader/releases/download/geod-cli-v0.3.2/SHA256SUMS.txt" target="_blank" rel="noopener noreferrer">校验文件 <ArrowUpRight size={15} aria-hidden="true" /></a>
+                </TrackedInstallLink>
+                <TrackedInstallLink artifact="cli" channel="mirror" href="https://laogao.xyz/geod-cli/geod-cli-0.3.2.tgz" target="_blank" rel="noopener noreferrer">CLI 0.3.2 安装包 <ArrowUpRight size={15} aria-hidden="true" /></TrackedInstallLink>
+                <a href="https://github.com/gaopengbin/geo-downloader/releases/download/geod-cli-v0.3.2/CLI-SHA256SUMS.txt" target="_blank" rel="noopener noreferrer">校验文件 <ArrowUpRight size={15} aria-hidden="true" /></a>
                 <a href="#example">命令与示例 <ArrowRight size={15} aria-hidden="true" /></a>
               </div>
             </section>

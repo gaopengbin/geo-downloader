@@ -100,3 +100,81 @@
 @media (max-width: 780px) { .sourceList { grid-template-columns: 1fr; } }
 @media (max-width: 480px) { .formCard, .resultCard, .sourceCard { padding: 20px; } .boundsGrid, .sourceFormGrid { gap: 9px; } .actionRow .primary { flex: 1 1 100%; } .actionRow .secondary { flex: 1; } .sourceFormGrid { grid-template-columns: 1fr; } .sourceFormGrid .fullField { grid-column: auto; } }
 @media (max-width: 480px) { .clipLoaded { align-items: flex-start; flex-direction: column; } }
+
+/* Match the public site while preserving the browser-only imagery controls. */
+.browserPage { color: #202124; }
+.intro div,
+.formCard,
+.resultCard,
+.sourceCard { border-color: #dadce0; background: #fff; box-shadow: 0 12px 38px rgba(32, 33, 36, .055); }
+.intro strong,
+.sectionTop h2,
+.boundsGrid label,
+.clipHeading > span,
+.zoomHeading,
+.empty strong,
+.sourceChoice,
+.sourceFormGrid label { color: #202124; }
+.intro span,
+.description,
+.finePrint,
+.clipHeading em,
+.clipFoot span,
+.clipCredit,
+.accessNote,
+.runtime,
+.status,
+.empty span,
+.sourceForm p { color: #5f6368; }
+.sectionIcon { border-color: #d2e3fc; background: #e8f0fe; color: #1a73e8; }
+.kicker,
+.zoomHeading strong,
+.clipHeading button,
+.clipFoot button,
+.clipLoaded button,
+.clipCredit a,
+.accessNote a { color: #1a73e8; }
+.clipHeading button:hover,
+.clipFoot button:hover,
+.clipLoaded button:hover,
+.clipCredit a:hover,
+.accessNote a:hover { color: #174ea6; }
+.exampleRow button,
+.zoomRow button,
+.schemeRow button,
+.secondary { border-color: #dadce0; background: #fff; color: #3c4043; }
+.exampleRow button:hover,
+.zoomRow button:hover,
+.sourceChoice:hover { border-color: #a8c7fa; background: #f6fafe; }
+.boundsGrid input,
+.clipField textarea,
+.sourceFormGrid input { border-color: #dadce0; background: #fff; color: #202124; }
+.boundsGrid input:focus-visible,
+.clipField textarea:focus-visible { border-color: #1a73e8; box-shadow: 0 0 0 3px #e8f0fe; }
+.boundsGrid small,
+.clipField textarea::placeholder { color: #80868b; }
+.clipLoaded { border-color: #d2e3fc; background: #f6fafe; }
+.clipLoaded strong { color: #202124; }
+.clipLoaded span { color: #5f6368; }
+.zoomRow button[aria-pressed="true"],
+.schemeRow button[aria-pressed="true"] { border-color: #1a73e8; background: #e8f0fe; color: #174ea6; }
+.primary,
+.download { border-color: #1a73e8; background: #1a73e8; color: #fff; }
+.primary:hover,
+.download:hover { background: #1765cc; }
+.cancel { border-color: #f5c2c0; background: #fce8e6; color: #b3261e; }
+.progress { accent-color: #1a73e8; }
+.preview { border-color: #dadce0; background-color: #eef2f7; background-image: linear-gradient(45deg, #dce3ea 25%, transparent 25%), linear-gradient(-45deg, #dce3ea 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #dce3ea 75%), linear-gradient(-45deg, transparent 75%, #dce3ea 75%); }
+.empty { border-color: #dadce0; background: #f8fafd; }
+.dot { background: #1a73e8; box-shadow: none; }
+.sourceRow,
+.sourceForm { border-color: #dadce0; background: #f8fafd; }
+.sourceChoice span { color: #5f6368; }
+.sourceChoice[aria-pressed="true"] { background: #e8f0fe; box-shadow: inset 0 0 0 1px #1a73e8; }
+.sourceRemove { border-left-color: #dadce0; color: #b3261e; }
+.sourceRemove:hover { background: #fce8e6; }
+.sourceFormGrid input:focus-visible,
+.sourceChoice:focus-visible,
+.sourceRemove:focus-visible,
+.sourceActions button:focus-visible,
+.sourceForm button:focus-visible { outline-color: #1a73e8; }

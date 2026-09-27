@@ -1,5 +1,5 @@
 const REPOSITORY = "gaopengbin/geo-downloader";
-const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases?per_page=30`;
+const RELEASES_API = `https://api.github.com/repos/${REPOSITORY}/releases?per_page=100`;
 const RELEASES_URL = `https://github.com/${REPOSITORY}/releases`;
 
 export type ReleaseAssetKind =
@@ -28,22 +28,22 @@ export interface GitHubRelease {
 }
 
 const fallbackRelease: GitHubRelease = {
-  tag_name: "v3.6.7",
-  name: "GeoDownloader v3.6.7",
-  html_url: `${RELEASES_URL}/tag/v3.6.7`,
-  published_at: "2026-08-10T15:46:55Z",
+  tag_name: "v3.6.10",
+  name: "GeoDownloader v3.6.10",
+  html_url: `${RELEASES_URL}/tag/v3.6.10`,
+  published_at: "2026-08-31T03:32:36Z",
   body: "",
   draft: false,
   prerelease: false,
   assets: [
-    "GeoDownloader_3.6.7_windows_x64-setup.exe",
-    "GeoDownloader_3.6.7_macos_arm64.dmg",
-    "GeoDownloader_3.6.7_macos_x64.dmg",
-    "GeoDownloader_3.6.7_linux_amd64.deb",
-    "GeoDownloader_3.6.7_linux_amd64.AppImage",
+    "GeoDownloader_3.6.10_windows_x64-setup.exe",
+    "GeoDownloader_3.6.10_macos_arm64.dmg",
+    "GeoDownloader_3.6.10_macos_x64.dmg",
+    "GeoDownloader_3.6.10_linux_amd64.deb",
+    "GeoDownloader_3.6.10_linux_amd64.AppImage",
   ].map((name) => ({
     name,
-    browser_download_url: `${RELEASES_URL}/download/v3.6.7/${name}`,
+    browser_download_url: `${RELEASES_URL}/download/v3.6.10/${name}`,
     size: 0,
     download_count: 0,
   })),
@@ -66,7 +66,11 @@ export async function getStableReleases(limit = 12): Promise<GitHubRelease[]> {
 
     const releases = (await response.json()) as GitHubRelease[];
     const stableReleases = releases.filter(
-      (release) => !release.draft && !release.prerelease,
+      (release) =>
+        !release.draft &&
+        !release.prerelease &&
+        /^v\d+\.\d+\.\d+$/.test(release.tag_name) &&
+        release.assets.some((asset) => asset.name.startsWith("GeoDownloader_")),
     );
 
     return stableReleases.length > 0

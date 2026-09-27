@@ -29,9 +29,9 @@ export const metadata: Metadata = {
     images: [DEFAULT_OG_IMAGE],
   },
   icons: {
-    icon: "/geod-site/icon.png",
-    shortcut: "/geod-site/favicon.ico",
-    apple: "/geod-site/icon.png",
+    icon: "/geod-site/logo-symbol.png",
+    shortcut: "/geod-site/logo-symbol.png",
+    apple: "/geod-site/logo-symbol.png",
   },
   manifest: "/manifest.webmanifest",
   authors: [{ name: "gaopengbin", url: "https://github.com/gaopengbin" }],
@@ -46,8 +46,8 @@ export default function RootLayout({
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
-        <meta name="msapplication-TileColor" content="#2563eb" />
-        <meta name="theme-color" content="#2563eb" />
+        <meta name="msapplication-TileColor" content="#ffffff" />
+        <meta name="theme-color" content="#ffffff" />
       </head>
       <body suppressHydrationWarning>
         <ProductPageView />

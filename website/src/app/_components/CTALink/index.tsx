@@ -1,36 +1,19 @@
-import { AnchorHTMLAttributes } from "react";
+"use client";
 
 import cn from "classnames";
+import { ButtonLink, type ButtonLinkProps } from "@/components/motion/button/base";
 import styles from "./styles.module.css";
 
-interface CTALinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
+type CTALinkProps = Omit<ButtonLinkProps, "variant" | "size"> & {
   variant?: "primary" | "secondary" | "tertiary";
   full?: boolean;
+};
+
+export default function CTALink({ variant = "primary", full, className, children, ...rest }: CTALinkProps) {
+  return <ButtonLink
+    {...rest}
+    variant={variant === "tertiary" ? "ghost" : variant}
+    size="lg"
+    className={cn(styles.ctaLink, styles[variant], full && styles.full, className)}
+  >{children}</ButtonLink>;
 }
-
-export const getCtaClassName = ({ className, variant, full }: CTALinkProps) => {
-  let variantClass;
-  if (variant === "secondary") {
-    variantClass = styles.secondary;
-  } else if (variant === "tertiary") {
-    variantClass = styles.tertiary;
-  } else {
-    variantClass = styles.primary;
-  }
-
-  return cn(styles.ctaLink, variantClass, full && styles.full, className);
-};
-
-/**
- * Call To Action Link
- */
-const CTALink = (props: CTALinkProps) => {
-  const { children, variant, full, ...rest } = props;
-  return (
-    <a {...rest} className={getCtaClassName(props)}>
-      {children}
-    </a>
-  );
-};
-
-export default CTALink;

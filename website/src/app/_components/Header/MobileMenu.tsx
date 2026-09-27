@@ -2,7 +2,7 @@
 
 import cn from "classnames";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./styles.module.css";
 
 export interface HeaderNavLink {
@@ -21,10 +21,36 @@ interface MobileMenuProps {
 
 export default function MobileMenu({ isHome, links }: MobileMenuProps) {
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (buttonRef.current?.contains(target) || drawerRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open]);
 
   return (
     <>
       <button
+        ref={buttonRef}
         className={cn(styles.drawerButton, "z-10")}
         aria-expanded={open}
         aria-label={open ? "关闭导航" : "打开导航"}
@@ -59,6 +85,7 @@ export default function MobileMenu({ isHome, links }: MobileMenuProps) {
       </button>
 
       <div
+        ref={drawerRef}
         className={cn(
           styles.drawer,
           open && styles.open,

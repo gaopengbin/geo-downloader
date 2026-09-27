@@ -9,7 +9,6 @@ import {
   type ReleaseAssetKind,
 } from "@/lib/github-releases";
 import { TrackedDownloadLink } from "@/app/_components/ProductAnalytics";
-import { CLI_EXPERIENCE_URL } from "@/lib/site";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -89,7 +88,7 @@ const ribbonItems = [
 
 const primaryFeatures = [
   {
-    eyebrow: "01 / DATA SOURCES",
+    eyebrow: "图源与范围",
     title: "常用图源与自定义服务统一管理",
     description:
       "GeoD 提供常见服务的配置入口，也支持粘贴 XYZ / WMTS URL 模板。请在使用前确认数据提供方的授权范围、访问配额与离线使用政策。",
@@ -98,7 +97,7 @@ const primaryFeatures = [
     alt: "GeoD 图源与 GeoTIFF 工作界面",
   },
   {
-    eyebrow: "02 / TERRAIN & 3D",
+    eyebrow: "高程与三维",
     title: "从 DEM 到 3D Tiles，一套工具完成",
     description:
       "按行政区、手绘范围或导入的矢量边界下载 Terrain Tiles 高程数据；对 Cesium Ion 与用户已获授权的 3D Tiles 服务进行空间过滤并创建任务。",
@@ -107,7 +106,7 @@ const primaryFeatures = [
     alt: "GeoD 3D Tiles 下载工作界面",
   },
   {
-    eyebrow: "03 / HISTORY",
+    eyebrow: "历史影像",
     title: "用时间轴找回历史影像",
     description:
       "通过 Esri World Imagery Wayback 浏览不同日期的影像版本，快速对比区域变化，再把当前选定的历史影像加入下载任务。",
@@ -191,58 +190,28 @@ export default async function SDKPage() {
           className={cn(styles.heroSection, styles.section)}
           aria-labelledby="hero-title"
         >
-          <span className={styles.heroKicker}>开源桌面 GIS 数据工作台</span>
-          <h1 id="hero-title" className={styles.h1}>
-            <span className={styles.heroBrand}>GeoD</span>
-            <span className={styles.heroTitle}>让地理空间数据触手可及</span>
-          </h1>
-          <p className={cn(styles.p, styles.heroDescription)}>
-            面向 GIS 工作流的桌面数据工具。选定区域、批量下载、断点续传并导出
-            GeoTIFF、DEM、3D Tiles 与历史影像。
-          </p>
-          <div className={styles.heroActions}>
-            <CTALink href="#download">下载最新版本</CTALink>
-            <CTALink href={CLI_EXPERIENCE_URL} variant="secondary">
-              GeoD CLI 在线体验
-            </CTALink>
-            <a
-              className={styles.heroGithub}
-              href={repositoryUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              在 GitHub 查看源码
-              <ArrowUpRight size={16} strokeWidth={1.8} aria-hidden="true" />
+          <div className={styles.heroCopy}>
+            <span className={styles.heroKicker}>GeoD · 地理空间数据工作台</span>
+            <h1 id="hero-title" className={styles.h1}>
+              让地图数据，<br /><span className={styles.heroTitle}>真正进入工作流。</span>
+            </h1>
+            <p className={cn(styles.p, styles.heroDescription)}>
+              从选择范围到下载交付，把影像、DEM、3D Tiles 与历史数据放在同一个工作台。桌面端完整处理，也能按需通过浏览器、CLI 和 Agent 接入。
+            </p>
+            <div className={styles.heroActions}>
+              <CTALink href="#download">下载 GeoD 桌面端 <ArrowRight size={17} aria-hidden="true" /></CTALink>
+              <CTALink href="/browser" variant="secondary">试用浏览器影像</CTALink>
+            </div>
+            <a className={styles.heroGithub} href={repositoryUrl} target="_blank" rel="noopener noreferrer">
+              在 GitHub 查看源码 <ArrowUpRight size={16} strokeWidth={1.8} aria-hidden="true" />
             </a>
           </div>
-
-          <p className={styles.heroCliNote}>
-            无需安装，在浏览器中选择地区、查看带水印地图预览。
-          </p>
-
-          <div className={styles.heroShowcase}>
-            <Tabs
-              tabs={productModules.slice(0, 3).map((item) => ({
-                id: item.id,
-                label: item.label,
-                content: (
-                  <WindowShell>
-                    <img
-                      className={styles.heroImage}
-                      src={item.image}
-                      alt={item.alt}
-                      loading="eager"
-                      fetchPriority="high"
-                      decoding="sync"
-                    />
-                  </WindowShell>
-                ),
-              }))}
-            />
+          <div className={styles.heroVisual}>
+            <div className={styles.heroVisualTop}><span className={styles.heroVisualDot} />GeoD 桌面端 <span>真实产品界面</span></div>
+            <img className={styles.heroImage} src="/geod-site/geotiff.png" alt="GeoD 桌面端真实 GeoTIFF 下载界面，展示区域边界、图源与级别设置" loading="eager" fetchPriority="high" decoding="async" />
+            <div className={styles.heroVisualFoot}><span>区域选择</span><span>图源管理</span><span>成果导出</span></div>
           </div>
         </section>
-
-        <hr className={styles.shadowSeparator} />
 
         <section className={cn(styles.section, styles.ribbonSection)}>
           <div className={styles.specialHeadingContainer}>
@@ -251,14 +220,10 @@ export default async function SDKPage() {
           </div>
           <div className={styles.logoMarquee} aria-label="GeoD 数据能力">
             <div className={styles.logoMarqueeTrack}>
-              {[0, 1].map((copyIndex) => (
-                <div
-                  key={copyIndex}
-                  className={styles.logoMarqueeGroup}
-                  aria-hidden={copyIndex === 1}
-                >
+              {[0].map((copyIndex) => (
+                <div key={copyIndex} className={styles.logoMarqueeGroup}>
                   {ribbonItems.map((item) => (
-                    <div key={`${copyIndex}-${item.label}`} className={styles.logoMarqueeItem}>
+                    <div key={item.label} className={styles.logoMarqueeItem}>
                       <item.Icon className={styles.ribbonMark} size={16} strokeWidth={1.8} aria-hidden="true" />
                       <span>{item.label}</span>
                     </div>

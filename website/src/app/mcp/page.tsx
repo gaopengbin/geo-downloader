@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowUpRight, Bot } from "lucide-react";
 import Background from "../_components/Background";
+import { TrackedInstallLink } from "../_components/ProductAnalytics";
 import Footer from "../_components/Footer";
 import Header from "../_components/Header";
 import page from "../geod-page.module.css";
@@ -54,7 +55,7 @@ export default function McpPage() {
               <p>复制这一句话给当前 Agent。接入方式、图源与裁剪等细节由 Skill 指引。</p>
               <div className={styles.installPrompt}>
                 <p>{agentPrompt}</p>
-                <CopyText text={agentPrompt} label="复制给 Agent" />
+                <CopyText text={agentPrompt} label="复制给 Agent" trackInstall />
               </div>
               <p className={styles.installNote}>浏览器方式无需安装；本机 MCP 需要 Windows x64 和 Node.js 22+。旧版 geod-agent 安装器配置的是远端服务。</p>
             </section>
@@ -75,7 +76,7 @@ export default function McpPage() {
                   <div className={styles.methodLabel}>推荐 · 本机完整 CLI 流程</div>
                   <h3>本机 MCP</h3>
                   <p>Windows x64、Node.js 22+。任务和成果保存在使用者自己的 %LOCALAPPDATA%\\GeoD\\Workspace；安装命令同时配置 MCP 与 GeoD Skill。</p>
-                  <CodeBlock text={localInstall} label="PowerShell · Codex 示例" />
+                  <CodeBlock text={localInstall} label="PowerShell · Codex 示例" trackInstall />
                   <p className={styles.finePrint}>本机 MCP 可用 <code>geod_sources</code> 列出图源、注册自己的授权图源，再在规划和下载任务中填写 <code>imagery.sourceId</code>。图源配置留在当前用户电脑上。</p>
                   <p className={styles.finePrint}>只有想更换工作空间时才加 <code>--workspace</code> 并填写自己电脑上的绝对路径；WorkBuddy 把命令中的 <code>codex</code> 换成 <code>workbuddy</code>。</p>
                 </article>
@@ -83,10 +84,10 @@ export default function McpPage() {
                   <div className={styles.methodLabel}>云端 Agent · 使用服务器资源</div>
                   <h3>HTTPS MCP</h3>
                   <p>Marvis 等客户端可手动添加远端地址与 GeoD Skill。0–5 级可匿名使用；请求 6 级及以上时，支持 OAuth 的客户端会引导用户在浏览器中授权。下载和拼接在 GeoD 服务器上执行。</p>
-                  <CodeBlock text={remoteUrl} label="MCP 服务地址" />
-                  <a href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></a>
-                  <CodeBlock text={remoteConfig} label="支持 mcpServers 的客户端示例" />
-                  <p className={styles.finePrint}>WorkBuddy 可在技能页面<a href={skillZipUrl}>导入 Skill ZIP</a>。远端 MCP 只开放 NASA GIBS 图源，不接受自定义图源注册；按账号隔离任务，每个账号每天最多 3 次下载任务。豆包工作的实际客户端兼容性仍需测试。</p>
+                  <CodeBlock text={remoteUrl} label="MCP 服务地址" trackInstall />
+                  <TrackedInstallLink artifact="skill" channel="site" href={skillUrl} target="_blank" rel="noopener noreferrer">查看 GeoD Agent Skill <ArrowUpRight size={14} aria-hidden="true" /></TrackedInstallLink>
+                  <CodeBlock text={remoteConfig} label="支持 mcpServers 的客户端示例" trackInstall />
+                  <p className={styles.finePrint}>WorkBuddy 可在技能页面<TrackedInstallLink artifact="skill" channel="site" href={skillZipUrl}>导入 Skill ZIP</TrackedInstallLink>。远端 MCP 只开放 NASA GIBS 图源，不接受自定义图源注册；按账号隔离任务，每个账号每天最多 3 次下载任务。豆包工作的实际客户端兼容性仍需测试。</p>
                 </article>
                 <article className={`${styles.method} ${styles.remoteMethod}`}>
                   <div className={styles.methodLabel}>按需选择 · 浏览器本机计算</div>
@@ -97,12 +98,12 @@ export default function McpPage() {
                 </article>
               </div>
               <div className={styles.linkRow}>
-                <a href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
+                <TrackedInstallLink artifact="mcp" channel="npm" href="https://www.npmjs.com/package/geod-agent" target="_blank" rel="noopener noreferrer">
                   远端 MCP 安装器 <ArrowUpRight size={16} aria-hidden="true" />
-                </a>
-                <a className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.6" target="_blank" rel="noopener noreferrer">
+                </TrackedInstallLink>
+                <TrackedInstallLink artifact="mcp" channel="github" className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-mcp-v0.1.6" target="_blank" rel="noopener noreferrer">
                   查看 MCP 安装包与校验值 <ArrowUpRight size={16} aria-hidden="true" />
-                </a>
+                </TrackedInstallLink>
               </div>
             </section>
           </div>

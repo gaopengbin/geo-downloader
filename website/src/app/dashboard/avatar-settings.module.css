@@ -1,0 +1,21 @@
+.panel { margin-top: 18px; padding: clamp(24px, 3vw, 32px); border: 1px solid #dce3eb; border-radius: 20px; background: #fff; box-shadow: 0 8px 24px rgb(32 33 36 / .045); }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.heading h2 { margin: 0 0 8px; color: #202124; font-size: 21px; font-weight: 650; letter-spacing: -.02em; }
+.heading p { max-width: 560px; margin: 0; color: #5f6368; font-size: 14px; line-height: 1.7; }
+.currentAvatar { box-shadow: 0 0 0 4px #fff, 0 0 0 5px #d2e3fc; }
+.presets { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 28px; }
+.preset { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; padding: 15px 8px 12px; border: 1px solid #e1e5eb; border-radius: 15px; color: #5f6368; background: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: transform .2s ease, border-color .2s ease, background-color .2s ease, box-shadow .2s ease; }
+.preset:hover { transform: translateY(-2px); border-color: #8ab4f8; background: #f8fbff; }
+.preset[aria-pressed="true"] { border-color: #1a73e8; color: #174ea6; background: #f1f6ff; box-shadow: inset 0 0 0 1px #1a73e8; }
+.preset:focus-visible { outline: 3px solid #a8c7fa; outline-offset: 2px; }
+.preset:disabled { opacity: .65; cursor: wait; transform: none; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.actions button { min-height: 40px; }
+.actions > span { margin-left: auto; color: #70757a; font-size: 12px; }
+.fileInput { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.error, .notice { margin: 15px 0 0; padding: 10px 13px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
+.error { border: 1px solid #f1c5c1; color: #a50e0e; background: #fce8e6; }
+.notice { border: 1px solid #c7dcff; color: #174ea6; background: #f1f6ff; }
+@media (max-width: 760px) { .presets { grid-template-columns: repeat(3, minmax(0, 1fr)); } .actions > span { width: 100%; margin-left: 0; } }
+@media (max-width: 440px) { .heading { align-items: flex-start; } .heading p { font-size: 13px; } .heading > :last-child { width: 56px !important; height: 56px !important; } .presets { gap: 7px; } .preset { padding: 11px 4px; font-size: 12px; } }
+@media (prefers-reduced-motion: reduce) { .preset { transition: none; } .preset:hover { transform: none; } }

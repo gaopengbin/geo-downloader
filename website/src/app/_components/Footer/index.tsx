@@ -16,15 +16,19 @@ const linkCategories: {
       { id: "Overview", label: "产品介绍", href: "/" },
       { id: "Features", label: "核心能力", href: "/#features" },
       { id: "Screenshots", label: "产品界面", href: "/#screenshots" },
+      { id: "Browser", label: "浏览器影像", href: "/browser" },
       { id: "Cli", label: "GeoD CLI", href: "/cli" },
       { id: "Mcp", label: "GeoD MCP", href: "/mcp" },
       { id: "CliExperience", label: "CLI 在线体验", href: CLI_EXPERIENCE_URL },
+      { id: "Studio", label: "地图创作", href: "/geod" },
       { id: "Download", label: "立即下载", href: "/#download" },
     ],
   },
   {
     category: "资源",
     links: [
+      { id: "Login", label: "登录 / 注册", href: "/login" },
+      { id: "Dashboard", label: "个人控制台", href: "/dashboard" },
       {
         id: "Docs",
         label: "使用文档",
