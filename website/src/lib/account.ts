@@ -31,6 +31,10 @@ export function accountErrorText(reason: unknown): string {
     AVATAR_UNSUPPORTED_TYPE: "请选择 JPG、PNG、WebP 或 AVIF 图片。",
     AVATAR_TOO_LARGE: "图片不能超过 5 MB。",
     AVATAR_INVALID_IMAGE: "图片无法读取，请换一张试试。",
+    SOURCE_INVALID: "图源信息无效，请检查地址、级别与署名。",
+    SOURCE_LIMIT: "一个账号最多保存 20 个自定义图源。",
+    SOURCE_NOT_FOUND: "图源不存在，请刷新后重试。",
+    SOURCE_DECRYPTION_FAILED: "账号图源暂时无法读取，请联系支持人员；不要重新保存以免覆盖。",
   };
   return reason instanceof AccountError ? messages[reason.code] ?? "账号操作未完成，请稍后重试。" : "网络连接失败，请检查网络后重试。";
 }

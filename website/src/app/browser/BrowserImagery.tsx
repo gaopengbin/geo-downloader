@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, MapPinned, Plus, Square, Trash2, Zap } from "lucide-react";
 import { downloadBrowserImagery, planBrowserImagery, type Bounds, type ImageryPlan } from "../../lib/browser-imagery";
-import { BROWSER_SOURCE, probeBrowserSource, readBrowserSources, saveBrowserSources, validateBrowserSource, type BrowserSource, type BrowserSourceStore } from "../../lib/browser-sources";
+import { BROWSER_SOURCE, clearBrowserSources, probeBrowserSource, readBrowserSources, saveBrowserSources, validateBrowserSource, type BrowserSource, type BrowserSourceStore } from "../../lib/browser-sources";
 import { clipBounds, validateClipGeometry, type ClipGeometry } from "../../lib/browser-clip";
 import { browserAccount, FREE_MAX_ZOOM } from "../../lib/browser-access";
 import { trackBrowserEvent } from "../../lib/browser-analytics";
 import { trackProductEvent } from "../../lib/product-analytics";
+import { AccountError, accountErrorText, accountRequest } from "../../lib/account";
 import styles from "./browser.module.css";
 
 type Tool = { name: string; description: string; inputSchema: object; annotations?: object; execute: (input: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<object> };
@@ -32,7 +33,7 @@ async function loadExample(exampleId: string): Promise<{ geometry: ClipGeometry;
 }
 const LABELS = ["西经度", "南纬度", "东经度", "北纬度"];
 const KEYS = ["west", "south", "east", "north"];
-const textError = (error: unknown) => error instanceof Error ? error.message : "操作失败，请重试。";
+const textError = (error: unknown) => error instanceof AccountError ? accountErrorText(error) : error instanceof Error ? error.message : "操作失败，请重试。";
 const result = (value: unknown) => ({ content: [{ type: "text", text: JSON.stringify(value) }] });
 const sourceView = (source: BrowserSource, defaultId: string) => ({ id: source.id, name: source.name, attribution: source.attribution, maxZoom: source.maxZoom, tileSize: source.tileSize, scheme: source.scheme, default: source.id === defaultId, kind: source.id === BROWSER_SOURCE.id ? "builtIn" : "custom" });
 const requestSchema = { type: "object", properties: {
@@ -70,6 +71,9 @@ export default function BrowserImagery() {
   const [loadingExample, setLoadingExample] = useState<string | null>(null);
   const [store, setStore] = useState<BrowserSourceStore>({ defaultSourceId: BROWSER_SOURCE.id, customSources: [] });
   const storeRef = useRef(store);
+  const [localStore, setLocalStore] = useState<BrowserSourceStore>({ defaultSourceId: BROWSER_SOURCE.id, customSources: [] });
+  const [sourceStorageMode, setSourceStorageMode] = useState<"loading" | "local" | "account" | "unavailable">("loading");
+  const sourceStorageModeRef = useRef<typeof sourceStorageMode>("loading");
   const [activeId, setActiveId] = useState(BROWSER_SOURCE.id);
   const activeRef = useRef(BROWSER_SOURCE.id);
   const [form, setForm] = useState<SourceForm>(EMPTY_FORM);
@@ -95,18 +99,60 @@ export default function BrowserImagery() {
   const chooseSource = useCallback((id: string) => {
     sourceById(id); activeRef.current = id; setActiveId(id); setPlan(null); clearReady();
   }, [clearReady, sourceById]);
-  const persist = useCallback((next: BrowserSourceStore) => {
-    const saved = saveBrowserSources(next); storeRef.current = saved; setStore(saved); setPlan(null); clearReady(); return saved;
+  const persist = useCallback(async (next: BrowserSourceStore, mutation: { method: "PUT" | "PATCH" | "DELETE"; body?: object; url?: string }) => {
+    const mode = sourceStorageModeRef.current;
+    if (mode !== "account" && mode !== "local") throw new Error("图源正在加载，暂时不能修改。请稍后重试。");
+    const saved = mode === "account"
+      ? await accountRequest<BrowserSourceStore>(mutation.url ?? "/api/account/sources", mutation.method, mutation.body)
+      : saveBrowserSources(next);
+    if (mode === "local") setLocalStore(saved);
+    storeRef.current = saved; setStore(saved); setPlan(null); clearReady(); return saved;
   }, [clearReady]);
 
   useEffect(() => {
     const saved = readBrowserSources(); storeRef.current = saved; setStore(saved);
+    setLocalStore(saved);
     activeRef.current = saved.defaultSourceId; setActiveId(saved.defaultSourceId);
   }, []);
   useEffect(() => {
-    const refresh = () => { void browserAccount().then(setLoggedIn).catch(() => setLoggedIn(null)); };
-    refresh(); window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
+    let active = true;
+    const refresh = async () => {
+      let authenticated: boolean;
+      try {
+        authenticated = await browserAccount();
+      } catch (error) {
+        if (!active) return;
+        setLoggedIn(null);
+        sourceStorageModeRef.current = "unavailable"; setSourceStorageMode("unavailable");
+        setSourceMessage(`账号状态暂时无法确认：${textError(error)}`);
+        return;
+      }
+      try {
+        if (!active) return;
+        setLoggedIn(authenticated);
+        if (!authenticated) {
+          const local = readBrowserSources();
+          sourceStorageModeRef.current = "local"; setSourceStorageMode("local");
+          setLocalStore(local); storeRef.current = local; setStore(local);
+          activeRef.current = local.defaultSourceId; setActiveId(local.defaultSourceId);
+          return;
+        }
+        sourceStorageModeRef.current = "loading"; setSourceStorageMode("loading");
+        const remote = await accountRequest<BrowserSourceStore>("/api/account/sources");
+        if (!active) return;
+        sourceStorageModeRef.current = "account"; setSourceStorageMode("account");
+        storeRef.current = remote; setStore(remote);
+        activeRef.current = remote.defaultSourceId; setActiveId(remote.defaultSourceId);
+      } catch (error) {
+        if (!active) return;
+        setLoggedIn(authenticated);
+        sourceStorageModeRef.current = "unavailable"; setSourceStorageMode("unavailable");
+        setSourceMessage(`账号图源暂时无法读取：${textError(error)}`);
+      }
+    };
+    void refresh();
+    window.addEventListener("focus", refresh);
+    return () => { active = false; window.removeEventListener("focus", refresh); };
   }, []);
 
   const makePlan = useCallback((bounds: Bounds, level: number, sourceId: string, clipGeometry?: unknown, clipAttribution?: string) =>
@@ -155,7 +201,7 @@ export default function BrowserImagery() {
 
   const sourceAction = useCallback(async (input: Record<string, unknown>, signal?: AbortSignal) => {
     const action = input.action;
-    if (action === "list") return { ok: true, defaultSourceId: storeRef.current.defaultSourceId,
+    if (action === "list") return { ok: true, storage: sourceStorageModeRef.current, defaultSourceId: storeRef.current.defaultSourceId,
       sources: [BROWSER_SOURCE, ...storeRef.current.customSources].map(source => sourceView(source, storeRef.current.defaultSourceId)) };
     const id = String(input.id ?? ""); if (!id) throw new Error("此操作需要图源 ID。");
     if (action === "register" || action === "update") {
@@ -163,22 +209,23 @@ export default function BrowserImagery() {
       const exists = custom.some(item => item.id === id);
       if (action === "register" && exists) throw new Error("图源 ID 已存在，请用 update 修改。");
       if (action === "update" && !exists) throw new Error("图源不存在，请用 register 添加。");
-      persist({ defaultSourceId: storeRef.current.defaultSourceId, customSources: exists ? custom.map(item => item.id === id ? source : item) : [...custom, source] });
+      await persist({ defaultSourceId: storeRef.current.defaultSourceId, customSources: exists ? custom.map(item => item.id === id ? source : item) : [...custom, source] },
+        { method: "PUT", body: { source } });
       if (action === "register") void trackProductEvent("browser_source_registered");
-      chooseSource(id); setSourceMessage(`${source.name} 已保存在当前浏览器。请检测一块瓦片确认跨域访问可用。`);
-      return { ok: true, source: sourceView(source, storeRef.current.defaultSourceId), savedIn: "current browser only" };
+      chooseSource(id); setSourceMessage(`${source.name} 已保存到${sourceStorageModeRef.current === "account" ? " GeoD 账号" : "当前浏览器"}。请检测一块瓦片确认跨域访问可用。`);
+      return { ok: true, source: sourceView(source, storeRef.current.defaultSourceId), savedIn: sourceStorageModeRef.current === "account" ? "GeoD account" : "current browser only" };
     }
     if (action === "remove") {
       if (id === BROWSER_SOURCE.id) throw new Error("内置图源不能删除。");
       if (!storeRef.current.customSources.some(item => item.id === id)) throw new Error("图源不存在。");
-      const saved = persist({ defaultSourceId: storeRef.current.defaultSourceId === id ? BROWSER_SOURCE.id : storeRef.current.defaultSourceId,
-        customSources: storeRef.current.customSources.filter(item => item.id !== id) });
+      const saved = await persist({ defaultSourceId: storeRef.current.defaultSourceId === id ? BROWSER_SOURCE.id : storeRef.current.defaultSourceId,
+        customSources: storeRef.current.customSources.filter(item => item.id !== id) }, { method: "DELETE", url: `/api/account/sources?id=${encodeURIComponent(id)}` });
       if (activeRef.current === id) chooseSource(saved.defaultSourceId);
       setSourceMessage("图源已从当前浏览器删除。"); return { ok: true, removed: id };
     }
     if (action === "default") {
-      sourceById(id); persist({ ...storeRef.current, defaultSourceId: id }); chooseSource(id);
-      setSourceMessage("默认图源已更新，保存在当前浏览器。"); return { ok: true, defaultSourceId: id };
+      sourceById(id); await persist({ ...storeRef.current, defaultSourceId: id }, { method: "PATCH", body: { defaultSourceId: id } }); chooseSource(id);
+      setSourceMessage(`默认图源已更新，保存在${sourceStorageModeRef.current === "account" ? " GeoD 账号" : "当前浏览器"}。`); return { ok: true, defaultSourceId: id };
     }
     if (action === "probe") {
       const source = sourceById(id);
@@ -195,8 +242,8 @@ export default function BrowserImagery() {
     const tools: Tool[] = [
       { name: "geod_browser_capabilities", description: "查看当前页面的本机影像下载能力；GeoD 服务器不处理影像。",
         inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true },
-        execute: async () => result({ maxTiles: 256, maxPixels: 16_777_216, output: "PNG + EPSG:3857 PGW/PRJ + manifest.json，裁剪时附带 clip.geojson，打包为 ZIP", clip: "可选 WGS84 Polygon/MultiPolygon；边界外透明，瓦片数量仍按经纬度框计算", examples: ["henan", "sichuan"], requiresOpenPage: true, sources: "geod_browser_sources；用户图源保存在当前浏览器，需支持 CORS" }) },
-      { name: "geod_browser_sources", description: "列出、注册、更新、删除或设置用户自己的浏览器图源，也可检测一块瓦片。图源地址只保存在当前浏览器，列表不返回地址。只有用户要求时才检测网络瓦片。",
+        execute: async () => result({ maxTiles: 256, maxPixels: 16_777_216, output: "PNG + EPSG:3857 PGW/PRJ + manifest.json，裁剪时附带 clip.geojson，打包为 ZIP", clip: "可选 WGS84 Polygon/MultiPolygon；边界外透明，瓦片数量仍按经纬度框计算", examples: ["henan", "sichuan"], requiresOpenPage: true, sources: "geod_browser_sources；登录后图源同步到账号，未登录时留在当前浏览器；瓦片需支持 CORS" }) },
+      { name: "geod_browser_sources", description: "列出、注册、更新、删除或设置用户自己的浏览器图源，也可检测一块瓦片。登录后图源保存到 GeoD 账号，未登录则保存在当前浏览器；列表不返回地址。仅在用户要求时注册图源或检测网络瓦片。",
         inputSchema: sourcesSchema, annotations: { readOnlyHint: false },
         execute: async (input, options) => result(await sourceAction(input, options?.signal)) },
       { name: "geod_browser_plan", description: "按 WGS84 范围、级别、可选 sourceId 和 clipGeometry 估算当前浏览器影像下载；也可用 exampleId=henan/sichuan 自动填入省界与范围。不会下载瓦片。先列出图源。",
@@ -247,8 +294,25 @@ export default function BrowserImagery() {
       await sourceAction({ action, ...source }); setForm(EMPTY_FORM); setShowForm(false);
     } catch (error) { setSourceMessage(textError(error)); }
   };
+  const handleImportLocal = async () => {
+    if (sourceStorageModeRef.current !== "account" || localStore.customSources.length === 0) return;
+    try {
+      const saved = await accountRequest<BrowserSourceStore & { imported: number; skippedIds: string[] }>(
+        "/api/account/sources", "POST", localStore);
+      storeRef.current = saved; setStore(saved); setPlan(null); clearReady();
+      activeRef.current = saved.defaultSourceId; setActiveId(saved.defaultSourceId);
+      if (saved.skippedIds.length === 0) {
+        try { clearBrowserSources(); setLocalStore({ defaultSourceId: BROWSER_SOURCE.id, customSources: [] }); }
+        catch { /* Account copy succeeded; local browser copy can remain. */ }
+      }
+      setSourceMessage(saved.skippedIds.length
+        ? `已导入 ${saved.imported} 个图源；${saved.skippedIds.join("、")} 与账号图源 ID 重复，账号中原有配置未覆盖。`
+        : `已将 ${saved.imported} 个本地图源保存到 GeoD 账号。`);
+    } catch (error) { setSourceMessage(textError(error)); }
+  };
   const sources = [BROWSER_SOURCE, ...store.customSources];
   const active = sources.find(source => source.id === activeId) ?? BROWSER_SOURCE;
+  const sourceLocked = busy || sourceStorageMode === "loading" || sourceStorageMode === "unavailable";
 
   return <div className={styles.workspace}>
     <section className={styles.formCard} aria-labelledby="browser-request-title">
@@ -310,21 +374,28 @@ export default function BrowserImagery() {
     <section className={styles.sourceCard} aria-labelledby="browser-sources-title">
       <div className={styles.sectionTop}><span className={styles.sectionIcon}><MapPinned size={20} aria-hidden="true" /></span>
         <div><span className={styles.kicker}>03 / SOURCES</span><h2 id="browser-sources-title">选择或注册图源</h2></div></div>
-      <p className={styles.description}>自定义图源只保存在当前浏览器，不同步到账号、CLI 或服务器。图源必须允许网页跨域读取瓦片（CORS），且你有权下载使用。</p>
+      <p className={styles.description}>{sourceStorageMode === "account"
+        ? "自定义图源保存到你的 GeoD 账号，并在登录的浏览器之间同步；瓦片仍由当前设备直接读取和处理。地址可能含密钥，账号服务会加密保存。CLI 和本地 MCP 的图源配置仍需单独导入。"
+        : "未登录时，自定义图源只保存在当前浏览器。登录后可主动导入账号；图源需允许网页跨域读取瓦片（CORS），且你有权下载使用。"}</p>
+      {sourceStorageMode === "account" && localStore.customSources.length > 0 && <div className={styles.sourceActions}>
+        <button type="button" className={styles.secondary} disabled={sourceLocked} onClick={() => { void handleImportLocal(); }}>
+          将本机 {localStore.customSources.length} 个图源导入账号
+        </button><span className={styles.finePrint}>点击后，图源地址及其中的授权参数会上传到你的 GeoD 账号；同 ID 的账号图源不会被覆盖。</span>
+      </div>}
       <div className={styles.sourceList}>{sources.map(source => <div className={styles.sourceRow} key={source.id}>
-        <button type="button" className={styles.sourceChoice} aria-pressed={activeId === source.id} disabled={busy}
+        <button type="button" className={styles.sourceChoice} aria-pressed={activeId === source.id} disabled={sourceLocked}
           onClick={() => { chooseSource(source.id); setSourceMessage(`已选择 ${source.name}。`); }}><strong>{source.name}</strong>
           <span>{source.id} · 0–{source.maxZoom} 级 · {source.tileSize} 像素瓦片 · {source.scheme.toUpperCase()}{store.defaultSourceId === source.id ? " · 默认" : ""}</span></button>
-        {source.id !== BROWSER_SOURCE.id && <button type="button" className={styles.sourceRemove} aria-label={`删除图源 ${source.name}`} disabled={busy}
+        {source.id !== BROWSER_SOURCE.id && <button type="button" className={styles.sourceRemove} aria-label={`删除图源 ${source.name}`} disabled={sourceLocked}
           onClick={() => { void sourceAction({ action: "remove", id: source.id }).catch(error => setSourceMessage(textError(error))); }}><Trash2 size={16} aria-hidden="true" /></button>}
       </div>)}</div>
       <div className={styles.sourceActions}>
-        <button type="button" className={styles.secondary} disabled={busy} onClick={() => { void sourceAction({ action: "default", id: activeId }).catch(error => setSourceMessage(textError(error))); }}>设为默认</button>
+        <button type="button" className={styles.secondary} disabled={sourceLocked} onClick={() => { void sourceAction({ action: "default", id: activeId }).catch(error => setSourceMessage(textError(error))); }}>设为默认</button>
         <button type="button" className={styles.secondary} disabled={busy} onClick={() => { void handleProbe(); }}>检测当前范围的一块瓦片</button>
-        <button type="button" className={styles.secondary} disabled={busy} aria-expanded={showForm} onClick={() => setShowForm(value => !value)}><Plus size={15} aria-hidden="true" />注册图源</button>
+        <button type="button" className={styles.secondary} disabled={sourceLocked} aria-expanded={showForm} onClick={() => setShowForm(value => !value)}><Plus size={15} aria-hidden="true" />注册图源</button>
       </div>
       {showForm && <div className={styles.sourceForm}>
-        <p>填写自己的 HTTPS XYZ/TMS 瓦片模板。同一 ID 再次保存会更新图源；地址可能含授权参数，页面不会把它返回给 Agent。</p>
+        <p>填写自己的 HTTPS XYZ/TMS 瓦片模板。同一 ID 再次保存会更新图源；地址可能含授权参数，页面不会把它返回给 Agent。{sourceStorageMode === "account" ? "保存后会加密存入 GeoD 账号。" : "当前只保存在这个浏览器。"}</p>
         <div className={styles.sourceFormGrid}>
           <label>图源 ID<input value={form.id} maxLength={64} onChange={event => setForm(current => ({ ...current, id: event.target.value }))} placeholder="my_imagery" /></label>
           <label>图源名称<input value={form.name} maxLength={128} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="我的影像图源" /></label>
@@ -336,7 +407,7 @@ export default function BrowserImagery() {
         </div>
         <div className={styles.schemeRow} role="group" aria-label="瓦片行号方式">{(["xyz", "tms"] as const).map(scheme => <button type="button" key={scheme}
           aria-pressed={form.scheme === scheme} onClick={() => setForm(current => ({ ...current, scheme }))}>{scheme.toUpperCase()}</button>)}</div>
-        <button type="button" className={styles.primary} onClick={() => { void handleRegister(); }}>保存到当前浏览器</button>
+        <button type="button" className={styles.primary} disabled={sourceLocked} onClick={() => { void handleRegister(); }}>保存到{sourceStorageMode === "account" ? " GeoD 账号" : "当前浏览器"}</button>
       </div>}
       <p className={styles.status} role="status">{sourceMessage || "注册后先检测一块瓦片；未开放 CORS 的图源无法在浏览器拼接。"}</p>
     </section>

@@ -99,6 +99,10 @@ export function saveBrowserSources(store: BrowserSourceStore): BrowserSourceStor
   return next;
 }
 
+export function clearBrowserSources() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
 export async function probeBrowserSource(source: BrowserSource, zoom: number, x: number, y: number, signal?: AbortSignal) {
   await requireBrowserZoomAccess(zoom);
   if (![zoom, x, y].every(Number.isInteger) || zoom < 0 || zoom > source.maxZoom || x < 0 || y < 0 || x >= 2 ** zoom || y >= 2 ** zoom) {
