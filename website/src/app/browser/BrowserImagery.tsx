@@ -221,7 +221,7 @@ export default function BrowserImagery() {
       const saved = await persist({ defaultSourceId: storeRef.current.defaultSourceId === id ? BROWSER_SOURCE.id : storeRef.current.defaultSourceId,
         customSources: storeRef.current.customSources.filter(item => item.id !== id) }, { method: "DELETE", url: `/api/account/sources?id=${encodeURIComponent(id)}` });
       if (activeRef.current === id) chooseSource(saved.defaultSourceId);
-      setSourceMessage("图源已从当前浏览器删除。"); return { ok: true, removed: id };
+      setSourceMessage(`图源已从${sourceStorageModeRef.current === "account" ? " GeoD 账号" : "当前浏览器"}删除。`); return { ok: true, removed: id };
     }
     if (action === "default") {
       sourceById(id); await persist({ ...storeRef.current, defaultSourceId: id }, { method: "PATCH", body: { defaultSourceId: id } }); chooseSource(id);
