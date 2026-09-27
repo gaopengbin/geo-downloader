@@ -69,7 +69,7 @@ export default function CliPage() {
                 安装程序或便携包无需 Node.js；通过 npm 安装发布包需要 Node.js 18+。
               </p>
               <p className={styles.description}>未登录可下载 0–5 级瓦片；任务包含 6 级及以上时，先用自己的 GeoD 账号完成浏览器授权。授权后下载仍在本机进行。</p>
-                <CodeBlock text={cliInstall} label="PowerShell · 在线安装 0.3.2" />
+                <CodeBlock text={cliInstall} label="PowerShell · 在线安装 0.3.2" trackInstall />
                 <CodeBlock text={cliAuth} label="GeoD 账号授权 · 高级别下载" />
               <div className={styles.linkRow}>
                 <TrackedInstallLink artifact="cli" channel="github" className={styles.primaryLink} href="https://github.com/gaopengbin/geo-downloader/releases/tag/geod-cli-v0.3.2" target="_blank" rel="noopener noreferrer">
