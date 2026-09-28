@@ -1,12 +1,13 @@
 use crate::settings::SettingsManager;
 use crate::task::TaskManager;
+pub use crate::cache_access::is_migrating;
+use crate::cache_access::{lock_cache_exclusive, set_migrating};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
@@ -14,30 +15,6 @@ use tokio_util::sync::CancellationToken;
 const COPY_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 const SPACE_RESERVE_BYTES: u64 = 1024 * 1024 * 1024;
 const PROGRESS_EVENT: &str = "cache-migration-progress";
-
-static MIGRATING: AtomicBool = AtomicBool::new(false);
-static CACHE_ACCESS_GATE: RwLock<()> = RwLock::new(());
-
-pub fn is_migrating() -> bool {
-    MIGRATING.load(Ordering::Acquire)
-}
-
-pub(crate) fn begin_cache_access() -> Option<RwLockReadGuard<'static, ()>> {
-    if is_migrating() {
-        return None;
-    }
-    let guard = CACHE_ACCESS_GATE.read().ok()?;
-    if is_migrating() {
-        return None;
-    }
-    Some(guard)
-}
-
-fn lock_cache_exclusive() -> Result<RwLockWriteGuard<'static, ()>, String> {
-    CACHE_ACCESS_GATE
-        .write()
-        .map_err(|_| "缓存访问锁异常".to_string())
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,7 +180,7 @@ pub fn cache_migration_start(
             cancel: cancel.clone(),
         });
     }
-    MIGRATING.store(true, Ordering::Release);
+    set_migrating(true);
 
     let initial = make_status(
         &id,
@@ -237,7 +214,7 @@ pub fn cache_migration_start(
         .await;
 
         if let Err(e) = result {
-            MIGRATING.store(false, Ordering::Release);
+            set_migrating(false);
             if let Some(mut status) = manager.status() {
                 status.status = "failed".to_string();
                 status.message = "迁移任务异常结束".to_string();
@@ -352,7 +329,7 @@ fn run_migration(
             status.error = Some(error);
             manager.finish(status.clone());
             let _ = app.emit(PROGRESS_EVENT, status);
-            MIGRATING.store(false, Ordering::Release);
+            set_migrating(false);
             return;
         }
     };
@@ -391,7 +368,7 @@ fn run_migration(
         }
     }
     drop(access_guard);
-    MIGRATING.store(false, Ordering::Release);
+    set_migrating(false);
 }
 
 fn run_migration_inner(

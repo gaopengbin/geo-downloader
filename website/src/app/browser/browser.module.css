@@ -1,0 +1,102 @@
+.browserPage { padding-bottom: 108px; }
+.intro { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 26px 0; }
+.intro div { min-height: 83px; display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 17px 20px; border: 1px solid rgba(147,197,253,.16); border-radius: 11px; background: rgba(13,31,67,.68); }
+.intro strong { color: #f8fafc; font-size: 15px; }
+.intro span { color: #a7b8ce; font-size: 12px; line-height: 1.6; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); gap: 18px; }
+.formCard, .resultCard { min-width: 0; padding: 28px; border: 1px solid rgba(147,197,253,.17); border-radius: 14px; background: linear-gradient(135deg, rgba(18,38,79,.96), rgba(7,17,40,.97)); box-shadow: 0 24px 70px rgba(0,0,0,.18); }
+.sectionTop { display: flex; align-items: center; gap: 12px; margin-bottom: 17px; }
+.sectionTop h2 { margin: 2px 0 0; font-size: 21px; line-height: 1.3; letter-spacing: -.02em; }
+.sectionIcon { width: 41px; height: 41px; flex: 0 0 41px; display: grid; place-items: center; border: 1px solid rgba(96,165,250,.3); border-radius: 9px; background: rgba(37,99,235,.18); color: #93c5fd; }
+.kicker { color: #93c5fd; font: 700 10px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .1em; }
+.description, .finePrint { color: #a7b8ce; font-size: 13px; line-height: 1.7; }
+.description { margin: 0 0 19px; }
+.exampleRow { display: flex; gap: 8px; margin-bottom: 17px; }
+.exampleRow button, .zoomRow button, .actionRow button, .download { font: inherit; cursor: pointer; transition: border-color .2s, background .2s, color .2s; }
+.exampleRow button { min-height: 32px; padding: 0 12px; border: 1px solid rgba(147,197,253,.23); border-radius: 6px; background: rgba(15,38,80,.7); color: #cde0fa; font-size: 12px; }
+.exampleRow button:hover, .zoomRow button:hover { border-color: #60a5fa; background: rgba(37,99,235,.25); }
+.boundsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.boundsGrid label { display: flex; flex-direction: column; position: relative; gap: 6px; color: #cbd5e1; font-size: 12px; font-weight: 650; }
+.boundsGrid input { width: 100%; height: 43px; padding: 0 15px; border: 1px solid rgba(147,197,253,.25); border-radius: 7px; outline: none; background: rgba(2,12,32,.7); color: #f8fafc; font: 600 15px ui-monospace, SFMono-Regular, Consolas, monospace; appearance: textfield; }
+.boundsGrid input::-webkit-inner-spin-button, .boundsGrid input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.boundsGrid input:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(37,99,235,.2); }
+.boundsGrid small { position: absolute; right: 12px; bottom: 13px; color: #6682a5; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.clipField { margin-top: 20px; }
+.clipHeading, .clipFoot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.clipHeading > span { color: #cbd5e1; font-size: 12px; font-weight: 650; }
+.clipHeading em { margin-left: 5px; color: #7190b6; font-style: normal; font-weight: 500; }
+.clipHeadingActions { display: flex; align-items: center; gap: 13px; }
+.clipHeading button, .clipFoot button { padding: 3px 0; border: 0; background: transparent; color: #93c5fd; font-family: inherit; font-size: 11px; font-weight: 650; cursor: pointer; }
+.clipHeading button:hover, .clipFoot button:hover { color: #dbeafe; text-decoration: underline; }
+.clipHeading button:disabled, .clipFoot button:disabled { opacity: .45; cursor: not-allowed; text-decoration: none; }
+.clipField textarea { display: block; width: 100%; min-height: 92px; max-height: 240px; margin-top: 8px; padding: 11px 13px; border: 1px solid rgba(147,197,253,.25); border-radius: 7px; outline: none; background: rgba(2,12,32,.7); color: #f8fafc; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; resize: none; field-sizing: content; scrollbar-width: none; }
+.clipField textarea::-webkit-scrollbar { display: none; }
+.clipField textarea::placeholder { color: #718aa9; }
+.clipField textarea:focus-visible { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(37,99,235,.2); }
+.clipLoaded { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 69px; margin-top: 8px; padding: 11px 13px; border: 1px solid rgba(96,165,250,.32); border-radius: 7px; background: rgba(37,99,235,.12); }
+.clipLoaded div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.clipLoaded strong { color: #e0edff; font-size: 13px; }
+.clipLoaded span { color: #8fa8c8; font-size: 11px; line-height: 1.5; }
+.clipLoaded button { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: #93c5fd; font-family: inherit; font-size: 11px; font-weight: 650; line-height: 1.5; cursor: pointer; }
+.clipLoaded button:hover { color: #dbeafe; text-decoration: underline; }
+.clipLoaded button:disabled { opacity: .45; cursor: not-allowed; }
+.clipFoot { align-items: flex-start; margin-top: 7px; }
+.clipFoot span { color: #8fa8c8; font-size: 11px; line-height: 1.5; }
+.clipFoot button { flex: 0 0 auto; }
+.clipCredit { margin: 8px 0 0; color: #8fa8c8; font-size: 11px; line-height: 1.6; }
+.clipCredit a { color: #93c5fd; text-underline-offset: 3px; }
+.clipCredit a:hover { color: #dbeafe; }
+.zoomHeading { display: flex; align-items: center; justify-content: space-between; margin-top: 20px; color: #cbd5e1; font-size: 12px; font-weight: 650; }
+.zoomHeading strong { color: #93c5fd; font-size: 15px; }
+.zoomRow { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.zoomRow button { min-width: 39px; min-height: 35px; border: 1px solid rgba(147,197,253,.23); border-radius: 6px; background: rgba(15,38,80,.7); color: #cde0fa; font-size: 12px; font-weight: 700; }
+.zoomRow button[aria-pressed="true"] { border-color: #60a5fa; color: #fff; background: #1e4e97; }
+.accessNote { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 9px; margin-top: 12px; color: #aac3e1; font-size: 12px; line-height: 1.6; }
+.accessNote a { color: #93c5fd; font-weight: 700; text-underline-offset: 3px; }
+.accessNote a:hover { color: #dbeafe; }
+.actionRow { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 25px; }
+.actionRow button, .download { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 15px; border-radius: 7px; font-size: 12px; font-weight: 700; text-decoration: none; }
+.secondary { border: 1px solid rgba(147,197,253,.3); color: #dbeafe; background: rgba(15,38,80,.7); }
+.primary, .download { border: 1px solid #3b82f6; color: #fff; background: #1d4ed8; }
+.primary:hover, .download:hover { background: #2563eb; }
+.cancel { border: 1px solid rgba(248,113,113,.4); color: #fecaca; background: rgba(127,29,29,.18); }
+.actionRow button:disabled, .exampleRow button:disabled, .zoomRow button:disabled { opacity: .55; cursor: not-allowed; }
+.status { min-height: 22px; margin: 17px 0 0; color: #c8d8ed; font-size: 12px; line-height: 1.7; }
+.progress { width: 100%; height: 8px; margin-top: 12px; accent-color: #60a5fa; }
+.preview { display: grid; place-items: center; min-height: 240px; max-height: 380px; overflow: hidden; border: 1px solid rgba(147,197,253,.16); border-radius: 8px; background-color: #061023; background-image: linear-gradient(45deg, #172844 25%, transparent 25%), linear-gradient(-45deg, #172844 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #172844 75%), linear-gradient(-45deg, transparent 75%, #172844 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0; }
+.preview img { display: block; width: 100%; max-height: 378px; object-fit: contain; }
+.download { margin-top: 15px; }
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 242px; padding: 25px; border: 1px dashed rgba(147,197,253,.25); border-radius: 8px; text-align: center; background: rgba(2,12,32,.36); }
+.empty strong { color: #dbeafe; font-size: 16px; }
+.empty span { max-width: 320px; color: #8fa8c8; font-size: 12px; line-height: 1.7; }
+.runtime { display: flex; align-items: center; gap: 8px; margin-top: 23px; color: #9bb5d5; font-size: 11px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #60a5fa; box-shadow: 0 0 10px rgba(96,165,250,.6); }
+.finePrint { margin: 11px 0 0; font-size: 11px; }
+.sourceCard { grid-column: 1 / -1; min-width: 0; padding: 28px; border: 1px solid rgba(147,197,253,.17); border-radius: 14px; background: linear-gradient(135deg, rgba(18,38,79,.96), rgba(7,17,40,.97)); box-shadow: 0 24px 70px rgba(0,0,0,.18); }
+.sourceList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 18px 0; }
+.sourceRow { display: flex; min-width: 0; border: 1px solid rgba(147,197,253,.2); border-radius: 8px; background: rgba(2,12,32,.45); }
+.sourceChoice { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 13px 14px; border: 0; border-radius: 8px; background: transparent; color: #dbeafe; text-align: left; font: inherit; cursor: pointer; }
+.sourceChoice strong { font-size: 13px; }
+.sourceChoice span { max-width: 100%; color: #90aacb; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.sourceChoice[aria-pressed="true"] { background: rgba(37,99,235,.2); box-shadow: inset 0 0 0 1px rgba(96,165,250,.65); }
+.sourceChoice:hover { background: rgba(37,99,235,.16); }
+.sourceRemove { display: grid; place-items: center; width: 42px; border: 0; border-left: 1px solid rgba(147,197,253,.16); border-radius: 0 8px 8px 0; background: transparent; color: #fca5a5; cursor: pointer; }
+.sourceRemove:hover { background: rgba(127,29,29,.25); }
+.sourceChoice:disabled, .sourceRemove:disabled { opacity: .55; cursor: not-allowed; }
+.sourceActions { display: flex; flex-wrap: wrap; gap: 9px; }
+.sourceActions button, .sourceForm > button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 0 14px; border-radius: 7px; font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.sourceForm { margin-top: 18px; padding: 19px; border: 1px solid rgba(147,197,253,.2); border-radius: 9px; background: rgba(2,12,32,.48); }
+.sourceForm p { margin: 0 0 15px; color: #a7b8ce; font-size: 12px; line-height: 1.7; }
+.sourceFormGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.sourceFormGrid label { display: flex; flex-direction: column; gap: 6px; color: #cbd5e1; font-size: 12px; font-weight: 650; }
+.sourceFormGrid .fullField { grid-column: 1 / -1; }
+.sourceFormGrid input { width: 100%; min-width: 0; height: 42px; padding: 0 12px; border: 1px solid rgba(147,197,253,.25); border-radius: 7px; outline: none; background: rgba(2,12,32,.75); color: #f8fafc; font: 13px ui-monospace, SFMono-Regular, Consolas, monospace; appearance: textfield; }
+.sourceFormGrid input::-webkit-inner-spin-button, .sourceFormGrid input::-webkit-outer-spin-button { appearance: none; }
+.sourceFormGrid input:focus-visible, .sourceChoice:focus-visible, .sourceRemove:focus-visible, .sourceActions button:focus-visible, .sourceForm button:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.schemeRow { display: flex; gap: 7px; margin: 15px 0; }
+.schemeRow button { min-height: 33px; padding: 0 14px; border: 1px solid rgba(147,197,253,.25); border-radius: 6px; background: rgba(15,38,80,.7); color: #cde0fa; font: 700 12px ui-monospace, SFMono-Regular, Consolas, monospace; cursor: pointer; }
+.schemeRow button[aria-pressed="true"] { border-color: #60a5fa; background: #1e4e97; color: #fff; }
+@media (max-width: 780px) { .intro { grid-template-columns: 1fr; padding: 18px 0; } .intro div { min-height: 64px; } .workspace { grid-template-columns: 1fr; } }
+@media (max-width: 780px) { .sourceList { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .formCard, .resultCard, .sourceCard { padding: 20px; } .boundsGrid, .sourceFormGrid { gap: 9px; } .actionRow .primary { flex: 1 1 100%; } .actionRow .secondary { flex: 1; } .sourceFormGrid { grid-template-columns: 1fr; } .sourceFormGrid .fullField { grid-column: auto; } }
+@media (max-width: 480px) { .clipLoaded { align-items: flex-start; flex-direction: column; } }

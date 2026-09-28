@@ -5,6 +5,7 @@ import { getCtaClassName } from "../CTALink";
 import Logo from "../Logo";
 import MobileMenu, { type HeaderNavLink } from "./MobileMenu";
 import urls from "@/lib/urls";
+import { CLI_EXPERIENCE_URL } from "@/lib/site";
 import styles from "./styles.module.css";
 
 interface HeaderProps extends React.HTMLProps<HTMLElement> {
@@ -14,7 +15,9 @@ interface HeaderProps extends React.HTMLProps<HTMLElement> {
 const navLinks: HeaderNavLink[] = [
   { content: "能力", href: "/#features" },
   { content: "界面", href: "/#screenshots" },
-  { content: "下载", href: "/#download" },
+  { content: "GeoD CLI", href: "/cli" },
+  { content: "GeoD MCP", href: "/mcp" },
+  { content: "CLI 在线体验", href: CLI_EXPERIENCE_URL },
   { content: "历史版本", href: "/history" },
   { content: "免责声明", href: "/disclaimer" },
   {

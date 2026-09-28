@@ -1,0 +1,20 @@
+{
+  "name": "geod-agent",
+  "version": "0.1.0",
+  "description": "Install GeoD Agent Skill and connect the hosted GeoD imagery MCP",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gaopengbin/geo-downloader.git",
+    "directory": "packages/geod-agent"
+  },
+  "homepage": "https://geod.laogao.xyz/mcp",
+  "bugs": "https://github.com/gaopengbin/geo-downloader/issues",
+  "keywords": ["geod", "agent", "skill", "mcp", "imagery"],
+  "publishConfig": { "access": "public" },
+  "engines": { "node": ">=20" },
+  "files": ["bin/", "src/", "skill/", "legacy/", "README.md"],
+  "bin": { "geod-agent": "bin/geod-agent.mjs" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}

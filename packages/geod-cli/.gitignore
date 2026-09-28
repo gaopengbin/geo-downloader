@@ -1,0 +1,6 @@
+native/
+build-info.json
+docs/
+examples/
+*.tgz
+node_modules/

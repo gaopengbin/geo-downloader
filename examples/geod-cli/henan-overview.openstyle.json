@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "0.6.0",
+  "id": "henan-cultural-overview-v1",
+  "name": "henan_cultural_overview",
+  "title": "河南文旅底图 · 地市与山川",
+  "description": "真实行政区与概览影像的制图样式；不包含尚未获取的景点信息。",
+  "background": "#f4f1e9",
+  "layers": [
+    {
+      "id": "henan-cities",
+      "selector": { "sourceLayers": ["boundary"], "geometry": "polygon" },
+      "zIndex": 10,
+      "style": {
+        "name": "henan_cities",
+        "geom": "polygon",
+        "symbolizer": { "kind": "polygon", "fill": "#ead6a4", "fillOpacity": 0.12, "stroke": "#e4c98e", "strokeWidth": 1.6 },
+        "label": { "field": "name", "fontSize": 17, "fontColor": "#fff6dc", "haloColor": "#343d2d", "haloWidth": 2 }
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 .bg {
   /*
-  background: url(/geod/background.svg) bottom -200px center no-repeat,
-    url(/geod/background-pattern.svg) top center,
+  background: url(/geod-site/background.svg) bottom -200px center no-repeat,
+    url(/geod-site/background-pattern.svg) top center,
     var(--backgroundColor);
   background-size: cover;
   */

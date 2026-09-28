@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "name": "河南行政区边界",
+  "bounds": [110.3, 31.3, 116.7, 36.5],
+  "vector": {
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/410000_full.json",
+    "source": "https://geo.datav.aliyun.com/areas_v3/bound/410000_full.json",
+    "attribution": "Alibaba Cloud DataV administrative boundaries",
+    "layers": ["boundary"]
+  },
+  "limits": { "timeoutSeconds": 60 }
+}

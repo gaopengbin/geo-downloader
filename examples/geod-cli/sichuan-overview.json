@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "name": "四川概览 · 真实行政区与 NASA Blue Marble 背景",
+  "bounds": [97.2, 25.9, 108.7, 34.5],
+  "imagery": {
+    "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg",
+    "source": "NASA GIBS BlueMarble_ShadedRelief_Bathymetry",
+    "attribution": "NASA GIBS / Blue Marble (overview imagery, not current high-resolution imagery)",
+    "zoom": 8,
+    "format": "geotiff",
+    "concurrency": 4,
+    "clipToLayer": "boundary"
+  },
+  "vector": {
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/510000_full.json",
+    "source": "https://geo.datav.aliyun.com/areas_v3/bound/510000_full.json",
+    "attribution": "Alibaba Cloud DataV administrative boundaries",
+    "layers": ["boundary"]
+  },
+  "limits": { "maxTiles": 128, "maxPixels": 8388608, "timeoutSeconds": 180 }
+}

@@ -1,0 +1,53 @@
+name: Build GeoD MCP Linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, codex/geod-cli-parity]
+    paths:
+      - '.github/workflows/geod-mcp-linux.yml'
+      - 'packages/geod-mcp/**'
+      - 'crates/geod-cli/**'
+      - 'crates/geod-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build native CLI
+        run: cargo build --release --locked -p geod-cli
+      - name: Install Linux runtime dependencies
+        working-directory: packages/geod-mcp/deploy-linux
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      - name: Assemble release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/geod-mcp-linux/{bin,src,examples,scripts}
+          cp target/release/geod dist/geod-mcp-linux/bin/geod
+          cp packages/geod-mcp/src/*.mjs dist/geod-mcp-linux/src/
+          cp examples/geod-cli/*.json dist/geod-mcp-linux/examples/
+          cp packages/geod-mcp/deploy-linux/package.json dist/geod-mcp-linux/package.json
+          cp -a packages/geod-mcp/deploy-linux/node_modules dist/geod-mcp-linux/node_modules
+          ./dist/geod-mcp-linux/bin/geod --help | grep 'GeoD CLI 0.3.2'
+          tar -C dist -czf geod-mcp-linux-${GITHUB_SHA}.tar.gz geod-mcp-linux
+          sha256sum geod-mcp-linux-${GITHUB_SHA}.tar.gz > geod-mcp-linux-${GITHUB_SHA}.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: geod-mcp-linux-${{ github.sha }}
+          path: |
+            geod-mcp-linux-${{ github.sha }}.tar.gz
+            geod-mcp-linux-${{ github.sha }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14

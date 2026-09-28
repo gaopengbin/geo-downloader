@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1.0",
+  "name": "洛阳龙门区域 · OSM 文旅与交通数据",
+  "bounds": [112.44, 34.53, 112.50, 34.59],
+  "vector": { "layers": ["tourism", "roads", "water", "places"] },
+  "limits": { "timeoutSeconds": 180 }
+}

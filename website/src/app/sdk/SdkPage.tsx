@@ -9,6 +9,7 @@ import {
   type ReleaseAssetKind,
 } from "@/lib/github-releases";
 import { TrackedDownloadLink } from "@/app/_components/ProductAnalytics";
+import { CLI_EXPERIENCE_URL } from "@/lib/site";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -39,7 +40,7 @@ const productModules = [
     label: "GeoTIFF",
     title: "GeoTIFF 下载与导出",
     description: "多图源、区域选择与压缩导出。",
-    image: "/geod/geotiff.png",
+    image: "/geod-site/geotiff.png",
     alt: "GeoD GeoTIFF 下载与导出界面",
   },
   {
@@ -47,7 +48,7 @@ const productModules = [
     label: "DEM",
     title: "DEM 高程数据",
     description: "基于 Terrain Tiles 的高程区域下载与导出。",
-    image: "/geod/dem.png",
+    image: "/geod-site/dem.png",
     alt: "GeoD DEM 高程数据下载界面",
   },
   {
@@ -55,7 +56,7 @@ const productModules = [
     label: "3D Tiles",
     title: "3D Tiles 下载",
     description: "Cesium Ion 与已获授权的 3D Tiles 服务空间过滤。",
-    image: "/geod/3dtiles.png",
+    image: "/geod-site/3dtiles.png",
     alt: "GeoD 3D Tiles 下载界面",
   },
   {
@@ -63,7 +64,7 @@ const productModules = [
     label: "Wayback",
     title: "Wayback 历史影像",
     description: "通过时间轴回溯不同日期的卫星影像。",
-    image: "/geod/wayback.png",
+    image: "/geod-site/wayback.png",
     alt: "GeoD Wayback 历史影像界面",
   },
   {
@@ -71,7 +72,7 @@ const productModules = [
     label: "MVT",
     title: "矢量瓦片",
     description: "MVT / PBF 区域下载并保存为 PBF 目录或 MBTiles。",
-    image: "/geod/vector.png",
+    image: "/geod-site/vector.png",
     alt: "GeoD 矢量瓦片下载界面",
   },
 ] as const;
@@ -93,7 +94,7 @@ const primaryFeatures = [
     description:
       "GeoD 提供常见服务的配置入口，也支持粘贴 XYZ / WMTS URL 模板。请在使用前确认数据提供方的授权范围、访问配额与离线使用政策。",
     meta: "图源管理 · XYZ / WMTS URL 模板",
-    image: "/geod/geotiff.png",
+    image: "/geod-site/geotiff.png",
     alt: "GeoD 图源与 GeoTIFF 工作界面",
   },
   {
@@ -102,7 +103,7 @@ const primaryFeatures = [
     description:
       "按行政区、手绘范围或导入的矢量边界下载 Terrain Tiles 高程数据；对 Cesium Ion 与用户已获授权的 3D Tiles 服务进行空间过滤并创建任务。",
     meta: "DEM · 3D Tiles · LOD 过滤",
-    image: "/geod/3dtiles.png",
+    image: "/geod-site/3dtiles.png",
     alt: "GeoD 3D Tiles 下载工作界面",
   },
   {
@@ -111,7 +112,7 @@ const primaryFeatures = [
     description:
       "通过 Esri World Imagery Wayback 浏览不同日期的影像版本，快速对比区域变化，再把当前选定的历史影像加入下载任务。",
     meta: "Esri Wayback · 时间轴",
-    image: "/geod/wayback.png",
+    image: "/geod-site/wayback.png",
     alt: "GeoD Wayback 历史影像工作界面",
   },
 ] as const;
@@ -201,8 +202,8 @@ export default async function SDKPage() {
           </p>
           <div className={styles.heroActions}>
             <CTALink href="#download">下载最新版本</CTALink>
-            <CTALink href="#features" variant="secondary">
-              探索核心能力
+            <CTALink href={CLI_EXPERIENCE_URL} variant="secondary">
+              GeoD CLI 在线体验
             </CTALink>
             <a
               className={styles.heroGithub}
@@ -214,6 +215,10 @@ export default async function SDKPage() {
               <ArrowUpRight size={16} strokeWidth={1.8} aria-hidden="true" />
             </a>
           </div>
+
+          <p className={styles.heroCliNote}>
+            无需安装，在浏览器中选择地区、查看带水印地图预览。
+          </p>
 
           <div className={styles.heroShowcase}>
             <Tabs
@@ -341,6 +346,32 @@ export default async function SDKPage() {
           </div>
         </section>
 
+        <section id="tools" className={cn(styles.section, styles.resourcesSection)}>
+          <div className={styles.specialHeadingContainer}>
+            <h2 className={styles.h2}>开发者与 Agent</h2>
+            <hr className={styles.separator} />
+          </div>
+          <h3 className={cn(styles.h1, styles.sectionTitle)}>同一套影像下载能力，进入命令行和 AI 工具</h3>
+          <p className={cn(styles.p, styles.sectionLead)}>
+            GeoD CLI 用参数完成规划与下载；GeoD MCP 让 Agent 调用规划、任务、成果读取工具。
+            两者都围绕真实下载结果工作。
+          </p>
+          <div className={styles.resourceGrid}>
+            <Link className={cn(styles.card, styles.resourceCard)} href="/cli">
+              <span className={styles.cardEyebrow}>GEOD CLI · WINDOWS X64</span>
+              <strong>在脚本中下载影像</strong>
+              <small>安装公开预览版，查看命令、示例和使用边界。</small>
+              <span className={styles.resourceArrow} aria-hidden="true"><ArrowRight size={18} strokeWidth={1.8} /></span>
+            </Link>
+            <Link className={cn(styles.card, styles.resourceCard)} href="/mcp">
+              <span className={styles.cardEyebrow}>GEOD MCP · LOCAL / HTTPS</span>
+              <strong>让 Agent 接入 GeoD</strong>
+              <small>复制接入提示词，按本机或云端运行方式连接。</small>
+              <span className={styles.resourceArrow} aria-hidden="true"><ArrowRight size={18} strokeWidth={1.8} /></span>
+            </Link>
+          </div>
+        </section>
+
         <section id="download" className={cn(styles.section, styles.downloadSection)}>
           <div className={styles.specialHeadingContainer}>
             <h2 className={styles.h2}>下载 GeoD</h2>
@@ -456,12 +487,12 @@ export default async function SDKPage() {
             </div>
             <div className={styles.qrGrid}>
               <div className={styles.qrCard}>
-                <img src="/geod/gzh.jpg" alt="GeoD 微信公众号二维码" loading="lazy" />
+                <img src="/geod-site/gzh.jpg" alt="GeoD 微信公众号二维码" loading="lazy" />
                 <strong>微信公众号</strong>
                 <span>版本更新、使用教程与问题说明</span>
               </div>
               <div className={styles.qrCard}>
-                <img src="/geod/wxq_sq.png" alt="GeoD 技术交流群二维码" loading="lazy" />
+                <img src="/geod-site/wxq_sq.png" alt="GeoD 技术交流群二维码" loading="lazy" />
                 <strong>技术交流群</strong>
                 <span>交流 GIS 数据下载、处理与交付经验</span>
               </div>

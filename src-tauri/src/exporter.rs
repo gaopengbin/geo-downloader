@@ -183,6 +183,7 @@ pub fn export_rgba_tiff_bytes(image: &RgbaImage, bounds: Option<&TileBounds>, co
                     let mut img = $encoder
                         .new_image_with_compression::<RGBA8, _>(width, height, Lzw::default())
                         .map_err(|e| format!("TIFF 导出失败: {}", e))?;
+                    img.encoder().write_tag(tiff::tags::Tag::ExtraSamples, &[2u16][..]).map_err(|e| e.to_string())?;
                     write_geotiff_tags!(img, bounds, width, height);
                     img.write_data(image.as_raw()).map_err(|e| format!("TIFF 导出失败: {}", e))?;
                 }
@@ -190,6 +191,7 @@ pub fn export_rgba_tiff_bytes(image: &RgbaImage, bounds: Option<&TileBounds>, co
                     let mut img = $encoder
                         .new_image_with_compression::<RGBA8, _>(width, height, Deflate::default())
                         .map_err(|e| format!("TIFF 导出失败: {}", e))?;
+                    img.encoder().write_tag(tiff::tags::Tag::ExtraSamples, &[2u16][..]).map_err(|e| e.to_string())?;
                     write_geotiff_tags!(img, bounds, width, height);
                     img.write_data(image.as_raw()).map_err(|e| format!("TIFF 导出失败: {}", e))?;
                 }
@@ -197,6 +199,7 @@ pub fn export_rgba_tiff_bytes(image: &RgbaImage, bounds: Option<&TileBounds>, co
                     let mut img = $encoder
                         .new_image_with_compression::<RGBA8, _>(width, height, Uncompressed::default())
                         .map_err(|e| format!("TIFF 导出失败: {}", e))?;
+                    img.encoder().write_tag(tiff::tags::Tag::ExtraSamples, &[2u16][..]).map_err(|e| e.to_string())?;
                     write_geotiff_tags!(img, bounds, width, height);
                     img.write_data(image.as_raw()).map_err(|e| format!("TIFF 导出失败: {}", e))?;
                 }

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "1.0",
+  "name": "河南概览 · 真实行政区与 NASA Blue Marble 背景",
+  "bounds": [110.3, 31.3, 116.7, 36.5],
+  "imagery": {
+    "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg",
+    "source": "NASA GIBS BlueMarble_ShadedRelief_Bathymetry",
+    "attribution": "NASA GIBS / Blue Marble (overview imagery, not current high-resolution imagery)",
+    "zoom": 7,
+    "format": "geotiff",
+    "concurrency": 2
+  },
+  "vector": {
+    "url": "https://geo.datav.aliyun.com/areas_v3/bound/410000_full.json",
+    "source": "https://geo.datav.aliyun.com/areas_v3/bound/410000_full.json",
+    "attribution": "Alibaba Cloud DataV administrative boundaries",
+    "layers": ["boundary"]
+  },
+  "limits": { "maxTiles": 64, "maxPixels": 4194304, "timeoutSeconds": 180 }
+}

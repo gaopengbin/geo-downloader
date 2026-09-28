@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0",
+  "name": "Blue Marble 多级影像示例",
+  "bounds": [116.3, 39.8, 116.5, 40.0],
+  "imagery": {
+    "url": "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg",
+    "source": "NASA GIBS Blue Marble Shaded Relief Bathymetry",
+    "attribution": "NASA GIBS",
+    "zoom": 5,
+    "zoomLevels": [5, 6],
+    "format": "geotiff",
+    "compression": "deflate",
+    "buildPyramid": true,
+    "generateSidecars": true,
+    "concurrency": 4
+  }
+}

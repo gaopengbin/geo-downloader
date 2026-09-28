@@ -29,9 +29,9 @@ export const metadata: Metadata = {
     images: [DEFAULT_OG_IMAGE],
   },
   icons: {
-    icon: "/geod/icon.png",
-    shortcut: "/geod/favicon.ico",
-    apple: "/geod/icon.png",
+    icon: "/geod-site/icon.png",
+    shortcut: "/geod-site/favicon.ico",
+    apple: "/geod-site/icon.png",
   },
   manifest: "/manifest.webmanifest",
   authors: [{ name: "gaopengbin", url: "https://github.com/gaopengbin" }],
