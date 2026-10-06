@@ -7,16 +7,18 @@ import { fileURLToPath } from "node:url";
 
 // Local development only. The public site already serves /api/account on its own origin.
 const hostname = "127.0.0.1";
-const publicPort = 3401;
-const nextPort = 3402;
+const publicPort = Number(process.env.GEOD_PREVIEW_PORT || 3401);
+const nextPort = Number(process.env.GEOD_FRONTEND_PORT || 3402);
 const accountHost = "geod.laogao.xyz";
+const localApi = process.env.GEOD_LOCAL_API_ORIGIN ? new URL(process.env.GEOD_LOCAL_API_ORIGIN) : null;
+if (localApi && (localApi.protocol !== "http:" || localApi.hostname !== "127.0.0.1")) throw new Error("Local API must use HTTP loopback");
 const websiteDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const allowedOrigin = `http://${hostname}:${publicPort}`;
 
 function isAccountPath(requestUrl) {
   try {
     const pathname = new URL(requestUrl, allowedOrigin).pathname;
-    return pathname === "/api/account" || pathname.startsWith("/api/account/");
+    return pathname === "/api/account" || pathname.startsWith("/api/account/") || pathname === "/api/geod-applications" || pathname.startsWith("/api/geod-applications/");
   } catch {
     return false;
   }
@@ -37,6 +39,10 @@ function handleRequest(request, response) {
   }
 
   const accountRequest = isAccountPath(request.url);
+  if (request.url.startsWith("/api/geod-applications") && !localApi) {
+    reject(response, 503, "LOCAL_APPLICATION_API_REQUIRED");
+    return;
+  }
   if (accountRequest && !["GET", "HEAD", "OPTIONS"].includes(request.method) && request.headers.origin !== allowedOrigin) {
     reject(response, 403, "ORIGIN_REJECTED");
     return;
@@ -44,7 +50,10 @@ function handleRequest(request, response) {
 
   const targetHeaders = { ...request.headers };
   let target;
-  if (accountRequest) {
+  if (accountRequest && localApi) {
+    targetHeaders.host = `${hostname}:${publicPort}`;
+    target = http.request({ hostname:localApi.hostname, port:localApi.port, path:request.url, method:request.method, headers:targetHeaders, timeout:22000 });
+  } else if (accountRequest) {
     targetHeaders.host = accountHost;
     targetHeaders.origin = `https://${accountHost}`;
     if (targetHeaders.referer?.startsWith(allowedOrigin)) {
@@ -114,7 +123,7 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 server.listen(publicPort, hostname, () => {
-  console.log(`GeoD local preview: ${allowedOrigin} (account API: ${accountHost})`);
+  console.log(`GeoD local preview: ${allowedOrigin} (account API: ${localApi?.origin || accountHost})`);
   const next = spawn(process.execPath, [path.join(websiteDirectory, "node_modules", "next", "dist", "bin", "next"), "dev", "-p", String(nextPort), "-H", hostname], {
     cwd: websiteDirectory,
     stdio: "inherit",

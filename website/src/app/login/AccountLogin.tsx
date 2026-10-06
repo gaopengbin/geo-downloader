@@ -28,6 +28,8 @@ export default function AccountLogin() {
   const destination = typeof window === "undefined" ? "/dashboard" : safeReturnTo(window.location.search);
 
   useEffect(() => {
+    const initialMode = new URLSearchParams(window.location.search).get("mode");
+    if (initialMode === "register" || initialMode === "reset") setMode(initialMode);
     let active = true;
     void Promise.allSettled([accountRequest<GeoDAccount>("/api/account"), accountRequest<VerificationInfo>("/api/account/verification")]).then(([account, verification]) => {
       if (!active) return;
@@ -112,7 +114,7 @@ export default function AccountLogin() {
         </> : <>
           <span className={styles.eyebrow}>{mode === "login" ? "WELCOME BACK" : mode === "register" ? "CREATE ACCOUNT" : "RESET PASSWORD"}</span>
           <h2 id="auth-title">{mode === "login" ? "登录 GeoD" : mode === "register" ? "注册 GeoD" : "找回密码"}</h2>
-          <p className={styles.muted}>{mode === "login" ? "使用 GeoD 账号继续。" : mode === "register" ? "通过邮箱验证创建账号。" : "验证账号邮箱后设置新密码。"}</p>
+          <p className={styles.muted}>{mode === "login" ? "使用 GeoD 账号继续。" : mode === "register" ? "验证邮箱即可创建 GeoD 账号，无需邀请码。" : "验证账号邮箱后设置新密码。"}</p>
           {mode === "login" ? <form className={styles.form} onSubmit={event => void signIn(event)}>
             <label htmlFor="geod-email">邮箱</label><input id="geod-email" type="email" autoComplete="username" maxLength={254} required disabled={busy} value={email} onChange={event => setEmail(event.target.value)} />
             <label htmlFor="geod-password">密码</label><input id="geod-password" type="password" autoComplete="current-password" maxLength={128} required disabled={busy} value={password} onChange={event => setPassword(event.target.value)} />
@@ -132,6 +134,7 @@ export default function AccountLogin() {
           <div className={styles.switches}>
             {mode !== "login" ? <button type="button" disabled={busy} onClick={() => changeMode("login")}>返回登录</button> : <><button type="button" disabled={busy} onClick={() => changeMode("register")}>注册账号</button><button type="button" disabled={busy} onClick={() => changeMode("reset")}>忘记密码？</button></>}
           </div>
+          <p className={styles.hint}>接入遇到问题，或想参与后续功能测试？<Link className={styles.textLink} href="/apply?from=%2Flogin">提交接入问题或登记测试意向</Link>。注册账号无需先提交申请。</p>
         </>}
       </section>
     </div>

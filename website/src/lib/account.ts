@@ -1,8 +1,11 @@
+import { safeAccountDestination } from "./account-return-to";
+
 export type GeoDAccount = {
   user: { id: string; email: string; createdAt: string; emailVerifiedAt?: string; phone?: string; phoneVerifiedAt?: string; avatar?: { kind: "preset"; id: string } | { kind: "upload"; version: string } } | null;
   authRequired: boolean;
   quota?: { remaining: number; giftRemaining?: number; purchasedRemaining?: number; unit?: string };
   storage?: { count: number; usedBytes: number; maxBytes: number };
+  permissions?: { billingAdmin?: boolean };
 };
 
 export type VerificationInfo = { channels: { email: boolean; sms: boolean }; registration: string };
@@ -58,12 +61,5 @@ export async function accountRequest<T>(url: string, method = "GET", body?: unkn
 }
 
 export function safeReturnTo(search: string): string {
-  const candidate = new URLSearchParams(search).get("returnTo") || "/dashboard";
-  if (!candidate.startsWith("/") || candidate.startsWith("//") || candidate.includes("\\")) return "/dashboard";
-  try {
-    const target = new URL(candidate, window.location.origin);
-    if (target.origin !== window.location.origin) return "/dashboard";
-    if (!["/", "/dashboard", "/browser", "/cli", "/mcp", "/geod"].includes(target.pathname)) return "/dashboard";
-    return target.pathname + target.search + target.hash;
-  } catch { return "/dashboard"; }
+  return safeAccountDestination(search, window.location.origin);
 }

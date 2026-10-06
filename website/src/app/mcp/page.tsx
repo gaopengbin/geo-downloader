@@ -5,6 +5,7 @@ import Background from "../_components/Background";
 import { TrackedInstallLink } from "../_components/ProductAnalytics";
 import Footer from "../_components/Footer";
 import Header from "../_components/Header";
+import ApplicationLink from "../_components/ApplicationLink";
 import page from "../geod-page.module.css";
 import CodeBlock from "../tools/CodeBlock";
 import CopyText from "../tools/CopyText";
@@ -109,6 +110,7 @@ export default function McpPage() {
           </div>
         </div>
       </main>
+      <div className="mx-auto max-w-[1100px] px-6 pb-12 text-sm text-muted-foreground">Agent 接入遇到问题？<ApplicationLink product="mcp" className="ml-2 text-primary">提交 MCP 接入问题</ApplicationLink></div>
       <Footer />
     </>
   );

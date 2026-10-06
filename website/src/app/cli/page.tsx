@@ -5,6 +5,7 @@ import Background from "../_components/Background";
 import { TrackedInstallLink } from "../_components/ProductAnalytics";
 import Footer from "../_components/Footer";
 import Header from "../_components/Header";
+import ApplicationLink from "../_components/ApplicationLink";
 import page from "../geod-page.module.css";
 import CodeBlock from "../tools/CodeBlock";
 import styles from "../tools/tools.module.css";
@@ -118,6 +119,7 @@ export default function CliPage() {
           </div>
         </div>
       </main>
+      <div className="mx-auto max-w-[1100px] px-6 pb-12 text-sm text-muted-foreground">接入时遇到问题？<ApplicationLink product="cli" className="ml-2 text-primary">告诉我们你的 CLI 使用场景</ApplicationLink></div>
       <Footer />
     </>
   );

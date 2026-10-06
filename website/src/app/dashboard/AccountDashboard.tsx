@@ -76,6 +76,7 @@ export default function AccountDashboard() {
       <h2>登录后进入你的控制台</h2><p>使用 GeoD 账号查看身份、登录会话和地图创作额度。浏览器影像 0–5 级下载仍可匿名使用。</p>
       <Link className={styles.primary} href="/login?returnTo=%2Fdashboard">登录或注册 GeoD <ArrowRight size={17} aria-hidden="true" /></Link>
     </section> : <>
+      {account.permissions?.billingAdmin && <section className={styles.panel}><h2>申请管理</h2><p>查看接入问题、测试意向与处理记录。</p><Link className={styles.textLink} href="/admin/applications">进入申请管理 →</Link></section>}
       <div className={styles.dashboardGrid}>
         <section className={styles.panel} aria-labelledby="identity-heading">
           <h2 id="identity-heading">我的账号</h2>

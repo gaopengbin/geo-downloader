@@ -3,6 +3,7 @@ import { CLI_EXPERIENCE_URL } from "@/lib/site";
 import { Github } from "lucide-react";
 import styles from "./styles.module.css";
 import Logo from "../Logo";
+import ApplicationLink from "../ApplicationLink";
 
 interface FooterProps extends React.HTMLProps<HTMLElement> {}
 
@@ -89,6 +90,7 @@ const Footer: React.FC<FooterProps> = ({ className, ...rest }) => {
               <div key={i} className={styles.category}>
                 <h3 className={styles.categoryName}>{cat.category}</h3>
                 <div className={styles.links}>
+                  {cat.category === "支持" && <ApplicationLink className={styles.link}>使用申请与接入帮助</ApplicationLink>}
                   {cat.links.map((link) => (
                     <a
                       key={link.id}
