@@ -40,4 +40,5 @@
 }
 @media (max-width: 560px) { .container { height: 64px; } .navbar { padding: 0 16px; } .drawer { top: 64px; max-height: calc(100dvh - 64px); } }
 @media (max-width: 560px) { .accountPanel { right: -52px; } }
+.accountPanel.alignedAccountPanel { right: 0; }
 @media (prefers-reduced-motion: reduce) { .accountPanel { animation: none; } }

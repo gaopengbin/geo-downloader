@@ -1,6 +1,6 @@
 import { MetadataRoute } from "next";
 import { getStableReleases } from "@/lib/github-releases";
-import { SITE_URL } from "@/lib/site";
+import { MAP_CREATION_VISIBLE, SITE_URL } from "@/lib/site";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const [latestRelease] = await getStableReleases(1);
@@ -38,10 +38,16 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       priority: 0.9,
     },
     {
+      url: `${SITE_URL}/geod`,
+      lastModified: new Date("2026-10-06"),
+      changeFrequency: "monthly" as const,
+      priority: 0.9,
+    },
+    {
       url: `${SITE_URL}/disclaimer`,
       lastModified: new Date("2026-08-11"),
       changeFrequency: "yearly" as const,
       priority: 0.5,
     },
-  ];
+  ].filter(page => MAP_CREATION_VISIBLE || page.url !== `${SITE_URL}/geod`);
 }

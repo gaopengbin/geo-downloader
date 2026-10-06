@@ -1,7 +1,4 @@
 import type { Metadata } from "next";
-import Background from "../_components/Background";
-import Footer from "../_components/Footer";
-import Header from "../_components/Header";
 import AccountDashboard from "./AccountDashboard";
 
 export const metadata: Metadata = {
@@ -11,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function DashboardPage() {
-  return <><Background sticky /><Header /><AccountDashboard /><Footer /></>;
+  return <AccountDashboard />;
 }

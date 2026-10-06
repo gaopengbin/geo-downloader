@@ -1,5 +1,5 @@
 import urls from "@/lib/urls";
-import { CLI_EXPERIENCE_URL } from "@/lib/site";
+import { MAP_CREATION_VISIBLE, MAP_WORKSPACE_URL } from "@/lib/site";
 import { Github } from "lucide-react";
 import styles from "./styles.module.css";
 import Logo from "../Logo";
@@ -20,10 +20,9 @@ const linkCategories: {
       { id: "Browser", label: "浏览器影像", href: "/browser" },
       { id: "Cli", label: "GeoD CLI", href: "/cli" },
       { id: "Mcp", label: "GeoD MCP", href: "/mcp" },
-      { id: "CliExperience", label: "CLI 在线体验", href: CLI_EXPERIENCE_URL },
-      { id: "Studio", label: "地图创作", href: "/geod" },
+      { id: "Studio", label: "地图创作", href: MAP_WORKSPACE_URL, target: "_blank" },
       { id: "Download", label: "立即下载", href: "/#download" },
-    ],
+    ].filter(link => MAP_CREATION_VISIBLE || link.id !== "Studio"),
   },
   {
     category: "资源",

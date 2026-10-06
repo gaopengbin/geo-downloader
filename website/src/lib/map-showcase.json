@@ -1,0 +1,81 @@
+{
+  "catalogSha256": "bbec586a2f8d0ff03a72ac4b8508c45a1cddec15a1aad2450253f42355eeb632",
+  "assetsSha256": "ac6449b0ec6982213960ce38dab9903ec96d7c6b8899b8f40bdd31f9dda43a4a",
+  "newlyGeneratedImages": 0,
+  "hero": {
+    "src": "/geod-site/maps/studio-hero.webp",
+    "sha256": "4778b53321e35af9babc4fe1a1a11a604833e95d6765ce1ae587bce3c56581a1",
+    "width": 1440,
+    "height": 900,
+    "attribution": "AWS Terrain Tiles / Mapzen; © OpenStreetMap contributors, ODbL 1.0; existing image_gen material edit",
+    "description": "已生成的尼泊尔河谷沙盘材质参考，来源为真实 DEM 渲染；不是现场照片或灾后影像。"
+  },
+  "examples": [
+    {
+      "id": "nepal-sandtable",
+      "title": "尼泊尔河谷 · 沙盘版",
+      "category": "完整成图",
+      "description": "真实地形美化后叠加标注；不是灾后影像或现场照片。",
+      "width": 2400,
+      "height": 1800,
+      "originalSha256": "c8553041c2318ef314c15f822dd475646418487c2b3ff20516ecc3514dbc6d96",
+      "src": "/geod-site/maps/nepal-sandtable.webp",
+      "sha256": "39b3a6cbad8de2564c0b31117eb10c5fbe05902a8167f8133012c3015d0652c5"
+    },
+    {
+      "id": "henan-imagery",
+      "title": "河南 · 区域影像",
+      "category": "完整成图",
+      "description": "行政区裁剪的概览影像，非实时高分辨率卫星影像。",
+      "width": 2400,
+      "height": 1800,
+      "originalSha256": "37ad3091cd4e73b9cc092ae68213c9162fc8c5dd044019fc7440615fc323c54c",
+      "src": "/geod-site/maps/henan-imagery.webp",
+      "sha256": "3a06adae1fa23a5a7ab84097ec1240ebdcd7ceae5cff7ded4042044056b04d28"
+    },
+    {
+      "id": "henan-thematic",
+      "title": "河南 · 面积专题",
+      "category": "完整成图",
+      "description": "依据边界几何估算面积，非官方统计面积。",
+      "width": 2400,
+      "height": 1800,
+      "originalSha256": "8186a0a9b827a94854fa08b5680c928e463adb9ee38b3beef7bf8b822fe9944f",
+      "src": "/geod-site/maps/henan-thematic.webp",
+      "sha256": "fb24eda418566a63e6df8e6366f44857c93c8d1949fdb6739a83c6ac23a9b728"
+    },
+    {
+      "id": "terrain-sandtable",
+      "title": "地形成图测试 · 沙盘版",
+      "category": "完整成图",
+      "description": "与标准版配套的地形美化成果。",
+      "width": 2400,
+      "height": 1800,
+      "originalSha256": "cbf26b1c2c4926d6d8f194bfe401d6e4158fb2088d5ec4dbd387d9cb169429fa",
+      "src": "/geod-site/maps/terrain-sandtable.webp",
+      "sha256": "c366b422eaa43548f7de775227ce4d3107e61d14a4249fc1d5f3af681aae7e17"
+    },
+    {
+      "id": "henan-polish",
+      "title": "河南 · 首轮美化",
+      "category": "风格试验",
+      "description": "早期图像美化测试，仅供效果参考。",
+      "width": 1448,
+      "height": 1086,
+      "originalSha256": "b9a39204f5954760863b8741e2591d942936c0419952b9f8dc89f04daa0bc2f7",
+      "src": "/geod-site/maps/henan-polish.webp",
+      "sha256": "10e17872e6a8318f3b61d4d4d01565dd99ede5326f43f245c3354cabfaeae9f6"
+    },
+    {
+      "id": "parchment",
+      "title": "河南 · 羊皮纸风格",
+      "category": "风格试验",
+      "description": "早期艺术风格试验，未验证重绘后的地理精度。",
+      "width": 1448,
+      "height": 1086,
+      "originalSha256": "78ea838db46e0eec58083a2d7f3c26f502b3fc0aa257a48706053f91704a40f1",
+      "src": "/geod-site/maps/parchment.webp",
+      "sha256": "237f3bbb59fa97b2d91c9b7ed830fb03c995b0e5352e8e73361180a1c496495e"
+    }
+  ]
+}

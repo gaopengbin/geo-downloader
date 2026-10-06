@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowRight, KeyRound, Mail, ShieldCheck } from "lucide-react";
 import { Button as MotionButton } from "@/components/motion/button/base";
 import { accountErrorText, accountRequest, safeReturnTo, type GeoDAccount, type VerificationInfo } from "@/lib/account";
+import { notifyAccountChanged } from "@/lib/account-events";
 import styles from "../account.module.css";
 import { trackProductEvent } from "@/lib/product-analytics";
 
@@ -63,6 +64,7 @@ export default function AccountLogin() {
       await accountRequest("/api/account/login", "POST", { email: email.trim(), password });
       const next = await accountRequest<GeoDAccount>("/api/account");
       if (!next.user) throw new Error("Session not established");
+      notifyAccountChanged();
       void trackProductEvent("account_login_succeeded");
       setPassword(""); window.location.assign(destination);
     });
@@ -86,6 +88,7 @@ export default function AccountLogin() {
       await accountRequest("/api/account/verification", "PUT", { channel: "email", target: email.trim(), purpose: mode, challengeId, code, password });
       const next = await accountRequest<GeoDAccount>("/api/account");
       if (!next.user) throw new Error("Session not established");
+      notifyAccountChanged();
       void trackProductEvent(mode === "register" ? "account_registration_succeeded" : "account_password_reset_succeeded");
       setPassword(""); setConfirmation(""); setCode(""); window.location.assign(destination);
     });

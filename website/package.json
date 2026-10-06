@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "node scripts/dev-account-proxy.mjs",
     "dev:frontend": "next",
+    "test:preview": "node --test scripts/test-preview-proxy.mjs scripts/test-account-events.cjs",
+    "prebuild": "node scripts/verify-map-showcase.cjs",
     "build": "next build",
     "serve": "npx serve@latest out"
   },

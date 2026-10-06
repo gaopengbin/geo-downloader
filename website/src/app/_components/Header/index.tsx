@@ -8,6 +8,8 @@ import Logo from "../Logo";
 import AccountMenu from "./AccountMenu";
 import MobileMenu, { type HeaderNavLink } from "./MobileMenu";
 import { accountRequest, type GeoDAccount } from "@/lib/account";
+import { subscribeAccountChanges } from "@/lib/account-events";
+import { MAP_CREATION_VISIBLE, MAP_WORKSPACE_URL } from "@/lib/site";
 import urls from "@/lib/urls";
 import styles from "./styles.module.css";
 
@@ -20,20 +22,22 @@ const productLinks: HeaderNavLink[] = [
   { content: "浏览器版", href: "/browser" },
   { content: "CLI", href: "/cli" },
   { content: "MCP", href: "/mcp" },
-  { content: "地图创作", href: "/geod" },
-];
+  { content: "地图创作", href: MAP_WORKSPACE_URL, target: "_blank" },
+].filter(link => MAP_CREATION_VISIBLE || link.href !== MAP_WORKSPACE_URL);
 
 const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
   const [user, setUser] = useState<GeoDAccount["user"] | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
+    let requestVersion = 0;
     const refresh = async () => {
+      const version = ++requestVersion;
       try {
         const account = await accountRequest<GeoDAccount>("/api/account");
-        if (active) setUser(account.user);
+        if (active && version === requestVersion) setUser(account.user);
       } catch {
-        if (active) setUser(current => current === undefined ? null : current);
+        if (active && version === requestVersion) setUser(current => current === undefined ? null : current);
       }
     };
     const onVisible = () => {
@@ -41,12 +45,12 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
     };
     void refresh();
     window.addEventListener("focus", refresh);
-    window.addEventListener("geod:account-updated", refresh);
+    const unsubscribe = subscribeAccountChanges(() => void refresh());
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
       window.removeEventListener("focus", refresh);
-      window.removeEventListener("geod:account-updated", refresh);
+      unsubscribe();
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);

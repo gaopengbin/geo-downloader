@@ -4,12 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { LogOut, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/motion/button/base";
 import { accountErrorText, accountRequest, type GeoDAccount } from "@/lib/account";
+import { notifyAccountChanged } from "@/lib/account-events";
 import Avatar from "../Avatar";
 import styles from "./styles.module.css";
 
 type AccountUser = NonNullable<GeoDAccount["user"]>;
 
-export default function AccountMenu({ user, onLoggedOut }: { user: AccountUser; onLoggedOut: () => void }) {
+export default function AccountMenu({ user, onLoggedOut, alignToTrigger = false }: { user: AccountUser; onLoggedOut: () => void; alignToTrigger?: boolean }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -40,6 +41,7 @@ export default function AccountMenu({ user, onLoggedOut }: { user: AccountUser; 
     setError("");
     try {
       await accountRequest("/api/account/logout", "POST", {});
+      notifyAccountChanged();
       setOpen(false);
       onLoggedOut();
       window.location.assign("/login");
@@ -63,7 +65,7 @@ export default function AccountMenu({ user, onLoggedOut }: { user: AccountUser; 
     >
       <Avatar user={user} size={34} />
     </Button>
-    {open && <div id="geod-account-menu" className={styles.accountPanel}>
+    {open && <div id="geod-account-menu" className={`${styles.accountPanel} ${alignToTrigger ? styles.alignedAccountPanel : ""}`}>
       <div className={styles.accountIdentity}>
         <Avatar user={user} size={42} />
         <div><strong>GeoD 账号</strong><span title={user.email}>{user.email}</span></div>
