@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     title: "GeoD Agent｜用对话完成地理数据任务",
     description: "对话、地图与成果，在一个工作区中。Windows 公开测试版 0.2.3 可下载，0.2.4 正在准备。",
     url: "/agent",
-    images: ["/geod-site/agent/workbench-light.png"],
+    images: ["/geod-site/agent/workbench-light.jpg"],
   },
 };
 
@@ -123,7 +123,7 @@ export default function AgentPage() {
             <div className={styles.exampleFacts}><span><strong>7</strong>个城市范围</span><span><strong>GeoTIFF</strong>本机成果</span></div>
             <p className={styles.finePrint}>本机小规模验证 · 2026-10-02<br />20 张实际影像瓦片，Z8。说明这条流程已跑通，不代表所有图源、精度和规模均已验证。</p>
           </div>
-          <figure><a href="/geod-site/agent/batch-result.png" target="_blank" rel="noopener noreferrer" aria-label="查看完整的多区域下载验证截图"><img src="/geod-site/agent/batch-result.png" width={1280} height={720} alt="本机真实验证截图：多个城市的合并范围已裁剪为影像并加载到地图，左侧为验证工具输出" loading="lazy" /></a><figcaption>真实本机成果与地图 · 左侧为开发验证工具 <ArrowUpRight size={14} aria-hidden="true" /></figcaption></figure>
+          <figure><a href="/geod-site/agent/batch-result.jpg" target="_blank" rel="noopener noreferrer" aria-label="查看完整的多区域下载验证截图"><img src="/geod-site/agent/batch-result.jpg" width={1280} height={720} alt="本机真实验证截图：多个城市的合并范围已裁剪为影像并加载到地图，左侧为验证工具输出" loading="lazy" /></a><figcaption>真实本机成果与地图 · 左侧为开发验证工具 <ArrowUpRight size={14} aria-hidden="true" /></figcaption></figure>
         </section>
 
         <section className={styles.boundaries} aria-labelledby="boundaries-title">
