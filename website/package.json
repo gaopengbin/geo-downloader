@@ -8,6 +8,7 @@
     "test:preview": "node --test scripts/test-preview-proxy.mjs scripts/test-account-events.cjs",
     "prebuild": "node scripts/verify-map-showcase.cjs",
     "build": "next build",
+    "test:i18n": "node --test scripts/verify-i18n.cjs",
     "serve": "npx serve@latest out"
   },
   "dependencies": {

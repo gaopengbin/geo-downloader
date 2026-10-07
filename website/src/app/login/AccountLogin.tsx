@@ -1,4 +1,6 @@
 "use client";
+import { LocalizedContent, useLocale } from "@/app/_components/LocaleProvider";
+import { localePath } from "@/lib/i18n";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
@@ -12,6 +14,7 @@ import { trackProductEvent } from "@/lib/product-analytics";
 type Mode = "login" | "register" | "reset";
 
 export default function AccountLogin() {
+  const locale = useLocale();
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -66,7 +69,7 @@ export default function AccountLogin() {
       if (!next.user) throw new Error("Session not established");
       notifyAccountChanged();
       void trackProductEvent("account_login_succeeded");
-      setPassword(""); window.location.assign(destination);
+      setPassword(""); window.location.assign(localePath(destination, locale));
     });
   }
   async function sendCode() {
@@ -90,11 +93,11 @@ export default function AccountLogin() {
       if (!next.user) throw new Error("Session not established");
       notifyAccountChanged();
       void trackProductEvent(mode === "register" ? "account_registration_succeeded" : "account_password_reset_succeeded");
-      setPassword(""); setConfirmation(""); setCode(""); window.location.assign(destination);
+      setPassword(""); setConfirmation(""); setCode(""); window.location.assign(localePath(destination, locale));
     });
   }
 
-  return <main className={styles.page}>
+  return <LocalizedContent><main className={styles.page}>
     <div className={styles.authLayout}>
       <section className={styles.intro} aria-labelledby="account-intro">
         <span className={styles.eyebrow}>GEOD ACCOUNT</span>
@@ -109,7 +112,7 @@ export default function AccountLogin() {
         {checking ? <p role="status" className={styles.muted}>正在确认登录状态…</p> : session?.user ? <>
           <span className={styles.eyebrow}>SIGNED IN</span>
           <h2 id="auth-title">已经登录 GeoD</h2>
-          <p className={styles.muted}>{session.user.email}</p>
+          <p className={styles.muted} data-no-translate>{session.user.email}</p>
           <div className={styles.signedInActions}>
             {destination !== "/dashboard" && <a className={styles.primary} href={destination}>继续前往 <ArrowRight size={17} aria-hidden="true" /></a>}
             <Link className={destination === "/dashboard" ? styles.primary : styles.textLink} href="/dashboard">进入个人控制台{destination === "/dashboard" && <ArrowRight size={17} aria-hidden="true" />}</Link>
@@ -141,5 +144,5 @@ export default function AccountLogin() {
         </>}
       </section>
     </div>
-  </main>;
+  </main></LocalizedContent>;
 }

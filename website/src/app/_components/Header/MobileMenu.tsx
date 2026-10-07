@@ -1,4 +1,5 @@
 "use client";
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 
 import cn from "classnames";
 import type { ReactNode } from "react";
@@ -48,7 +49,7 @@ export default function MobileMenu({ isHome, links }: MobileMenuProps) {
   }, [open]);
 
   return (
-    <>
+    <LocalizedContent><>
       <button
         ref={buttonRef}
         className={cn(styles.drawerButton, "z-10")}
@@ -120,6 +121,6 @@ export default function MobileMenu({ isHome, links }: MobileMenuProps) {
           )}
         </nav>
       </div>
-    </>
+    </></LocalizedContent>
   );
 }

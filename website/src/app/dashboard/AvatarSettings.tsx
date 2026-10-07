@@ -1,4 +1,5 @@
 "use client";
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 
 import { useRef, useState, type ChangeEvent } from "react";
 import { ImagePlus, RotateCcw } from "lucide-react";
@@ -60,7 +61,7 @@ export default function AvatarSettings({ user, onChange }: { user: User; onChang
     finally { setBusy(false); }
   }
 
-  return <section className={styles.panel} aria-labelledby="avatar-heading">
+  return <LocalizedContent><section className={styles.panel} aria-labelledby="avatar-heading">
     <div className={styles.heading}>
       <div><h2 id="avatar-heading">我的头像</h2><p>选择一款 GeoD 默认头像，或上传自己的照片。头像会跟随账号保存。</p></div>
       <Avatar user={user} size={76} className={styles.currentAvatar} />
@@ -78,5 +79,5 @@ export default function AvatarSettings({ user, onChange }: { user: User; onChang
     </div>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {notice && <p className={styles.notice} role="status">{notice}</p>}
-  </section>;
+  </section></LocalizedContent>;
 }

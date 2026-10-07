@@ -1,4 +1,7 @@
 "use client";
+import { LocalizedContent, LanguageSwitch, useLocale } from "@/app/_components/LocaleProvider";
+import { localePath, type Locale } from "@/lib/i18n";
+
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -7,6 +10,7 @@ import {
   Plug, RefreshCw, ShieldCheck, Sparkles, Terminal, UserRound,
   ClipboardList, KeyRound, Mail,
 } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { Button, ButtonLink } from "@/components/motion/button/base";
 import { accountErrorText, accountRequest, type AccountSession, type GeoDAccount } from "@/lib/account";
 import { notifyAccountChanged, subscribeAccountChanges } from "@/lib/account-events";
@@ -28,6 +32,7 @@ const navigation = [
 type Section = typeof navigation[number]["id"];
 
 const products = ([
+  { id: "agent", name: "GeoD Agent", description: "用对话组织地理数据任务，在本机规划、下载与核验成果。", href: "/agent", icon: MessageSquare, tag: "独立桌面应用", action: "了解与下载 Agent", color: "blue" },
   { id: "browser", name: "浏览器影像", description: "在当前设备下载、拼接与裁剪影像，无需安装。", href: "/browser", icon: Globe2, tag: "浏览器", action: "打开浏览器版", color: "blue" },
   { id: "geod", name: "地图创作", description: "在新窗口打开创作工作台，复用当前 GeoD 登录状态。", href: MAP_WORKSPACE_URL, icon: Layers3, tag: "创作工具", action: "进入工作台", color: "purple" },
   { id: "mcp", name: "GeoD MCP", description: "向你的 Agent 提供 GeoD 规划、下载和成果读取工具。", href: "/mcp", icon: Plug, tag: "Agent 接入", action: "查看接入方式", color: "teal" },
@@ -35,13 +40,15 @@ const products = ([
   { id: "cli", name: "GeoD CLI", description: "在本机终端运行影像任务，接入脚本与自动化工作流。", href: "/cli", icon: Terminal, tag: "命令行", action: "查看安装说明", color: "slate" },
 ] as const).filter(product => MAP_CREATION_VISIBLE || product.id !== "geod");
 
-function dateLabel(value: string, withTime = false) {
+function formatDate(value: string, withTime = false, locale: Locale = "zh") {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "暂不可用";
-  return date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}) });
+  return date.toLocaleDateString(locale === "en" ? "en-US" : "zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}) });
 }
 
 export default function AccountDashboard() {
+  const locale = useLocale();
+  const dateLabel = (value: string, withTime = false) => formatDate(value, withTime, locale);
   const [section, setSection] = useState<Section>("overview");
   const [account, setAccount] = useState<GeoDAccount | null>(null);
   const [sessions, setSessions] = useState<AccountSession[] | null>(null);
@@ -57,7 +64,7 @@ export default function AccountDashboard() {
   const loadVersion = useRef(0);
   const currentSection = navigation.find(item => item.id === section)!;
   const user = account?.user;
-  const loginHref = `/login?returnTo=${encodeURIComponent(`/dashboard#${section}`)}`;
+  const loginHref = `${localePath("/login", locale)}?returnTo=${encodeURIComponent(localePath(`/dashboard#${section}`, locale))}`;
 
   useEffect(() => {
     const syncSection = () => {
@@ -110,7 +117,7 @@ export default function AccountDashboard() {
       notifyAccountChanged();
       void trackProductEvent("account_logout_succeeded");
       setAccount({ user: null, authRequired: true }); setSessions(null);
-      window.location.assign("/login");
+      window.location.assign(localePath("/login", locale));
     } catch (reason) { setError(accountErrorText(reason)); }
     finally { setBusy(false); }
   }
@@ -130,11 +137,12 @@ export default function AccountDashboard() {
     finally { setBusy(false); }
   }
 
-  return <div className={styles.console}>
+  return <LocalizedContent><div className={styles.console}>
     <a className={styles.skipLink} href="#console-content">跳转到主要内容</a>
     <header className={styles.topbar}>
       <a className={styles.brand} href="/" aria-label="GeoD 官网"><Logo height={27} /><span>控制台</span></a>
       <div className={styles.topbarActions}>
+        <LanguageSwitch />
         <ButtonLink href="/" variant="ghost" size="sm" className={styles.homeLink}>返回官网<ArrowUpRight size={15} aria-hidden="true" /></ButtonLink>
         {user ? <AccountMenu user={user} alignToTrigger onLoggedOut={() => { void trackProductEvent("account_logout_succeeded"); setAccount({ user: null, authRequired: true }); setSessions(null); }} /> : loading && !account ? <span className={styles.authPlaceholder} aria-hidden="true" /> : <ButtonLink href={loginHref} size="sm">登录 / 注册</ButtonLink>}
       </div>
@@ -155,7 +163,7 @@ export default function AccountDashboard() {
         <div className={styles.sidebarFooter}>
           <div className={styles.workspaceNote}><ShieldCheck size={17} aria-hidden="true" /><span>一个账号，连接 GeoD 产品</span></div>
           {user && <>
-            <div className={styles.sidebarIdentity}><Avatar user={user} size={32} /><div><strong title={user.nickname}>{user.nickname || "GeoD 账号"}</strong><span title={user.email}>{user.email}</span></div></div>
+            <div className={styles.sidebarIdentity}><Avatar user={user} size={32} /><div data-no-translate><strong title={user.nickname}>{user.nickname || "GeoD 账号"}</strong><span title={user.email}>{user.email}</span></div></div>
             <Button variant="ghost" className={styles.logout} size="sm" disabled={busy} onClick={() => void logout()}><LogOut size={16} aria-hidden="true" />{busy ? "正在处理…" : "退出登录"}</Button>
           </>}
         </div>
@@ -180,7 +188,7 @@ export default function AccountDashboard() {
             : <div key={section} className={styles.sectionContent} aria-busy={loading}>
               {section === "overview" && <>
                 <section className={styles.welcome} aria-labelledby="welcome-heading">
-                  <div className={styles.welcomeIdentity}><Avatar user={user} size={48} /><div><h2 id="welcome-heading">欢迎回来</h2><p>{user.email}</p></div></div>
+                  <div className={styles.welcomeIdentity}><Avatar user={user} size={48} /><div><h2 id="welcome-heading">欢迎回来</h2><p data-no-translate>{user.email}</p></div></div>
                   <ButtonLink href="/browser" className={styles.primaryAction}>开始影像下载<ArrowUpRight size={16} aria-hidden="true" /></ButtonLink>
                 </section>
                 <div className={`${styles.metrics} ${!MAP_CREATION_VISIBLE ? styles.metricsWithoutCreation : ""}`}>
@@ -201,7 +209,7 @@ export default function AccountDashboard() {
 
               {section === "profile" && <div className={styles.profileContent}>
                 <section className={styles.card} aria-labelledby="account-heading"><div className={styles.cardHeading}><h2 id="account-heading">账号信息</h2><span className={styles.badge}><Check size={14} aria-hidden="true" />已登录</span></div>
-                  <dl className={styles.accountDetails}><div><dt>邮箱</dt><dd>{user.email}</dd></div><div><dt>验证状态</dt><dd>{user.emailVerifiedAt ? "邮箱已验证" : "邮箱未验证"}</dd></div><div><dt>加入时间</dt><dd>{dateLabel(user.createdAt)}</dd></div></dl>
+                  <dl className={styles.accountDetails}><div><dt>邮箱</dt><dd data-no-translate>{user.email}</dd></div><div><dt>验证状态</dt><dd>{user.emailVerifiedAt ? "邮箱已验证" : "邮箱未验证"}</dd></div><div><dt>加入时间</dt><dd>{dateLabel(user.createdAt)}</dd></div></dl>
                 </section>
                 <NicknameSettings key={user.id} user={user} onChange={updatedUser => setAccount(current => current?.user?.id === updatedUser.id ? { ...current, user: updatedUser } : current)} />
                 <AvatarSettings key={user.id} user={user} onChange={updatedUser => setAccount(current => current?.user?.id === updatedUser.id ? { ...current, user: updatedUser } : current)} />
@@ -226,5 +234,5 @@ export default function AccountDashboard() {
         </div>
       </main>
     </div>
-  </div>;
+  </div></LocalizedContent>;
 }

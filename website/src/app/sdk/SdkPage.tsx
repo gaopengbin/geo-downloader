@@ -1,3 +1,4 @@
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 import Link from "next/link";
 import cn from "classnames";
 import MdiIcon from "@mdi/react";
@@ -29,6 +30,7 @@ import Footer from "../_components/Footer";
 import Header from "../_components/Header";
 import { Tabs } from "../_components/Tabs";
 import WindowShell from "../_components/WindowShell";
+import AgentSection from "../agent/AgentSection";
 import "../home.css";
 import styles from "../styles.module.css";
 
@@ -182,7 +184,7 @@ export default async function SDKPage() {
   );
 
   return (
-    <>
+    <LocalizedContent><>
       <Background sticky />
       <main className={styles.home}>
         <Header isHome />
@@ -234,6 +236,8 @@ export default async function SDKPage() {
             </div>
           </div>
         </section>
+
+        <AgentSection />
 
         <section id="features" className={cn(styles.section, styles.featureSection)}>
           <div className={styles.specialHeadingContainer}>
@@ -474,6 +478,6 @@ export default async function SDKPage() {
 
         <Footer />
       </main>
-    </>
+    </></LocalizedContent>
   );
 }

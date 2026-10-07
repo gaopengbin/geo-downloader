@@ -1,3 +1,4 @@
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 import urls from "@/lib/urls";
 import { MAP_CREATION_VISIBLE, MAP_WORKSPACE_URL } from "@/lib/site";
 import { Github } from "lucide-react";
@@ -17,6 +18,7 @@ const linkCategories: {
       { id: "Overview", label: "产品介绍", href: "/" },
       { id: "Features", label: "核心能力", href: "/#features" },
       { id: "Screenshots", label: "产品界面", href: "/#screenshots" },
+      { id: "Agent", label: "GeoD Agent · 测试版", href: "/agent" },
       { id: "Browser", label: "浏览器影像", href: "/browser" },
       { id: "Cli", label: "GeoD CLI", href: "/cli" },
       { id: "Mcp", label: "GeoD MCP", href: "/mcp" },
@@ -74,7 +76,7 @@ const linkCategories: {
 
 const Footer: React.FC<FooterProps> = ({ className, ...rest }) => {
   return (
-    <footer className={styles.footer} {...rest}>
+    <LocalizedContent><footer className={styles.footer} {...rest}>
       <div className="max-w-[1100px]">
         <section className={styles.footerSection}>
           <div className={styles.logoAndDescription}>
@@ -125,7 +127,7 @@ const Footer: React.FC<FooterProps> = ({ className, ...rest }) => {
           </a>
         </section>
       </div>
-    </footer>
+    </footer></LocalizedContent>
   );
 };
 

@@ -43,3 +43,8 @@
 @media (max-width: 560px) { .accountPanel { right: -52px; } }
 .accountPanel.alignedAccountPanel { right: 0; }
 @media (prefers-reduced-motion: reduce) { .accountPanel { animation: none; } }
+
+.languageSwitch { display: inline-flex; flex: none; align-items: center; justify-content: center; min-width: 42px; min-height: 40px; padding: 0 10px; border: 1px solid #dadce0; border-radius: 999px; color: #3c4043; background: #fff; font-size: 13px; font-weight: 600; text-decoration: none; }
+.languageSwitch:hover { color: #174ea6; border-color: #a8c7fa; background: #f1f5fb; }
+.languageSwitch:focus-visible { outline: 3px solid #a8c7fa; outline-offset: 2px; }
+@media (min-width: 1001px) { .content { gap: 16px; } .link { padding: 0 9px; } }

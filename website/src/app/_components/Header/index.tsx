@@ -1,4 +1,5 @@
 "use client";
+import { LocalizedContent, LanguageSwitch } from "@/app/_components/LocaleProvider";
 
 import cn from "classnames";
 import Link from "next/link";
@@ -19,6 +20,7 @@ interface HeaderProps extends React.HTMLProps<HTMLElement> {
 
 const productLinks: HeaderNavLink[] = [
   { content: "桌面端", href: "/#download" },
+  { content: "GeoD Agent", href: "/agent" },
   { content: "浏览器版", href: "/browser" },
   { content: "CLI", href: "/cli" },
   { content: "MCP", href: "/mcp" },
@@ -60,7 +62,7 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
   const mobileLinks = user === undefined ? productLinks : [...productLinks, user ? { content: "个人控制台", href: "/dashboard" } : guestLink];
 
   return (
-    <header className={cn(styles.container, className)} {...rest}>
+    <LocalizedContent><header className={cn(styles.container, className)} {...rest}>
       <div className={styles.navbar}>
         <div className={styles.content}>
           <div className={cn(styles.logo, "z-10")}>
@@ -107,11 +109,12 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
               {user === undefined && <span className={styles.authPlaceholder} aria-hidden="true" />}
             </nav>
           </div>
+          <LanguageSwitch />
           {user && <AccountMenu user={user} onLoggedOut={() => setUser(null)} />}
           <MobileMenu isHome={isHome} links={mobileLinks} />
         </div>
       </div>
-    </header>
+    </header></LocalizedContent>
   );
 };
 

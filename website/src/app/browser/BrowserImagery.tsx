@@ -1,4 +1,5 @@
 "use client";
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, MapPinned, Plus, Square, Trash2, Zap } from "lucide-react";
@@ -314,11 +315,11 @@ export default function BrowserImagery() {
   const active = sources.find(source => source.id === activeId) ?? BROWSER_SOURCE;
   const sourceLocked = busy || sourceStorageMode === "loading" || sourceStorageMode === "unavailable";
 
-  return <div className={styles.workspace}>
+  return <LocalizedContent><div className={styles.workspace}>
     <section className={styles.formCard} aria-labelledby="browser-request-title">
       <div className={styles.sectionTop}><span className={styles.sectionIcon}><MapPinned size={20} aria-hidden="true" /></span>
         <div><span className={styles.kicker}>01 / REQUEST</span><h2 id="browser-request-title">选择下载范围</h2></div></div>
-      <p className={styles.description}>当前使用 <strong>{active.name}</strong>。下载前请确认图源许可、署名和拍摄时间。</p>
+      <p className={styles.description}>当前使用 <strong data-no-translate>{active.name}</strong>。下载前请确认图源许可、署名和拍摄时间。</p>
       <div className={styles.exampleRow} aria-label="省界裁剪示例">{EXAMPLES.map(example => <button type="button" key={example.id} disabled={busy || loadingExample !== null}
         onClick={() => { void handleExample(example); }}>{loadingExample === example.id ? "载入中…" : `${example.name}省界示例`}</button>)}</div>
       <div className={styles.boundsGrid}>{LABELS.map((label, index) => <label key={label}><span>{label}</span>
@@ -384,8 +385,8 @@ export default function BrowserImagery() {
       </div>}
       <div className={styles.sourceList}>{sources.map(source => <div className={styles.sourceRow} key={source.id}>
         <button type="button" className={styles.sourceChoice} aria-pressed={activeId === source.id} disabled={sourceLocked}
-          onClick={() => { chooseSource(source.id); setSourceMessage(`已选择 ${source.name}。`); }}><strong>{source.name}</strong>
-          <span>{source.id} · 0–{source.maxZoom} 级 · {source.tileSize} 像素瓦片 · {source.scheme.toUpperCase()}{store.defaultSourceId === source.id ? " · 默认" : ""}</span></button>
+          onClick={() => { chooseSource(source.id); setSourceMessage(`已选择 ${source.name}。`); }}><strong data-no-translate>{source.name}</strong>
+          <span><span data-no-translate>{source.id}</span> · 0–{source.maxZoom} 级 · {source.tileSize} 像素瓦片 · {source.scheme.toUpperCase()}{store.defaultSourceId === source.id ? " · 默认" : ""}</span></button>
         {source.id !== BROWSER_SOURCE.id && <button type="button" className={styles.sourceRemove} aria-label={`删除图源 ${source.name}`} disabled={sourceLocked}
           onClick={() => { void sourceAction({ action: "remove", id: source.id }).catch(error => setSourceMessage(textError(error))); }}><Trash2 size={16} aria-hidden="true" /></button>}
       </div>)}</div>
@@ -411,5 +412,5 @@ export default function BrowserImagery() {
       </div>}
       <p className={styles.status} role="status">{sourceMessage || "注册后先检测一块瓦片；未开放 CORS 的图源无法在浏览器拼接。"}</p>
     </section>
-  </div>;
+  </div></LocalizedContent>;
 }

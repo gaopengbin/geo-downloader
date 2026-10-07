@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/motion/button/base";
 import { AccountError, accountErrorText, accountRequest, type GeoDAccount } from "@/lib/account";
 import { notifyAccountChanged } from "@/lib/account-events";
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 import styles from "./dashboard.module.css";
 
 type User = NonNullable<GeoDAccount["user"]>;
@@ -38,7 +39,7 @@ export default function NicknameSettings({ user, onChange }: { user: User; onCha
     finally { setBusy(false); }
   }
 
-  return <section className={`${styles.card} ${styles.nicknameCard}`} aria-labelledby="nickname-heading">
+  return <LocalizedContent><section className={`${styles.card} ${styles.nicknameCard}`} aria-labelledby="nickname-heading">
     <div className={styles.cardHeading}><h2 id="nickname-heading">我的昵称</h2></div>
     <p className={styles.cardDescription}>用于官网和 GeoD Agent 的账号显示。</p>
     <form className={`${styles.form} ${styles.nicknameForm}`} onSubmit={event => void save(event)}>
@@ -51,5 +52,5 @@ export default function NicknameSettings({ user, onChange }: { user: User; onCha
       {notice && <p className={styles.notice} role="status">{notice}</p>}
       <Button type="submit" className={styles.saveButton} disabled={busy || invalid || normalized === saved}>{busy ? "正在保存…" : "保存昵称"}</Button>
     </form>
-  </section>;
+  </section></LocalizedContent>;
 }

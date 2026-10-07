@@ -5,12 +5,15 @@ import { LogOut, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/motion/button/base";
 import { accountErrorText, accountRequest, type GeoDAccount } from "@/lib/account";
 import { notifyAccountChanged } from "@/lib/account-events";
+import { LocalizedContent, useLocale } from "../LocaleProvider";
+import { localePath } from "@/lib/i18n";
 import Avatar from "../Avatar";
 import styles from "./styles.module.css";
 
 type AccountUser = NonNullable<GeoDAccount["user"]>;
 
 export default function AccountMenu({ user, onLoggedOut, alignToTrigger = false }: { user: AccountUser; onLoggedOut: () => void; alignToTrigger?: boolean }) {
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -44,14 +47,14 @@ export default function AccountMenu({ user, onLoggedOut, alignToTrigger = false 
       notifyAccountChanged();
       setOpen(false);
       onLoggedOut();
-      window.location.assign("/login");
+      window.location.assign(localePath("/login", locale));
     } catch (reason) {
       setError(accountErrorText(reason));
       setBusy(false);
     }
   }
 
-  return <div className={styles.accountMenu} ref={rootRef}>
+  return <LocalizedContent><div className={styles.accountMenu} ref={rootRef}>
     <Button
       ref={triggerRef}
       variant="ghost"
@@ -68,7 +71,7 @@ export default function AccountMenu({ user, onLoggedOut, alignToTrigger = false 
     {open && <div id="geod-account-menu" className={`${styles.accountPanel} ${alignToTrigger ? styles.alignedAccountPanel : ""}`}>
       <div className={styles.accountIdentity}>
         <Avatar user={user} size={42} />
-        <div><strong title={user.nickname}>{user.nickname || "GeoD 账号"}</strong><span title={user.email}>{user.email}</span></div>
+        <div data-no-translate><strong title={user.nickname}>{user.nickname || "GeoD 账号"}</strong><span title={user.email}>{user.email}</span></div>
       </div>
       <div className={styles.accountActions}>
         <a href="/dashboard" onClick={() => setOpen(false)}><LayoutDashboard size={17} aria-hidden="true" />个人控制台</a>
@@ -76,5 +79,5 @@ export default function AccountMenu({ user, onLoggedOut, alignToTrigger = false 
       </div>
       {error && <p className={styles.accountError} role="alert">{error}</p>}
     </div>}
-  </div>;
+  </div></LocalizedContent>;
 }

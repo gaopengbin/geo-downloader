@@ -1,4 +1,5 @@
 "use client";
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 import {
   HTMLAttributes,
   KeyboardEvent,
@@ -46,7 +47,7 @@ const TabSelect = ({ variant, tabs, selectedIndex, instanceId, ...rest }: Props)
   };
 
   return (
-    <div
+    <LocalizedContent><div
       {...rest}
       ref={containerRef}
       role="tablist"
@@ -75,7 +76,7 @@ const TabSelect = ({ variant, tabs, selectedIndex, instanceId, ...rest }: Props)
           </div>
         </button>
       ))}
-    </div>
+    </div></LocalizedContent>
   );
 };
 

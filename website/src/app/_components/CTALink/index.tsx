@@ -1,4 +1,5 @@
 "use client";
+import { LocalizedContent } from "@/app/_components/LocaleProvider";
 
 import cn from "classnames";
 import { ButtonLink, type ButtonLinkProps } from "@/components/motion/button/base";
@@ -10,10 +11,10 @@ type CTALinkProps = Omit<ButtonLinkProps, "variant" | "size"> & {
 };
 
 export default function CTALink({ variant = "primary", full, className, children, ...rest }: CTALinkProps) {
-  return <ButtonLink
+  return <LocalizedContent><ButtonLink
     {...rest}
     variant={variant === "tertiary" ? "ghost" : variant}
     size="lg"
     className={cn(styles.ctaLink, styles[variant], full && styles.full, className)}
-  >{children}</ButtonLink>;
+  >{children}</ButtonLink></LocalizedContent>;
 }
