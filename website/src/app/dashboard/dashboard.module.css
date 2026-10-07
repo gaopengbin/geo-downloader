@@ -32,7 +32,7 @@
 .pageHead { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
 .pageHead h1 { margin: 0 0 7px; font-size: 26px; line-height: 1.35; font-weight: 650; letter-spacing: -.025em; }
 .pageHead p { margin: 0; color: #5f6368; font-size: 13px; line-height: 1.7; }
-.refreshButton { flex: none; height: 36px; color: #3c4043; border-color: #dce3eb; }
+.refreshButton { position: relative; flex: none; height: 36px; color: #3c4043; border-color: #dce3eb; }
 .sectionContent { animation: contentEnter .22s ease-out; }
 .card, .metric, .quickProduct, .productCard { border: 1px solid #e1e6ee; border-radius: 16px; background: #fff; }
 .card { padding: 24px; }
@@ -84,6 +84,9 @@
 .productCard p { flex: 1; margin: 0 0 26px; color: #5f6368; font-size: 13px; line-height: 1.8; }
 .productButton { align-self: flex-start; padding: 0 16px; border-color: #dce3eb; font-size: 12px; }
 .profileContent { max-width: 960px; }
+.nicknameCard { margin-top: 22px; }
+.nicknameForm { max-width: 520px; }
+.sidebarIdentity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .accountDetails { display: grid; grid-template-columns: 1.7fr 1fr 1fr; gap: 24px; margin: 23px 0 0; }
 .accountDetails div { min-width: 0; }
 .accountDetails dt { margin-bottom: 7px; color: #70757a; font-size: 12px; }
@@ -154,7 +157,7 @@
   .pageHead h1 { font-size: 23px; }
   .pageHead p { font-size: 12px; }
   .refreshButton { width: 34px; height: 34px; padding: 0; }
-  .refreshButton > span { position: absolute; width: 1px; height: 1px; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .refreshButton > span { position: absolute; top: 50%; left: 50%; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .welcome { align-items: flex-start; flex-direction: column; padding: 22px; gap: 20px; }
   .welcome h2 { font-size: 20px; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }

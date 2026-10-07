@@ -16,12 +16,13 @@ import Avatar from "../_components/Avatar";
 import Logo from "../_components/Logo";
 import AccountMenu from "../_components/Header/AccountMenu";
 import AvatarSettings from "./AvatarSettings";
+import NicknameSettings from "./NicknameSettings";
 import styles from "./dashboard.module.css";
 
 const navigation = [
   { id: "overview", label: "工作台总览", icon: LayoutDashboard, description: "选择产品开始工作，管理你的 GeoD 账号。" },
   { id: "products", label: "我的产品", icon: Package, description: "在浏览器、桌面或 Agent 中，使用适合你的 GeoD 工具。" },
-  { id: "profile", label: "个人资料", icon: UserRound, description: "查看账号信息，设置在 GeoD 中显示的头像。" },
+  { id: "profile", label: "个人资料", icon: UserRound, description: "查看账号信息，设置在 GeoD 中显示的头像和昵称。" },
   { id: "security", label: "账号安全", icon: ShieldCheck, description: "管理登录密码，查看当前账号的有效会话。" },
 ] as const;
 type Section = typeof navigation[number]["id"];
@@ -154,7 +155,7 @@ export default function AccountDashboard() {
         <div className={styles.sidebarFooter}>
           <div className={styles.workspaceNote}><ShieldCheck size={17} aria-hidden="true" /><span>一个账号，连接 GeoD 产品</span></div>
           {user && <>
-            <div className={styles.sidebarIdentity}><Avatar user={user} size={32} /><div><strong>GeoD 账号</strong><span title={user.email}>{user.email}</span></div></div>
+            <div className={styles.sidebarIdentity}><Avatar user={user} size={32} /><div><strong title={user.nickname}>{user.nickname || "GeoD 账号"}</strong><span title={user.email}>{user.email}</span></div></div>
             <Button variant="ghost" className={styles.logout} size="sm" disabled={busy} onClick={() => void logout()}><LogOut size={16} aria-hidden="true" />{busy ? "正在处理…" : "退出登录"}</Button>
           </>}
         </div>
@@ -202,7 +203,8 @@ export default function AccountDashboard() {
                 <section className={styles.card} aria-labelledby="account-heading"><div className={styles.cardHeading}><h2 id="account-heading">账号信息</h2><span className={styles.badge}><Check size={14} aria-hidden="true" />已登录</span></div>
                   <dl className={styles.accountDetails}><div><dt>邮箱</dt><dd>{user.email}</dd></div><div><dt>验证状态</dt><dd>{user.emailVerifiedAt ? "邮箱已验证" : "邮箱未验证"}</dd></div><div><dt>加入时间</dt><dd>{dateLabel(user.createdAt)}</dd></div></dl>
                 </section>
-                <AvatarSettings user={user} onChange={updatedUser => setAccount(current => current ? { ...current, user: updatedUser } : current)} />
+                <NicknameSettings key={user.id} user={user} onChange={updatedUser => setAccount(current => current?.user?.id === updatedUser.id ? { ...current, user: updatedUser } : current)} />
+                <AvatarSettings key={user.id} user={user} onChange={updatedUser => setAccount(current => current?.user?.id === updatedUser.id ? { ...current, user: updatedUser } : current)} />
               </div>}
 
               {section === "security" && <div className={styles.securityGrid}>

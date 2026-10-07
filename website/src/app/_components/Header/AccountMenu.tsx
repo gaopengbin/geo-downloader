@@ -68,7 +68,7 @@ export default function AccountMenu({ user, onLoggedOut, alignToTrigger = false 
     {open && <div id="geod-account-menu" className={`${styles.accountPanel} ${alignToTrigger ? styles.alignedAccountPanel : ""}`}>
       <div className={styles.accountIdentity}>
         <Avatar user={user} size={42} />
-        <div><strong>GeoD 账号</strong><span title={user.email}>{user.email}</span></div>
+        <div><strong title={user.nickname}>{user.nickname || "GeoD 账号"}</strong><span title={user.email}>{user.email}</span></div>
       </div>
       <div className={styles.accountActions}>
         <a href="/dashboard" onClick={() => setOpen(false)}><LayoutDashboard size={17} aria-hidden="true" />个人控制台</a>

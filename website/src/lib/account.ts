@@ -1,7 +1,7 @@
 import { safeAccountDestination } from "./account-return-to";
 
 export type GeoDAccount = {
-  user: { id: string; email: string; createdAt: string; emailVerifiedAt?: string; phone?: string; phoneVerifiedAt?: string; avatar?: { kind: "preset"; id: string } | { kind: "upload"; version: string } } | null;
+  user: { id: string; email: string; createdAt: string; nickname?: string; emailVerifiedAt?: string; phone?: string; phoneVerifiedAt?: string; avatar?: { kind: "preset"; id: string } | { kind: "upload"; version: string } } | null;
   authRequired: boolean;
   quota?: { remaining: number; giftRemaining?: number; purchasedRemaining?: number; unit?: string };
   storage?: { count: number; usedBytes: number; maxBytes: number };
@@ -18,6 +18,7 @@ export class AccountError extends Error {
 export function accountErrorText(reason: unknown): string {
   const messages: Record<string, string> = {
     INVALID_EMAIL: "请输入有效的邮箱地址。",
+    INVALID_NICKNAME: "昵称最多 40 个字符，不能包含换行或控制字符。",
     INVALID_PASSWORD: "当前账号服务要求密码为 12–128 个字符。",
     INVALID_CREDENTIALS: "邮箱或密码不正确，请检查后重试。",
     ACCOUNT_ALREADY_REGISTERED: "该邮箱已注册，请直接登录或找回密码。",

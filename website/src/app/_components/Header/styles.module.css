@@ -18,6 +18,7 @@
 .accountIdentity { display: flex; align-items: center; gap: 12px; padding: 4px 4px 15px; border-bottom: 1px solid #e8eaed; }
 .accountIdentity div { display: grid; min-width: 0; gap: 2px; }
 .accountIdentity strong { color: #202124; font-size: 14px; }
+.accountIdentity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .accountIdentity span { overflow: hidden; color: #5f6368; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .accountActions { display: grid; gap: 4px; padding-top: 10px; }
 .accountActions a, .accountActions .logoutAction { display: flex; align-items: center; justify-content: flex-start; gap: 11px; width: 100%; min-height: 40px; padding: 9px 10px; border-radius: 10px; color: #3c4043; background: transparent; font-size: 13px; font-weight: 600; text-decoration: none; }
