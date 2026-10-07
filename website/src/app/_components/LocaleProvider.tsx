@@ -60,6 +60,7 @@ export function LanguageSwitch() {
     window.addEventListener("popstate", update);
     return () => { window.removeEventListener("hashchange", update); window.removeEventListener("popstate", update); };
   }, [pathname]);
+  if (localePath(pathname, target) === pathname) return null;
   return <a className={styles.languageSwitch} href={localePath(pathname, target) + suffix} lang={target === "en" ? "en" : "zh-CN"}
     hrefLang={target === "en" ? "en" : "zh-CN"} aria-label={locale === "en" ? "Switch to Chinese" : "切换为英文"}
     onClick={event => {

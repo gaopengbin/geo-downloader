@@ -52,6 +52,13 @@ test('manual preference wins; unsupported browser languages fall back to Chinese
   assert.equal(preferredLocale(null, ['zh-Hant', 'en-US']), 'zh');
   assert.equal(preferredLocale('invalid', ['ja-JP']), 'zh');
 });
+test('pages without a translated route do not offer a language switch back to themselves', () => {
+  for (const pathname of ['/geod', '/apply', '/admin/applications']) {
+    const actual = loader({ 'next/navigation': { usePathname: () => pathname } })('app/_components/LocaleProvider.tsx');
+    const html = renderToStaticMarkup(React.createElement(actual.LocaleProvider, { locale: 'zh' }, React.createElement(actual.LanguageSwitch)));
+    assert.equal(html, '', pathname);
+  }
+});
 test('static rendering translates UI, localizes links, and preserves user data and controls', () => {
   const { LocaleProvider, LocalizedContent } = load('app/_components/LocaleProvider.tsx');
   const html = renderToStaticMarkup(React.createElement(LocaleProvider, { locale: 'en' },
@@ -104,7 +111,7 @@ test('first-visit selection and manual switching use real effect and click handl
   let locale = 'zh', saved = null;
   const effects = [], replacements = [], stored = [];
   const fakeReact = { ...React, useEffect: effect => effects.push(effect), useContext: () => locale, useState: () => ['', () => {}] };
-  const actual = loader({ react: fakeReact, 'next/navigation': { usePathname: () => '/agent' } })('app/_components/LocaleProvider.tsx');
+  const actual = loader({ react: fakeReact, 'next/navigation': { usePathname: () => global.location?.pathname ?? '/agent' } })('app/_components/LocaleProvider.tsx');
   const previous = ['localStorage', 'location', 'navigator', 'window'].map(name => [name, Object.getOwnPropertyDescriptor(global, name)]);
   Object.defineProperty(global, 'localStorage', { configurable: true, value: { getItem: () => saved, setItem: (...args) => stored.push(args) } });
   Object.defineProperty(global, 'navigator', { configurable: true, value: { languages: ['en-US'] } });
