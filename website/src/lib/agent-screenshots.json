@@ -1,0 +1,94 @@
+{
+  "appearance": "light",
+  "release": "0.2.4 local development candidate",
+  "images": [
+    {
+      "target": "/geod-site/agent/workbench-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\current-native.png",
+      "sha256": "0312f05648148fe6ca733705592970725978928e029eb3ac007dae937bf373e1",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T15:53:36.806Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Existing local task, settings or configured service"
+    },
+    {
+      "target": "/geod-site/agent/imagery-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\imagery-light.png",
+      "sha256": "fdbce0102b7b43d5f630ff6672c3e87ac77896db11e7977f35a112fd25f90b0a",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T16:00:32.762Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Existing local task, settings or configured service"
+    },
+    {
+      "target": "/geod-site/agent/scene-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\scene-light.png",
+      "sha256": "b245dd624066ceaf7ee46accbc820b8955b30331afea913f12b046d00e40c8f6",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T16:00:49.287Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Existing local task, settings or configured service"
+    },
+    {
+      "target": "/geod-site/agent/sources-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\sources-light.png",
+      "sha256": "ab2c1aaa37a432e75bcd42728e9e311f0d7ed6975183e9cacf342319a1a715fb",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T15:56:58.769Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Existing local task, settings or configured service"
+    },
+    {
+      "target": "/geod-site/agent/ranges-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\boundaries-light.png",
+      "sha256": "705cafee093eb70d25f4de00ace10c8a38c3367d9ad9d63b7a186db416fd971e",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T16:00:33.420Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Existing local task, settings or configured service"
+    },
+    {
+      "target": "/geod-site/agent/schedules-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\schedules-light.png",
+      "sha256": "e5389ef627fdf275ecd9fe22f8adf839da7c821d74c2662ddbe933ce95908e73",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T15:57:00.661Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Unsaved scheduler setup; no task created"
+    },
+    {
+      "target": "/geod-site/agent/connectors-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\connectors-light.png",
+      "sha256": "88caea0c2c9b113750969186b5451c3025dda5bb0a360554b638e87f75ec2644",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T16:02:31.978Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Existing local task, settings or configured service"
+    },
+    {
+      "target": "/geod-site/agent/gis-skills-light-20261008.png",
+      "source": "G:\\code\\geod-agent\\artifacts\\site-screens-20261008\\gis-skills-light.png",
+      "sha256": "46dec19c92087122c753d53d99942543f5ec3a00ebfed4715c172f47bb55d5b2",
+      "width": 1440,
+      "height": 900,
+      "capturedAt": "2026-10-07T16:00:59.218Z",
+      "appearance": "light",
+      "runtime": "Actual native Tauri development WebView",
+      "data": "Existing local task, settings or configured service"
+    }
+  ]
+}

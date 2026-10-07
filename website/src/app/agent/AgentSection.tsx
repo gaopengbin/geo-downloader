@@ -16,8 +16,8 @@ export default function AgentSection() {
           <p className={styles.releaseNote}>Windows 0.2.3 测试版可下载 · 0.2.4 本地候选准备中</p>
         </div>
         <figure className={styles.homeFigure}>
-          <a href="/agent#workspace" aria-label="查看 GeoD Agent 开发版工作区"><img src="/geod-site/agent/workbench-light.jpg" alt="GeoD Agent 开发版的对话、地图与成果工作区，图中为演示任务" width={1440} height={900} loading="lazy" /></a>
-          <figcaption>开发版界面预览 · 图中任务与进度为演示数据</figcaption>
+          <a href="/agent#workspace" aria-label="查看 GeoD Agent 开发版工作区"><img src="/geod-site/agent/workbench-light-20261008.png" alt="GeoD Agent 当前开发版：路线范围影像已完成，地图显示真实成果，任务区展示文件大小与坐标系" width={1440} height={900} loading="lazy" /></a>
+          <figcaption>当前开发版实拍 · 本机下载成果</figcaption>
         </figure>
       </div>
       <div className={styles.homeFeatures} aria-label="GeoD Agent 数据能力">{dataTypes.map(({ id, title, Icon }) => <a href={`/agent#${id}`} key={id}><Icon size={22} strokeWidth={1.6} aria-hidden="true" /><span>{title}</span><ArrowRight size={15} aria-hidden="true" /></a>)}</div>

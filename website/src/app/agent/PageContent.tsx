@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     title: "GeoD Agent｜用对话完成地理数据任务",
     description: "对话、地图与成果，在一个工作区中。Windows 公开测试版 0.2.3 可下载，0.2.4 正在准备。",
     url: "/agent",
-    images: ["/geod-site/agent/workbench-light.jpg"],
+    images: ["/geod-site/agent/workbench-light-20261008.png"],
   },
 };
 
@@ -101,7 +101,7 @@ export default function AgentPage() {
           <div className={styles.candidateHeading}><div><span className={styles.eyebrow}>0.2.4 · 本地候选</span><h2 id="candidate-title">重要选择，留给你。<br />繁琐步骤，交给工具。</h2></div><p>这一版重点打磨下载过程：参数不明确先问，确认过的选择保留，缺少技能时引导安装。当前尚未发布。</p></div>
           <div className={styles.highlightGrid}>
             <article><div className={styles.highlightText}><span className={styles.badge}>需求确认</span><h3>坐标系和历史时期，先选清楚。</h3><p>未明确的参数用选项卡询问。卡片留在会话中，可稍后打开；只改缩放等级时沿用已确认坐标系。</p></div><a className={styles.choiceScreenshot} href="/geod-site/agent/coordinate-choice.png" target="_blank" rel="noopener noreferrer" aria-label="查看完整的坐标系选择卡片"><img src="/geod-site/agent/coordinate-choice.png" width={620} height={760} alt="导出坐标系选择卡片，可选择 WGS84、Web 墨卡托、CGCS2000 或自定义坐标系" loading="lazy" /></a></article>
-            <article><div className={styles.highlightText}><span className={styles.badge}>按需安装</span><h3>需要哪项 GIS 能力，就安装哪项。</h3><p>五项 GIS 技能可独立安装，共享已下载依赖。主安装包移除 Java 与本地 OCR；需要时再补充处理能力。</p></div><ul className={styles.skillList}>{gisSkills.map(([name, purpose]) => <li key={name}><Check size={18} aria-hidden="true" /><div><strong>{name}</strong><span>{purpose}</span></div></li>)}</ul><a className={styles.skillScreenshotLink} href="/geod-site/agent/gis-skills.png" target="_blank" rel="noopener noreferrer">查看技能界面截图 <ArrowUpRight size={15} aria-hidden="true" /></a></article>
+            <article><div className={styles.highlightText}><span className={styles.badge}>按需安装</span><h3>需要哪项 GIS 能力，就安装哪项。</h3><p>五项 GIS 技能可独立安装，共享已下载依赖。主安装包移除 Java 与本地 OCR；需要时再补充处理能力。</p></div><ul className={styles.skillList}>{gisSkills.map(([name, purpose]) => <li key={name}><Check size={18} aria-hidden="true" /><div><strong>{name}</strong><span>{purpose}</span></div></li>)}</ul><a className={styles.skillScreenshotLink} href="/geod-site/agent/gis-skills-light-20261008.png" target="_blank" rel="noopener noreferrer">查看技能界面截图 <ArrowUpRight size={15} aria-hidden="true" /></a></article>
           </div>
           <div className={styles.candidateFooter}><span><Check size={16} aria-hidden="true" />下载、拼接、裁剪分别显示状态</span><span><Check size={16} aria-hidden="true" />一键打开成果目录</span><span><Check size={16} aria-hidden="true" />大段坐标通过文件引用传递</span></div>
           <p className={styles.finePrint}>界面来自真实组件验证；截图中的选择与安装状态用于展示交互。0.2.4 安装包和干净 Windows 验收仍待完成。</p>
@@ -116,14 +116,14 @@ export default function AgentPage() {
 
         <section className={styles.example} aria-labelledby="example-title">
           <div className={styles.exampleCopy}>
-            <span className={styles.eyebrow}>一次真实开发验证</span>
-            <h2 id="example-title">一句需求，<br />串起多个地区。</h2>
-            <p className={styles.prompt}>“下载驻马店及周边几个市的影像。”</p>
-            <p>开发版已用真实模型完成驻马店及周边六市的范围读取、合并裁剪、GeoTIFF 下载与地图加载。</p>
-            <div className={styles.exampleFacts}><span><strong>7</strong>个城市范围</span><span><strong>GeoTIFF</strong>本机成果</span></div>
-            <p className={styles.finePrint}>本机小规模验证 · 2026-10-02<br />20 张实际影像瓦片，Z8。说明这条流程已跑通，不代表所有图源、精度和规模均已验证。</p>
+            <span className={styles.eyebrow}>一次真实下载交付</span>
+            <h2 id="example-title">从范围确认，<br />走到文件交付。</h2>
+            <p className={styles.prompt}>“下载昌平最新的影像。”</p>
+            <p>本机已完成昌平区 704 张瓦片下载、行政边界裁剪与 GeoTIFF 输出。打开地图核对覆盖范围，在任务区查看完成状态、实际文件大小和成果目录。</p>
+            <div className={styles.exampleFacts}><span><strong>704</strong>张实际瓦片</span><span><strong>158.9 MB</strong>实际成果</span></div>
+            <p className={styles.finePrint}>成果下载于 2026-10-06 · 当前浅色开发版截图<br />Esri World Imagery · Z14 · EPSG:3857 · 8192 × 5632 像素。截图中的文件大小和完成状态均来自实际任务。</p>
           </div>
-          <figure><a href="/geod-site/agent/batch-result.jpg" target="_blank" rel="noopener noreferrer" aria-label="查看完整的多区域下载验证截图"><img src="/geod-site/agent/batch-result.jpg" width={1280} height={720} alt="本机真实验证截图：多个城市的合并范围已裁剪为影像并加载到地图，左侧为验证工具输出" loading="lazy" /></a><figcaption>真实本机成果与地图 · 左侧为开发验证工具 <ArrowUpRight size={14} aria-hidden="true" /></figcaption></figure>
+          <figure><a href="/geod-site/agent/imagery-light-20261008.png" target="_blank" rel="noopener noreferrer" aria-label="查看完整的昌平区影像成果截图"><img src="/geod-site/agent/imagery-light-20261008.png" width={1440} height={900} alt="当前浅色开发版：昌平区影像按边界裁剪并加载到地图，任务面板展示真实完成状态和成果大小" loading="lazy" /></a><figcaption>当前开发版实拍 · 昌平区本机成果与地图 <ArrowUpRight size={14} aria-hidden="true" /></figcaption></figure>
         </section>
 
         <section className={styles.boundaries} aria-labelledby="boundaries-title">

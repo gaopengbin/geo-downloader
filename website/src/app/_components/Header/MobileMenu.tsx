@@ -13,6 +13,7 @@ export interface HeaderNavLink {
   isCta?: boolean;
   leadingIcon?: ReactNode;
   target?: string;
+  badge?: string;
 }
 
 interface MobileMenuProps {
@@ -95,7 +96,7 @@ export default function MobileMenu({ isHome, links }: MobileMenuProps) {
       >
         <nav className={cn(styles.mobileLinks, "!gap-4")} aria-label="Mobile">
           {links.map(
-            ({ href, target, content, className, leadingIcon, isCta }) => (
+            ({ href, target, content, className, leadingIcon, isCta, badge }) => (
               <a
                 key={content}
                 href={href}
@@ -116,6 +117,7 @@ export default function MobileMenu({ isHome, links }: MobileMenuProps) {
                 ) : (
                   content
                 )}
+                {badge && <span className={styles.linkBadge}>{badge}</span>}
               </a>
             ),
           )}

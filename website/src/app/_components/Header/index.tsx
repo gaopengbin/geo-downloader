@@ -19,8 +19,8 @@ interface HeaderProps extends React.HTMLProps<HTMLElement> {
 }
 
 const productLinks: HeaderNavLink[] = [
+  { content: "GeoD Agent", href: "/agent", badge: "新上线" },
   { content: "桌面端", href: "/#download" },
-  { content: "GeoD Agent", href: "/agent" },
   { content: "浏览器版", href: "/browser" },
   { content: "CLI", href: "/cli" },
   { content: "MCP", href: "/mcp" },
@@ -83,6 +83,7 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
                   className: linkClass,
                   leadingIcon,
                   isCta,
+                  badge,
                 }) => (
                   <a
                     key={content}
@@ -103,6 +104,7 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
                     ) : (
                       content
                     )}
+                    {badge && <span className={styles.linkBadge}>{badge}</span>}
                   </a>
                 ),
               )}

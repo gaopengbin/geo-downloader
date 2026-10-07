@@ -5,7 +5,8 @@
 .logo a { display: inline-flex; text-decoration: none; }
 .desktopNav { display: flex; flex: 1; justify-content: flex-end; min-width: 0; }
 .desktopLinks { display: flex; align-items: center; gap: 3px; }
-.link { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 12px; border-radius: 999px; color: #5f6368; font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color .2s ease, background-color .2s ease, transform .2s ease; }
+.link { position: relative; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 12px; border-radius: 999px; color: #5f6368; font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color .2s ease, background-color .2s ease, transform .2s ease; }
+.linkBadge { position: absolute; top: -6px; right: 2px; padding: 0 5px; border-radius: 5px 5px 5px 0; color: #fff; background: #c5221f; font-size: 10px; font-weight: 700; line-height: 16px; pointer-events: none; }
 .link:hover { color: #174ea6; background: #f1f5fb; }
 .link.ctaLinkOverride { margin-left: 8px; padding: 0 20px; color: #fff; background: #1a73e8; box-shadow: 0 2px 7px rgb(26 115 232 / .16); }
 .link.ctaLinkOverride:hover { color: #fff; background: #155fbd; transform: translateY(-1px); }
@@ -37,6 +38,7 @@
   .drawer.open { transform: translateY(0); opacity: 1; visibility: visible; pointer-events: auto; }
   .mobileLinks { display: grid; gap: 4px; max-width: 800px; margin: 0 auto; }
   .mobileLinks .link { width: 100%; justify-content: flex-start; padding: 8px 14px; font-size: 15px; }
+  .mobileLinks .linkBadge { position: static; margin-left: 9px; border-radius: 5px; }
   .mobileLinks .ctaLinkOverride { justify-content: center; width: fit-content; margin: 12px 0 0; padding: 8px 22px; }
 }
 @media (max-width: 560px) { .container { height: 64px; } .navbar { padding: 0 16px; } .drawer { top: 64px; max-height: calc(100dvh - 64px); } }
