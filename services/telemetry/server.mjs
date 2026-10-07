@@ -1,12 +1,7 @@
 import { createServer } from 'node:http'
-import { access, copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
-import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import initSqlJs from 'sql.js'
-
-const SERVICE_ROOT = path.dirname(fileURLToPath(import.meta.url))
-const require = createRequire(import.meta.url)
+import { readFile } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
+import { openTelemetryDatabase, TIME_ZONE } from './database.mjs'
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/
@@ -78,17 +73,12 @@ export function loadConfig(env = process.env) {
   return {
     host: env.HOST || '127.0.0.1',
     port: envInteger(env.PORT, 9091, 0, 65535),
-    databasePath:
-      env.TELEMETRY_DB_PATH ||
-      'C:/nginx-1.30.2/data/geod-telemetry-runtime/geod-telemetry-v2.sqlite',
-    legacyDatabasePath:
-      env.LEGACY_TELEMETRY_DB_PATH || 'C:/nginx-1.30.2/data/geod-telemetry.sqlite',
+    databasePath: env.TELEMETRY_DB_PATH,
+    databaseId: env.TELEMETRY_DATABASE_ID,
+    environment: env.NODE_ENV,
     adminTokenFile:
       env.TELEMETRY_ADMIN_TOKEN_FILE ||
       'C:/nginx-1.30.2/geod-telemetry-admin-token.txt',
-    platformMigrationMarker:
-      env.PLATFORM_MIGRATION_MARKER ||
-      'C:/nginx-1.30.2/data/platform-api-migrated.txt',
     maxBodyBytes: envInteger(env.MAX_BODY_BYTES, 131072, 1024, 1024 * 1024),
     rateLimitPerMinute: envInteger(env.RATE_LIMIT_PER_MINUTE, 120, 10, 5000),
   }
@@ -287,7 +277,7 @@ function validateEvent(event) {
     eventId: event.event_id,
     eventName: event.event,
     occurredAt: occurredAt.toISOString(),
-    eventDay: occurredAt.toISOString().slice(0, 10),
+    eventDay: new Date(occurredAt.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10),
     installId: event.install_id,
     sessionId: event.session_id,
     appVersion: event.app_version,
@@ -371,15 +361,7 @@ function createRateLimiter(limit) {
 }
 
 function queryRows(database, sql, parameters = []) {
-  const statement = database.prepare(sql)
-  try {
-    statement.bind(parameters)
-    const rows = []
-    while (statement.step()) rows.push(statement.getAsObject())
-    return rows
-  } finally {
-    statement.free()
-  }
+  return database.prepare(sql).all(...parameters)
 }
 
 function propertyDistribution(database, eventName, propertyName) {
@@ -394,175 +376,11 @@ function propertyDistribution(database, eventName, propertyName) {
   )
 }
 
-export async function replaceDatabaseFile(
-  temporaryPath,
-  databasePath,
-  operations = { copyFile, readFile, rename, rm, writeFile },
-) {
-  try {
-    await operations.rename(temporaryPath, databasePath)
-    return
-  } catch (error) {
-    if (!['EPERM', 'EEXIST'].includes(error?.code)) throw error
-  }
-
-  const backupPath = `${databasePath}.bak`
-  let backupCreated = false
-  try {
-    await operations.copyFile(databasePath, backupPath)
-    backupCreated = true
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-  }
-
-  try {
-    const contents = await operations.readFile(temporaryPath)
-    await operations.writeFile(databasePath, contents)
-  } catch (error) {
-    if (backupCreated) {
-      const backup = await operations.readFile(backupPath).catch(() => null)
-      if (backup) await operations.writeFile(databasePath, backup).catch(() => {})
-    }
-    throw error
-  } finally {
-    await operations.rm(temporaryPath, { force: true }).catch(() => {})
-  }
-
-  if (backupCreated) {
-    await operations.rm(backupPath, { force: true }).catch(() => {})
-  }
-}
-
-async function importLegacyEvents(database, legacyDatabasePath, SQL) {
-  if (!legacyDatabasePath) return 0
-  let legacy
-  try {
-    legacy = new SQL.Database(await readFile(legacyDatabasePath))
-  } catch (error) {
-    if (error?.code === 'ENOENT') return 0
-    throw error
-  }
-  let imported = 0
-  try {
-    const table = queryRows(
-      legacy,
-      "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'events'",
-    )
-    if (!table.length) return 0
-    const read = legacy.prepare(`
-      SELECT event_id, event_name, occurred_at, event_day, install_id,
-        session_id, app_version, platform, properties_json, received_at
-      FROM events
-    `)
-    const insert = database.prepare(`
-      INSERT OR IGNORE INTO events (
-        event_id, event_name, occurred_at, event_day, install_id,
-        session_id, app_version, platform, properties_json, received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    try {
-      while (read.step()) {
-        insert.run(read.get())
-        imported += database.getRowsModified()
-      }
-    } finally {
-      read.free()
-      insert.free()
-    }
-    return imported
-  } finally {
-    legacy.close()
-  }
-}
-
-async function createDatabase(databasePath, platformMigrationMarker, legacyDatabasePath) {
-  const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm')
-  const SQL = await initSqlJs({ locateFile: () => wasmPath })
-  let database
-  try {
-    database = new SQL.Database(await readFile(databasePath))
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-    database = new SQL.Database()
-  }
-
-  database.run(`
-    CREATE TABLE IF NOT EXISTS events (
-      event_id TEXT PRIMARY KEY,
-      event_name TEXT NOT NULL,
-      occurred_at TEXT NOT NULL,
-      event_day TEXT NOT NULL,
-      install_id TEXT NOT NULL,
-      session_id TEXT NOT NULL,
-      app_version TEXT NOT NULL,
-      platform TEXT NOT NULL,
-      properties_json TEXT NOT NULL,
-      received_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS events_day_idx ON events(event_day);
-    CREATE INDEX IF NOT EXISTS events_install_idx ON events(install_id);
-    CREATE INDEX IF NOT EXISTS events_name_idx ON events(event_name);
-  `)
-  if (platformMigrationMarker && path.resolve(legacyDatabasePath || '') !== path.resolve(databasePath)) {
-    const migrated = await access(platformMigrationMarker).then(() => true).catch(() => false)
-    if (migrated) await importLegacyEvents(database, legacyDatabasePath, SQL)
-  }
-  await mkdir(path.dirname(databasePath), { recursive: true })
-  let writeChain = Promise.resolve()
-
-  async function persist() {
-    const temporaryPath = `${databasePath}.tmp`
-    await writeFile(temporaryPath, Buffer.from(database.export()))
-    await replaceDatabaseFile(temporaryPath, databasePath)
-  }
-
-  await persist()
-
-  async function insert(events) {
-    let inserted = 0
-    database.run('BEGIN TRANSACTION')
-    try {
-      const statement = database.prepare(`
-        INSERT OR IGNORE INTO events (
-          event_id, event_name, occurred_at, event_day, install_id,
-          session_id, app_version, platform, properties_json, received_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      try {
-        const receivedAt = new Date().toISOString()
-        for (const event of events) {
-          statement.run([
-            event.eventId,
-            event.eventName,
-            event.occurredAt,
-            event.eventDay,
-            event.installId,
-            event.sessionId,
-            event.appVersion,
-            event.platform,
-            JSON.stringify(event.properties),
-            receivedAt,
-          ])
-          inserted += database.getRowsModified()
-        }
-      } finally {
-        statement.free()
-      }
-      database.run('COMMIT')
-    } catch (error) {
-      database.run('ROLLBACK')
-      throw error
-    }
-    await persist()
-    return inserted
-  }
-
+function createDatabase(config) {
+  const storage = openTelemetryDatabase(config)
+  const database = storage.database
   return {
-    insert(events) {
-      const operation = writeChain.then(() => insert(events))
-      writeChain = operation.catch(() => {})
-      return operation
-    },
+    ...storage,
     stats() {
       const totals = queryRows(
         database,
@@ -576,25 +394,32 @@ async function createDatabase(databasePath, platformMigrationMarker, legacyDatab
       )[0]
       return {
         generated_at: new Date().toISOString(),
+        reporting_time_zone: TIME_ZONE,
+        metric_definitions: {
+          installs: 'anonymous installation IDs, not natural persons',
+          dau: 'rolling 24 hours; daily rows use Asia/Shanghai calendar days',
+          download_task_created: 'tasks created, not completed downloads',
+          day_source: "date(occurred_at, '+8 hours'); legacy event_day values are not rewritten",
+        },
         totals,
         daily: queryRows(
           database,
           `WITH daily_activity AS (
-             SELECT event_day AS day, COUNT(DISTINCT install_id) AS active_installs,
+             SELECT date(occurred_at, '+8 hours') AS day, COUNT(DISTINCT install_id) AS active_installs,
                COUNT(*) AS events
              FROM events
-             WHERE event_day >= date('now', '-29 day')
-             GROUP BY event_day
+             WHERE date(occurred_at, '+8 hours') >= date('now', '+8 hours', '-29 day')
+             GROUP BY date(occurred_at, '+8 hours')
            ),
            first_seen AS (
-             SELECT install_id, MIN(event_day) AS first_day
+             SELECT install_id, MIN(date(occurred_at, '+8 hours')) AS first_day
              FROM events
              GROUP BY install_id
            ),
            daily_installs AS (
              SELECT first_day AS day, COUNT(*) AS new_installs
              FROM first_seen
-             WHERE first_day >= date('now', '-29 day')
+             WHERE first_day >= date('now', '+8 hours', '-29 day')
              GROUP BY first_day
            )
            SELECT daily_activity.day, daily_activity.active_installs, daily_activity.events,
@@ -678,7 +503,7 @@ async function createDatabase(databasePath, platformMigrationMarker, legacyDatab
                MAX(occurred_at) AS last_active,
                COUNT(*) AS event_count,
                COUNT(DISTINCT session_id) AS session_count,
-               COUNT(DISTINCT event_day) AS active_days,
+               COUNT(DISTINCT date(occurred_at, '+8 hours')) AS active_days,
                SUM(CASE WHEN event_name = 'app_started' THEN 1 ELSE 0 END) AS launch_count
              FROM events
              GROUP BY install_id
@@ -708,9 +533,6 @@ async function createDatabase(databasePath, platformMigrationMarker, legacyDatab
            LIMIT 200`,
         ),
       }
-    },
-    close() {
-      database.close()
     },
   }
 }
@@ -792,10 +614,10 @@ tokenInput.addEventListener('keydown',function(event){if(event.key==='Enter')loa
 function esc(value){return String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function number(value){const parsed=Number(value);return Number.isFinite(parsed)?parsed:0}
 function table(rows,columns){if(!rows.length)return '<div class="empty">暂无数据</div>';return '<div class="table-scroll"><table><thead><tr>'+columns.map(c=>'<th>'+esc(c[0])+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+columns.map(c=>'<td>'+esc(row[c[1]])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'}
-function formatTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'-':date.toLocaleString('zh-CN',{hour12:false})}
+function formatTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'-':date.toLocaleString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'})}
 function fillDaily(rows){
- const byDay=new Map(rows.map(row=>[row.day,row])),result=[],today=new Date()
- for(let offset=29;offset>=0;offset--){const date=new Date(today);date.setHours(12,0,0,0);date.setDate(date.getDate()-offset);const day=date.toISOString().slice(0,10);result.push(byDay.get(day)||{day,active_installs:0,events:0,new_installs:0})}
+ const byDay=new Map(rows.map(row=>[row.day,row])),result=[],today=Date.now()+8*60*60*1000
+ for(let offset=29;offset>=0;offset--){const day=new Date(today-offset*86400000).toISOString().slice(0,10);result.push(byDay.get(day)||{day,active_installs:0,events:0,new_installs:0})}
  return result
 }
 function trendChart(rows){
@@ -875,14 +697,14 @@ async function load(){
   const response=await fetch('stats',{headers:{authorization:'Bearer '+token}})
   if(!response.ok)throw new Error(response.status===401?'管理口令不正确':'载入失败：HTTP '+response.status)
   const data=await response.json(),t=data.totals
-  document.getElementById('updated').textContent='更新时间：'+new Date(data.generated_at).toLocaleString()
+  document.getElementById('updated').textContent='更新时间：'+formatTime(data.generated_at)+'（北京时间）'
   content.innerHTML='<div class="cards">'+
    [['匿名设备',t.installs,'去重安装实例','#2563eb'],['24 小时活跃',t.dau,'滚动时间窗','#059669'],['7 日活跃',t.wau,'最近 7 天','#0d9488'],['30 日活跃',t.mau,'最近 30 天','#7c3aed'],['累计事件',t.event_count,'已接收事件','#d97706']].map(x=>'<div class="card" style="--accent:'+x[3]+'"><div class="card-label">'+x[0]+'</div><div class="value">'+esc(x[1])+'</div><div class="card-note">'+x[2]+'</div></div>').join('')+
    '</div><div class="dashboard-grid"><section class="panel"><div class="panel-head"><div><h2>活跃趋势</h2><div class="panel-note">最近 30 天，缺失日期按 0 计</div></div><div class="legend"><span class="legend-item"><i class="legend-swatch" style="--swatch:#2563eb"></i>活跃设备</span><span class="legend-item"><i class="legend-swatch" style="--swatch:#dbeafe"></i>事件量</span></div></div>'+trendChart(data.daily)+'<details><summary>每日数据</summary>'+table(data.daily,[['日期','day'],['活跃设备','active_installs'],['首次出现','new_installs'],['事件数','events']])+'</details></section>'+
    '<div class="side-stack"><section class="panel"><div class="panel-head"><h2>版本分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.versions,'version','installs','#2563eb')+'</section>'+
    '<section class="panel"><div class="panel-head"><h2>平台分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.platforms,'platform','installs','#059669',platformLabels)+'</section>'+
    '<section class="panel"><div class="panel-head"><h2>功能使用</h2><span class="panel-note">事件次数</span></div>'+eventDistribution(data.events,data.event_details)+'</section></div>'+
-   '<section class="panel full"><div class="panel-head"><div><h2>设备活跃明细</h2><div class="panel-note">首次出现为首次成功上报时间，不等同于系统安装时间</div></div><span class="panel-note">最多显示 200 个匿名设备</span></div>'+deviceTable(data.devices)+'</section></div>'
+   '<section class="panel full"><div class="panel-head"><div><h2>设备活跃明细</h2><div class="panel-note">首次出现按已收到事件的最早发生时间计算，不等同于系统安装时间；设备数不等于自然人数</div></div><span class="panel-note">最多显示 200 个匿名设备</span></div>'+deviceTable(data.devices)+'</section></div>'
  }catch(error){content.innerHTML='<div class="error">'+esc(error.message)+'</div>'}
 }
 if(tokenInput.value)load()
@@ -891,12 +713,9 @@ if(tokenInput.value)load()
 
 export async function createTelemetryServer(options = {}) {
   const config = options.config || loadConfig()
-  const database = await createDatabase(
-    config.databasePath,
-    config.platformMigrationMarker,
-    config.legacyDatabasePath,
-  )
+  const database = createDatabase(config)
   const checkRateLimit = createRateLimiter(config.rateLimitPerMinute)
+  let draining = false
 
   const server = createServer(async (request, response) => {
     response.setHeader('x-content-type-options', 'nosniff')
@@ -905,9 +724,11 @@ export async function createTelemetryServer(options = {}) {
 
     if (
       request.method === 'GET' &&
-      ['/health', '/geod-telemetry/health'].includes(url.pathname)
+      ['/health', '/ready', '/geod-telemetry/health', '/geod-telemetry/ready'].includes(url.pathname)
     ) {
-      sendJson(response, 200, { status: 'ok', schema_version: 1 })
+      const readiness = database.readiness()
+      if (draining) readiness.status = 'unavailable'
+      sendJson(response, readiness.status === 'ok' ? 200 : 503, readiness)
       return
     }
 
@@ -921,14 +742,20 @@ export async function createTelemetryServer(options = {}) {
 
     if (
       request.method === 'GET' &&
-      ['/admin/stats', '/geod-telemetry/admin/stats'].includes(url.pathname)
+      ['/admin/stats', '/geod-telemetry/admin/stats', '/admin/storage', '/geod-telemetry/admin/storage', '/admin/health', '/geod-telemetry/admin/health'].includes(url.pathname)
     ) {
       const token = await readAdminToken(config.adminTokenFile)
       if (!token || request.headers.authorization !== `Bearer ${token}`) {
         sendError(response, 401, 'unauthorized', 'unauthorized')
         return
       }
-      sendJson(response, 200, database.stats())
+      try {
+        const diagnostic = !url.pathname.endsWith('/stats')
+        const data = diagnostic ? database.diagnostics() : database.stats()
+        sendJson(response, diagnostic && data.status !== 'ok' ? 503 : 200, data)
+      } catch {
+        sendError(response, 503, 'storage unavailable', 'storage_unavailable')
+      }
       return
     }
 
@@ -941,6 +768,10 @@ export async function createTelemetryServer(options = {}) {
     }
     if (request.method !== 'POST' || !isEventsPath) {
       sendError(response, 404, 'not found', 'not_found')
+      return
+    }
+    if (draining) {
+      sendJson(response, 503, { error: { code: 'service_draining', message: 'retry shortly' } }, { 'retry-after': '5' })
       return
     }
     if (!checkRateLimit(requestAddress(request))) {
@@ -962,7 +793,21 @@ export async function createTelemetryServer(options = {}) {
     }
   })
 
+  server.requestTimeout = 15_000
+  server.headersTimeout = 10_000
   server.on('close', () => database.close())
+  let shutdownPromise
+  server.shutdown = () => {
+    if (shutdownPromise) return shutdownPromise
+    draining = true
+    shutdownPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => server.closeAllConnections(), 20_000)
+      timer.unref()
+      server.close(error => { clearTimeout(timer); error ? reject(error) : resolve() })
+      server.closeIdleConnections()
+    })
+    return shutdownPromise
+  }
   return server
 }
 const launchedDirectly =
@@ -976,4 +821,7 @@ if (launchedDirectly) {
   server.listen(config.port, config.host, () => {
     console.log(`GeoD telemetry listening on http://${config.host}:${config.port}`)
   })
+  const shutdown = () => { server.shutdown().catch(() => { console.error('GeoD graceful shutdown failed'); process.exitCode = 1 }) }
+  process.once('SIGTERM', shutdown)
+  process.once('SIGINT', shutdown)
 }

@@ -1,0 +1,65 @@
+name: Publish GeoD CLI to npm
+run-name: Publish GeoD CLI ${{ inputs.version }} to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version already uploaded to the geod-cli-vX.Y.Z GitHub release
+        required: true
+        type: string
+      sha256:
+        description: SHA-256 of geod-cli-X.Y.Z.tgz from the release checksum file
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: geod-cli-npm-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11.20.0
+
+      - name: Download and verify the frozen release package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA256: ${{ inputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          tag="geod-cli-v${VERSION}"
+          asset="geod-cli-${VERSION}.tgz"
+          archive="${RUNNER_TEMP}/${asset}"
+          gh release download "$tag" --repo gaopengbin/geo-downloader --pattern "$asset" --dir "$RUNNER_TEMP"
+          actual_sha256="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          test "$actual_sha256" = "$EXPECTED_SHA256"
+          release_sha256="$(gh release view "$tag" --repo gaopengbin/geo-downloader --json assets --jq ".assets[] | select(.name == \"${asset}\") | .digest")"
+          test "$release_sha256" = "sha256:${EXPECTED_SHA256}"
+          mkdir -p "${RUNNER_TEMP}/geod-package"
+          tar -xzf "$archive" -C "${RUNNER_TEMP}/geod-package"
+          node "${RUNNER_TEMP}/geod-package/package/lib/verify-package.cjs"
+          PACKAGE_ROOT="${RUNNER_TEMP}/geod-package/package" node -e 'const p = require(process.env.PACKAGE_ROOT + "/package.json"); if (p.name !== "geod-cli" || p.version !== process.env.VERSION) process.exit(1)'
+
+      - name: Publish verified tarball with npm OIDC
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: npm publish "${RUNNER_TEMP}/geod-cli-${VERSION}.tgz" --access public --registry https://registry.npmjs.org
