@@ -24,7 +24,7 @@ import {
   Waypoints,
 } from "lucide-react";
 
-import Background from "../_components/Background";
+import SpacePage from "../_components/SpacePage";
 import CTALink from "../_components/CTALink";
 import Footer from "../_components/Footer";
 import Header from "../_components/Header";
@@ -184,10 +184,9 @@ export default async function SDKPage() {
   );
 
   return (
-    <LocalizedContent><>
-      <Background sticky />
+    <LocalizedContent><SpacePage>
       <main className={styles.home}>
-        <Header isHome />
+        <Header isHome appearance="space" />
 
         <section
           className={cn(styles.heroSection, styles.section)}
@@ -476,8 +475,8 @@ export default async function SDKPage() {
           <CTALink href="#download">立即下载 GeoD</CTALink>
         </section>
 
-        <Footer />
+        <Footer appearance="space" />
       </main>
-    </></LocalizedContent>
+    </SpacePage></LocalizedContent>
   );
 }

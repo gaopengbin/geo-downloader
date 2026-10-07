@@ -16,6 +16,7 @@ import styles from "./styles.module.css";
 
 interface HeaderProps extends React.HTMLProps<HTMLElement> {
   isHome?: boolean;
+  appearance?: "default" | "space";
 }
 
 const productLinks: HeaderNavLink[] = [
@@ -27,7 +28,7 @@ const productLinks: HeaderNavLink[] = [
   { content: "地图创作", href: MAP_WORKSPACE_URL, target: "_blank" },
 ].filter(link => MAP_CREATION_VISIBLE || link.href !== MAP_WORKSPACE_URL);
 
-const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
+const Header: React.FC<HeaderProps> = ({ isHome, appearance = "default", className, ...rest }) => {
   const [user, setUser] = useState<GeoDAccount["user"] | undefined>(undefined);
 
   useEffect(() => {
@@ -67,7 +68,7 @@ const Header: React.FC<HeaderProps> = ({ isHome, className, ...rest }) => {
         <div className={styles.content}>
           <div className={cn(styles.logo, "z-10")}>
             <Link href={urls.getHomeUrl()}>
-              <Logo />
+              <Logo appearance={appearance} />
             </Link>
           </div>
           <div className={styles.desktopNav}>

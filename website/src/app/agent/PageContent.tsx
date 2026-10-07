@@ -2,7 +2,7 @@ import { LocalizedContent } from "@/app/_components/LocaleProvider";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight, Check, FileCheck2, MessageSquare, Monitor, ShieldCheck } from "lucide-react";
-import Background from "../_components/Background";
+import SpacePage from "../_components/SpacePage";
 import Header from "../_components/Header";
 import Footer from "../_components/Footer";
 import CTALink from "../_components/CTALink";
@@ -50,9 +50,8 @@ const gisSkills = [
 
 export default function AgentPage() {
   return (
-    <LocalizedContent><>
-      <Background sticky />
-      <Header />
+    <LocalizedContent><SpacePage>
+      <Header appearance="space" />
       <main className={styles.page}>
         <section className={styles.hero} aria-labelledby="agent-title">
           <div className={styles.heroTopline}>
@@ -150,7 +149,7 @@ export default function AgentPage() {
 
         <div className={styles.related}><p><strong>GeoD Agent</strong> 是独立桌面产品；<Link href="/mcp">GeoD MCP</Link> 是供其他 Agent 调用的工具接入方式，两者的安装与使用入口不同。</p><Link href="/">返回 GeoD 官网 <ArrowRight size={15} aria-hidden="true" /></Link></div>
       </main>
-      <Footer />
-    </></LocalizedContent>
+      <Footer appearance="space" />
+    </SpacePage></LocalizedContent>
   );
 }

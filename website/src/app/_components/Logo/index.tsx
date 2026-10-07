@@ -9,14 +9,27 @@ const Logo = ({
   height = 36,
   width,
   loading = "eager",
+  appearance = "default",
   ...rest
 }: React.HTMLProps<HTMLDivElement> & {
   height?: number;
   width?: string | number;
   loading?: "eager" | "lazy";
+  appearance?: "default" | "space";
 }) => {
   const visibleHeight = Math.max(Math.round(Number(height) || 36), 1);
   const scale = visibleHeight / (artwork.bottom - artwork.top);
+
+  if (appearance === "space") {
+    return (
+      <div {...rest} className={className} style={{ display: "inline-flex", alignItems: "center", gap: 9, height: visibleHeight, flex: "none" }}>
+        <span style={{ display: "block", position: "relative", overflow: "hidden", width: visibleHeight, height: visibleHeight }}>
+          <Image src="/geod-site/logo-symbol.png" alt="" width={1254} height={1254} loading={loading} unoptimized style={{ position: "absolute", maxWidth: "none", width: visibleHeight * 1.35, height: visibleHeight * 1.35, left: -visibleHeight * .17, top: -visibleHeight * .19 }} />
+        </span>
+        <span style={{ color: "#f4f8ff", fontSize: visibleHeight * .72, fontWeight: 750, lineHeight: 1, letterSpacing: "-.04em" }}>GeoD</span>
+      </div>
+    );
+  }
 
   return (
     <div

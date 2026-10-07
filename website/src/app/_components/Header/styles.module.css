@@ -1,29 +1,29 @@
-.container { position: sticky; top: 0; z-index: 50; width: 100%; height: 72px; border-bottom: 1px solid #e8eaed; background: rgb(255 255 255 / .92); backdrop-filter: blur(18px); }
+.container { position: sticky; top: 0; z-index: 50; width: 100%; height: 72px; border-bottom: 1px solid var(--borderColor); background: var(--navigationSurface, rgb(255 255 255 / .92)); backdrop-filter: blur(18px); }
 .navbar { width: 100%; max-width: 1280px; height: 100%; margin: 0 auto; padding: 0 32px; }
 .content { display: flex; align-items: center; gap: 28px; height: 100%; }
 .logo { flex: 0 0 auto; }
 .logo a { display: inline-flex; text-decoration: none; }
 .desktopNav { display: flex; flex: 1; justify-content: flex-end; min-width: 0; }
 .desktopLinks { display: flex; align-items: center; gap: 3px; }
-.link { position: relative; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 12px; border-radius: 999px; color: #5f6368; font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color .2s ease, background-color .2s ease, transform .2s ease; }
+.link { position: relative; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 12px; border-radius: 999px; color: var(--mediumEmphasisTextColor); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; transition: color .2s ease, background-color .2s ease, transform .2s ease; }
 .linkBadge { position: absolute; top: -6px; right: 2px; padding: 0 5px; border-radius: 5px 5px 5px 0; color: #fff; background: #c5221f; font-size: 10px; font-weight: 700; line-height: 16px; pointer-events: none; }
-.link:hover { color: #174ea6; background: #f1f5fb; }
+.link:hover { color: var(--activeHighlightColor); background: var(--navigationHover, #f1f5fb); }
 .link.ctaLinkOverride { margin-left: 8px; padding: 0 20px; color: #fff; background: #1a73e8; box-shadow: 0 2px 7px rgb(26 115 232 / .16); }
 .link.ctaLinkOverride:hover { color: #fff; background: #155fbd; transform: translateY(-1px); }
-.authPlaceholder { width: 42px; height: 42px; margin-left: 8px; border-radius: 50%; background: #f1f3f4; }
+.authPlaceholder { width: 42px; height: 42px; margin-left: 8px; border-radius: 50%; background: var(--softSurfaceColor); }
 .accountMenu { position: relative; z-index: 11; flex: none; }
-.avatarButton { display: grid; width: 42px; height: 42px; padding: 2px; place-items: center; border: 1px solid #c9d8ee; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgb(32 33 36 / .08); }
-.avatarButton:hover, .avatarButton[aria-expanded="true"] { border-color: #1a73e8; background: #f6fafe; }
+.avatarButton { display: grid; width: 42px; height: 42px; padding: 2px; place-items: center; border: 1px solid var(--borderColor); border-radius: 50%; background: var(--surfaceColor); box-shadow: 0 2px 8px rgb(32 33 36 / .08); }
+.avatarButton:hover, .avatarButton[aria-expanded="true"] { border-color: #1a73e8; background: var(--softSurfaceColor); }
 .avatarButton:focus-visible { outline: 3px solid #a8c7fa; outline-offset: 2px; }
-.accountPanel { position: absolute; top: calc(100% + 12px); right: 0; width: min(300px, calc(100vw - 32px)); padding: 16px; border: 1px solid #dadce0; border-radius: 18px; background: #fff; box-shadow: 0 20px 48px rgb(32 33 36 / .16); animation: accountPanelEnter .18s ease-out both; }
-.accountIdentity { display: flex; align-items: center; gap: 12px; padding: 4px 4px 15px; border-bottom: 1px solid #e8eaed; }
+.accountPanel { position: absolute; top: calc(100% + 12px); right: 0; width: min(300px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--borderColor); border-radius: 18px; background: var(--surfaceColor); box-shadow: 0 20px 48px rgb(32 33 36 / .16); animation: accountPanelEnter .18s ease-out both; }
+.accountIdentity { display: flex; align-items: center; gap: 12px; padding: 4px 4px 15px; border-bottom: 1px solid var(--borderColor); }
 .accountIdentity div { display: grid; min-width: 0; gap: 2px; }
-.accountIdentity strong { color: #202124; font-size: 14px; }
+.accountIdentity strong { color: var(--highEmphasisTextColor); font-size: 14px; }
 .accountIdentity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.accountIdentity span { overflow: hidden; color: #5f6368; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.accountIdentity span { overflow: hidden; color: var(--mediumEmphasisTextColor); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .accountActions { display: grid; gap: 4px; padding-top: 10px; }
-.accountActions a, .accountActions .logoutAction { display: flex; align-items: center; justify-content: flex-start; gap: 11px; width: 100%; min-height: 40px; padding: 9px 10px; border-radius: 10px; color: #3c4043; background: transparent; font-size: 13px; font-weight: 600; text-decoration: none; }
-.accountActions a:hover, .accountActions .logoutAction:hover { color: #174ea6; background: #f1f5fb; }
+.accountActions a, .accountActions .logoutAction { display: flex; align-items: center; justify-content: flex-start; gap: 11px; width: 100%; min-height: 40px; padding: 9px 10px; border-radius: 10px; color: var(--textColor); background: transparent; font-size: 13px; font-weight: 600; text-decoration: none; }
+.accountActions a:hover, .accountActions .logoutAction:hover { color: var(--activeHighlightColor); background: var(--navigationHover, #f1f5fb); }
 .accountActions a:focus-visible, .accountActions .logoutAction:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }
 .accountError { margin: 10px 2px 0; color: #b3261e; font-size: 12px; line-height: 1.5; }
 @keyframes accountPanelEnter { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
@@ -32,9 +32,9 @@
   .navbar { padding: 0 22px; }
   .content { gap: 10px; }
   .desktopLinks { display: none; }
-  .drawerButton { display: grid; width: 42px; height: 42px; margin-left: auto; place-items: center; border: 1px solid #dadce0; border-radius: 12px; color: #3c4043; background: #fff; }
-  .drawerButton:hover { background: #f6f9fe; }
-  .drawer { display: block; position: fixed; top: 72px; right: 0; left: 0; max-height: calc(100dvh - 72px); overflow-y: auto; padding: 14px 22px 24px; border-bottom: 1px solid #dadce0; background: #fff; box-shadow: 0 24px 36px rgb(32 33 36 / .1); transform: translateY(-130%); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .2s ease, visibility .2s; }
+  .drawerButton { display: grid; width: 42px; height: 42px; margin-left: auto; place-items: center; border: 1px solid var(--borderColor); border-radius: 12px; color: var(--textColor); background: var(--surfaceColor); }
+  .drawerButton:hover { background: var(--softSurfaceColor); }
+  .drawer { display: block; position: fixed; top: 72px; right: 0; left: 0; max-height: calc(100dvh - 72px); overflow-y: auto; padding: 14px 22px 24px; border-bottom: 1px solid var(--borderColor); background: var(--surfaceColor); box-shadow: 0 24px 36px rgb(32 33 36 / .1); transform: translateY(-130%); opacity: 0; visibility: hidden; pointer-events: none; transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .2s ease, visibility .2s; }
   .drawer.open { transform: translateY(0); opacity: 1; visibility: visible; pointer-events: auto; }
   .mobileLinks { display: grid; gap: 4px; max-width: 800px; margin: 0 auto; }
   .mobileLinks .link { width: 100%; justify-content: flex-start; padding: 8px 14px; font-size: 15px; }
@@ -46,7 +46,7 @@
 .accountPanel.alignedAccountPanel { right: 0; }
 @media (prefers-reduced-motion: reduce) { .accountPanel { animation: none; } }
 
-.languageSwitch { display: inline-flex; flex: none; align-items: center; justify-content: center; min-width: 42px; min-height: 40px; padding: 0 10px; border: 1px solid #dadce0; border-radius: 999px; color: #3c4043; background: #fff; font-size: 13px; font-weight: 600; text-decoration: none; }
-.languageSwitch:hover { color: #174ea6; border-color: #a8c7fa; background: #f1f5fb; }
+.languageSwitch { display: inline-flex; flex: none; align-items: center; justify-content: center; min-width: 42px; min-height: 40px; padding: 0 10px; border: 1px solid var(--borderColor); border-radius: 999px; color: var(--textColor); background: var(--surfaceColor); font-size: 13px; font-weight: 600; text-decoration: none; }
+.languageSwitch:hover { color: var(--activeHighlightColor); border-color: #a8c7fa; background: var(--navigationHover, #f1f5fb); }
 .languageSwitch:focus-visible { outline: 3px solid #a8c7fa; outline-offset: 2px; }
 @media (min-width: 1001px) { .content { gap: 16px; } .link { padding: 0 9px; } }

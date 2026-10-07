@@ -2,9 +2,9 @@
 .ctaLink:hover { transform: translateY(-2px); }
 .primary { color: #fff; background: #1a73e8; box-shadow: 0 4px 12px rgb(26 115 232 / .17); }
 .primary:hover { color: #fff; background: #155fbd; box-shadow: 0 7px 18px rgb(26 115 232 / .2); }
-.secondary { border-color: #c8d7ee; color: #174ea6; background: #fff; }
-.secondary:hover { border-color: #1a73e8; color: #174ea6; background: #f6f9fe; }
-.tertiary { color: #174ea6; background: #e8f0fe; }
-.tertiary:hover { color: #174ea6; background: #d2e3fc; }
+.secondary { border-color: var(--borderColor); color: var(--activeHighlightColor); background: var(--secondaryActionSurface, #fff); }
+.secondary:hover { border-color: #1a73e8; color: var(--activeHighlightColor); background: var(--softSurfaceColor); }
+.tertiary { color: var(--activeHighlightColor); background: var(--activeOpaqueColor); }
+.tertiary:hover { color: var(--activeHighlightColor); background: var(--navigationHover, #d2e3fc); }
 .full { width: 100%; }
 @media (prefers-reduced-motion: reduce) { .ctaLink:hover { transform: none; } }

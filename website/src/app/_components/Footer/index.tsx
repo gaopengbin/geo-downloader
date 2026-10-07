@@ -6,7 +6,9 @@ import styles from "./styles.module.css";
 import Logo from "../Logo";
 import ApplicationLink from "../ApplicationLink";
 
-interface FooterProps extends React.HTMLProps<HTMLElement> {}
+interface FooterProps extends React.HTMLProps<HTMLElement> {
+  appearance?: "default" | "space";
+}
 
 const linkCategories: {
   category: string;
@@ -74,13 +76,13 @@ const linkCategories: {
   },
 ];
 
-const Footer: React.FC<FooterProps> = ({ className, ...rest }) => {
+const Footer: React.FC<FooterProps> = ({ appearance = "default", className, ...rest }) => {
   return (
     <LocalizedContent><footer className={styles.footer} {...rest}>
       <div className="max-w-[1100px]">
         <section className={styles.footerSection}>
           <div className={styles.logoAndDescription}>
-            <Logo height={35} loading="lazy" />
+            <Logo height={35} loading="lazy" appearance={appearance} />
             <p className={styles.description}>
               GeoD 是面向 GIS 工作流的开源桌面数据工具，支持 2D 影像、DEM、3D
               Tiles 与历史影像下载。
