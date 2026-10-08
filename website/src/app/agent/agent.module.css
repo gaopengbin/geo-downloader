@@ -2,6 +2,23 @@
 .page p { margin: 0; }
 .page h1, .page h2, .page h3 { margin: 0; color: var(--highEmphasisTextColor); }
 .hero { text-align: center; }
+.welcomeBanner { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px; width: fit-content; max-width: 100%; margin: -18px auto 28px; padding: 12px 18px; border: 1px solid #58a6ff55; border-radius: 16px; background: #1a73e817; color: var(--textColor); text-decoration: none; font-size: 13px; line-height: 1.7; }
+.welcomeBanner > svg { color: var(--activeHighlightColor); flex-shrink: 0; }
+.welcomeBanner strong { font-weight: 600; }
+.welcomeBanner span { padding: 2px 8px; border-radius: 20px; background: #1a73e82b; color: var(--activeHighlightColor); font-size: 11px; white-space: nowrap; }
+.welcomeBanner:hover { border-color: var(--activeHighlightColor); }
+.trial { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 28px; align-items: center; padding: 28px; margin-bottom: 28px; border: 1px solid #58a6ff55; border-radius: 24px; background: var(--surfaceColor); }
+.trial h2 { margin: 12px 0; font-size: clamp(20px,2.4vw,27px); line-height: 1.5; }
+.trial p { max-width: 730px; font-size: 13px; line-height: 1.9; color: var(--mediumEmphasisTextColor); }
+.trialAction { display: flex; align-items: flex-start; flex-direction: column; gap: 13px; }
+.trialAction a { display: inline-flex; align-items: center; gap: 8px; }
+.trialAction small { font-size: 11px; line-height: 1.8; color: var(--mediumEmphasisTextColor); }
+.homeWelcome { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px 12px; padding: 15px; margin-top: 20px; border: 1px solid #58a6ff55; border-radius: 14px; background: #1a73e80c; color: var(--activeHighlightColor); text-decoration: none; }
+.homeWelcome strong { font-size: 13px; line-height: 1.8; }
+.homeWelcome span { grid-column: 1; color: var(--mediumEmphasisTextColor); font-size: 11px; line-height: 1.8; }
+.homeWelcome svg { grid-column: 2; grid-row: 1 / 3; align-self: center; }
+.homeWelcome:hover { border-color: var(--activeHighlightColor); }
+@media (max-width:760px) { .welcomeBanner { margin-top: 0; padding: 10px 12px; gap: 8px; font-size: 12px; } .trial { grid-template-columns: 1fr; padding: 20px; gap: 18px; } }
 .heroTopline { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 14px; }
 .eyebrow { display: block; color: var(--activeHighlightColor); font-size: 12px; font-weight: 650; letter-spacing: .12em; }
 .badge { display: inline-flex; align-items: center; width: fit-content; padding: 5px 11px; border: 1px solid var(--borderColor); border-radius: 30px; background: var(--activeOpaqueColor); color: var(--activeHighlightColor); font-size: 12px; font-weight: 550; }

@@ -991,5 +991,13 @@
   "GeoD Agent 完整操作演示（中文配音与字幕）": "Complete GeoD Agent demo (Chinese narration and subtitles)",
   "打开演示视频": "Open demo video",
   "中文配音与字幕 · 思考与等待加速呈现 · 当前开发版实录": "Chinese narration and subtitles · Thinking and waiting accelerated · Recorded in the current development build",
-  "下载视频": "Download video"
+  "下载视频": "Download video",
+  "新用户赠送 20,000 Credits 体验额度": "20,000 trial Credits for new users",
+  "限量 100 名": "Limited to 100 accounts",
+  "新用户体验礼": "NEW USER TRIAL",
+  "先领 20,000 Credits，试试你的第一个任务。": "Get 20,000 Credits for your first task.",
+  "首次使用 GeoD Agent 的用户，登录后自动获得托管模型体验额度。限前 100 个符合条件的账号，每个 GeoD 账号仅赠送一次，名额用完即止。": "First-time GeoD Agent users automatically receive hosted-model trial Credits after signing in. Limited to the first 100 eligible accounts, once per GeoD account, while places remain.",
+  "下载 Agent，领取体验额度": "Download Agent to receive trial Credits",
+  "已有余额记录的账号不参与新用户赠送。": "Accounts with existing credit lots are not eligible for the new-user grant.",
+  "限量 100 名 · 登录后自动到账": "100 accounts · Automatically credited after sign-in"
 }

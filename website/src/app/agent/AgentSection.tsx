@@ -12,6 +12,7 @@ export default function AgentSection() {
           <span className={styles.badge}>GEOD AGENT · 公开测试</span>
           <h2 id="home-agent-title">下一次数据任务，<br />从一次对话开始。</h2>
           <p>从影像、DEM 到矢量和三维数据，用对话组织下载与处理。文件、PostGIS 和手绘范围，都能接到你的任务里。</p>
+          <a className={styles.homeWelcome} href="/agent#trial"><strong>新用户赠送 20,000 Credits 体验额度</strong><span>限量 100 名 · 登录后自动到账</span><ArrowRight size={16} aria-hidden="true" /></a>
           <div className={styles.actions}><CTALink href="/agent">了解 GeoD Agent <ArrowRight size={16} aria-hidden="true" /></CTALink></div>
           <p className={styles.releaseNote}>Windows 0.2.3 测试版可下载 · 0.2.4 本地候选准备中</p>
         </div>

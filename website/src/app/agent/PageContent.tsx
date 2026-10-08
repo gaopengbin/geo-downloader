@@ -1,7 +1,7 @@
 import { LocalizedContent } from "@/app/_components/LocaleProvider";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowRight, ArrowUpRight, Check, FileCheck2, MessageSquare, Monitor, ShieldCheck } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Check, FileCheck2, Gift, MessageSquare, Monitor, ShieldCheck } from "lucide-react";
 import SpacePage from "../_components/SpacePage";
 import Header from "../_components/Header";
 import Footer from "../_components/Footer";
@@ -55,6 +55,7 @@ export default function AgentPage() {
       <Header appearance="space" />
       <main className={styles.page}>
         <section className={styles.hero} aria-labelledby="agent-title">
+          <a className={styles.welcomeBanner} href="#trial"><Gift size={19} aria-hidden="true" /><strong>新用户赠送 20,000 Credits 体验额度</strong><span>限量 100 名</span><ArrowRight size={16} aria-hidden="true" /></a>
           <div className={styles.heroTopline}>
             <span className={styles.eyebrow}>GEOD AGENT</span>
             <span className={styles.badge}>Windows 桌面应用 · 公开测试版</span>
@@ -76,6 +77,11 @@ export default function AgentPage() {
             <a href="#imagery"><strong>6</strong><span>种影像输出</span></a>
             <a href="#workspace"><strong>2D / 3D</strong><span>地图与场景联动</span></a>
           </div>
+        </section>
+
+        <section id="trial" className={styles.trial} aria-labelledby="trial-title">
+          <div><span className={styles.eyebrow}>新用户体验礼</span><h2 id="trial-title">先领 20,000 Credits，试试你的第一个任务。</h2><p>首次使用 GeoD Agent 的用户，登录后自动获得托管模型体验额度。限前 100 个符合条件的账号，每个 GeoD 账号仅赠送一次，名额用完即止。</p></div>
+          <div className={styles.trialAction}><CTALink href={AGENT_DOWNLOAD_URL}>下载 Agent，领取体验额度 <ArrowRight size={16} aria-hidden="true" /></CTALink><small>已有余额记录的账号不参与新用户赠送。</small></div>
         </section>
 
         <section id="demo" className={styles.demo} aria-labelledby="demo-title">
