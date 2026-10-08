@@ -18,6 +18,15 @@
 .promiseRow span { display: flex; align-items: center; gap: 7px; }
 .promiseRow svg { color: var(--activeHighlightColor); }
 .workspace { border: 1px solid var(--borderColor); border-radius: 24px; background: var(--surfaceColor); box-shadow: var(--panelShadow, 0 30px 90px #20212412); }
+.demo { margin: 0 0 54px; padding: 24px; border: 1px solid var(--borderColor); border-radius: 24px; background: var(--surfaceColor); box-shadow: var(--panelShadow, 0 30px 90px #20212412); }
+.demoHeading { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 22px; }
+.demoHeading h2 { margin-top: 10px; font-size: clamp(21px, 2.6vw, 30px); line-height: 1.45; letter-spacing: -.025em; }
+.demoHeading p { max-width: 350px; font-size: 13px; line-height: 1.85; color: var(--mediumEmphasisTextColor); }
+.demoVideo { display: block; width: 100%; aspect-ratio: 16/9; border-radius: 14px; background: #071343; }
+.demoCaption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 16px; color: var(--mediumEmphasisTextColor); font-size: 12px; line-height: 1.8; }
+.demoCaption a { display: inline-flex; gap: 6px; align-items: center; color: var(--activeHighlightColor); text-decoration: none; }
+.demoCaption a:hover { text-decoration: underline; }
+@media (max-width: 760px) { .demo { padding: 16px; margin-bottom: 32px; } .demoHeading { flex-direction: column; align-items: flex-start; gap: 10px; } .demoHeading p { max-width: none; } .demoVideo { border-radius: 10px; } }
 .workspaceBar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; color: var(--textColor); font-size: 12px; }
 .previewTag { color: var(--mediumEmphasisTextColor); font-size: 11px; }
 .workspaceImage { display: block; width: 100%; height: auto; border-top: 1px solid var(--borderColor); border-bottom: 1px solid var(--borderColor); }

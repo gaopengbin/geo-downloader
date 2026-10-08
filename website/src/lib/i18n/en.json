@@ -983,5 +983,13 @@
   "Esri World Imagery · Z14 · EPSG:3857 · 8192 × 5632 像素。截图中的文件大小和完成状态均来自实际任务。": "Esri World Imagery · Z14 · EPSG:3857 · 8192 × 5632 pixels. File size and completion status in the screenshot come from the actual task.",
   "新上线": "NEW",
   "张实际瓦片": "actual tiles",
-  "实际成果": "actual output"
+  "实际成果": "actual output",
+  "观看演示": "Watch demo",
+  "真实操作演示 · 3 分 52 秒": "Real product demo · 3:52",
+  "配置、下载、查看成果，用对话完成。": "Configure, download and inspect results through conversation.",
+  "从空白会话开始，演示图源配置、MCP 接入、参数确认、影像下载和定时任务。": "Start from an empty conversation: configure sources, connect MCP tools, confirm parameters, download imagery and create scheduled tasks.",
+  "GeoD Agent 完整操作演示（中文配音与字幕）": "Complete GeoD Agent demo (Chinese narration and subtitles)",
+  "打开演示视频": "Open demo video",
+  "中文配音与字幕 · 思考与等待加速呈现 · 当前开发版实录": "Chinese narration and subtitles · Thinking and waiting accelerated · Recorded in the current development build",
+  "下载视频": "Download video"
 }

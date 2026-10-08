@@ -32,6 +32,7 @@ const steps = [
 ];
 
 const sections = [
+  { href: "#demo", label: "观看演示" },
   { href: "#workspace", label: "工作区预览" },
   { href: "#data", label: "数据能力" },
   { href: "#inputs", label: "范围与图源" },
@@ -62,7 +63,7 @@ export default function AgentPage() {
           <p className={styles.lead}>影像、DEM、历史影像、矢量与三维数据，从一次对话开始。<br className={styles.desktopBreak} />核对计划，在自己的电脑上完成下载、处理与成果核验。</p>
           <div className={styles.actions}>
             <CTALink href={AGENT_DOWNLOAD_URL}>下载 Windows 测试版 <ArrowRight size={17} aria-hidden="true" /></CTALink>
-            <CTALink href="#workspace" variant="secondary" className={styles.secondaryAction}>看看工作区</CTALink>
+            <CTALink href="#demo" variant="secondary" className={styles.secondaryAction}>观看演示</CTALink>
           </div>
           <p className={styles.releaseNote}>当前可下载 0.2.3 测试版 · Windows x64<a href="#candidate">查看 0.2.4 本次改进 <ArrowRight size={13} aria-hidden="true" /></a></p>
           <div className={styles.promiseRow}>
@@ -75,6 +76,15 @@ export default function AgentPage() {
             <a href="#imagery"><strong>6</strong><span>种影像输出</span></a>
             <a href="#workspace"><strong>2D / 3D</strong><span>地图与场景联动</span></a>
           </div>
+        </section>
+
+        <section id="demo" className={styles.demo} aria-labelledby="demo-title">
+          <div className={styles.demoHeading}><div><span className={styles.eyebrow}>真实操作演示 · 3 分 52 秒</span><h2 id="demo-title">配置、下载、查看成果，用对话完成。</h2></div><p>从空白会话开始，演示图源配置、MCP 接入、参数确认、影像下载和定时任务。</p></div>
+          <video className={styles.demoVideo} controls playsInline preload="none" poster="/geod-site/agent/demo-poster-20261008-v6.jpg" aria-label="GeoD Agent 完整操作演示（中文配音与字幕）">
+            <source src="/geod-site/agent/geod-agent-demo-20261008-v6.mp4" type="video/mp4" />
+            <a href="/geod-site/agent/geod-agent-demo-20261008-v6.mp4">打开演示视频</a>
+          </video>
+          <div className={styles.demoCaption}><span>中文配音与字幕 · 思考与等待加速呈现 · 当前开发版实录</span><a href="/geod-site/agent/geod-agent-demo-20261008-v6.mp4" download>下载视频 <ArrowUpRight size={14} aria-hidden="true" /></a></div>
         </section>
 
         <section id="workspace" className={styles.workspace} aria-labelledby="workspace-title">
