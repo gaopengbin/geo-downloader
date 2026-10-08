@@ -3,6 +3,7 @@ import { LocalizedContent, LanguageSwitch } from "@/app/_components/LocaleProvid
 
 import cn from "classnames";
 import Link from "next/link";
+import { Github } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import Logo from "../Logo";
@@ -26,6 +27,7 @@ const productLinks: HeaderNavLink[] = [
   { content: "CLI", href: "/cli" },
   { content: "MCP", href: "/mcp" },
   { content: "地图创作", href: MAP_WORKSPACE_URL, target: "_blank" },
+  { content: "GitHub", href: "https://github.com/gaopengbin", target: "_blank", leadingIcon: <Github size={17} aria-hidden="true" /> },
 ].filter(link => MAP_CREATION_VISIBLE || link.href !== MAP_WORKSPACE_URL);
 
 const Header: React.FC<HeaderProps> = ({ isHome, appearance = "default", className, ...rest }) => {

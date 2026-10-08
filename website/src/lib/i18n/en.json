@@ -999,5 +999,13 @@
   "首次使用 GeoD Agent 的用户，登录后自动获得托管模型体验额度。限前 100 个符合条件的账号，每个 GeoD 账号仅赠送一次，名额用完即止。": "First-time GeoD Agent users automatically receive hosted-model trial Credits after signing in. Limited to the first 100 eligible accounts, once per GeoD account, while places remain.",
   "下载 Agent，领取体验额度": "Download Agent to receive trial Credits",
   "已有余额记录的账号不参与新用户赠送。": "Accounts with existing credit lots are not eligible for the new-user grant.",
-  "限量 100 名 · 登录后自动到账": "100 accounts · Automatically credited after sign-in"
+  "限量 100 名 · 登录后自动到账": "100 accounts · Automatically credited after sign-in",
+  "查看开源代码": "View source on GitHub",
+  "GeoD · AI 地理数据助手与 GIS 下载工具": "GeoD · AI Geographic Data Assistant and GIS Tools",
+  "GeoD 提供开源地理数据工具：GeoD Agent 用 AI 对话配置图源、MCP 与任务，在本机下载影像、DEM、历史影像、矢量与三维数据；同时提供桌面端、CLI、MCP 和浏览器入口。": "Open-source geographic data tools: use GeoD Agent conversations to configure sources, MCP and tasks, then download imagery, DEMs, historical imagery, vectors and 3D data locally. Desktop, CLI, MCP and browser tools are also available.",
+  "GeoD Agent 用 AI 对话配置图源、规划任务与接入 MCP，在本机下载和处理影像、DEM、矢量及三维数据。开源 GIS 工具，提供桌面端、CLI 与浏览器入口。": "Configure sources, plan tasks and connect MCP with GeoD Agent conversations. Download and process imagery, DEMs, vectors and 3D data locally, with open-source desktop, CLI and browser GIS tools.",
+  "用 AI 对话配置图源与任务，在本机下载影像、DEM、矢量和三维数据。": "Configure sources and tasks through AI conversations. Download imagery, DEMs, vectors and 3D data on your computer.",
+  "GeoD Agent 对话与地图工作区": "GeoD Agent conversation and map workspace",
+  "GeoD,GeoD Agent,AI GIS,地理数据下载,遥感影像下载,GeoTIFF,DEM,Esri Wayback,3D Tiles,MCP,GIS": "GeoD,GeoD Agent,AI GIS,geographic data downloads,satellite imagery downloads,GeoTIFF,DEM,Esri Wayback,3D Tiles,MCP,GIS",
+  "GeoD Agent,AI GIS,影像下载,历史影像,DEM,矢量数据,3D Tiles,GeoTIFF,坐标系转换,MCP,定时任务": "GeoD Agent,AI GIS,imagery downloads,historical imagery,DEM,vector data,3D Tiles,GeoTIFF,reprojection,MCP,scheduled tasks"
 }

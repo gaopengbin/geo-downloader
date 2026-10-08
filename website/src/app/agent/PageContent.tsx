@@ -1,7 +1,9 @@
 import { LocalizedContent } from "@/app/_components/LocaleProvider";
+import { type Locale } from "@/lib/i18n";
+import StructuredData from "@/app/_components/StructuredData";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowRight, ArrowUpRight, Check, FileCheck2, Gift, MessageSquare, Monitor, ShieldCheck } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Check, FileCheck2, Gift, Github, MessageSquare, Monitor, ShieldCheck } from "lucide-react";
 import SpacePage from "../_components/SpacePage";
 import Header from "../_components/Header";
 import Footer from "../_components/Footer";
@@ -15,13 +17,15 @@ import styles from "./agent.module.css";
 export const metadata: Metadata = {
   title: "GeoD Agent｜用对话下载地理数据",
   description: "GeoD Agent：用对话规划和下载影像、DEM、历史影像、矢量与三维数据。在本机执行，核对坐标系，查看任务进度，带走可核验的成果。",
+  keywords: "GeoD Agent,AI GIS,影像下载,历史影像,DEM,矢量数据,3D Tiles,GeoTIFF,坐标系转换,MCP,定时任务",
   alternates: { canonical: "/agent" },
   openGraph: {
     title: "GeoD Agent｜用对话完成地理数据任务",
     description: "对话、地图与成果，在一个工作区中。Windows 公开测试版 0.2.3 可下载，0.2.4 正在准备。",
     url: "/agent",
-    images: ["/geod-site/agent/workbench-light-20261008.png"],
+    images: [{ url: "/geod-site/agent/demo-poster-20261008-v6.jpg", width: 1920, height: 1080, alt: "GeoD Agent 对话与地图工作区" }],
   },
+  twitter: { card: "summary_large_image", images: ["/geod-site/agent/demo-poster-20261008-v6.jpg"] },
 };
 
 const steps = [
@@ -49,9 +53,10 @@ const gisSkills = [
   ["栅格转换", "重投影、压缩与金字塔"],
 ];
 
-export default function AgentPage() {
+export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
   return (
     <LocalizedContent><SpacePage>
+      <StructuredData kind="agent" locale={locale} />
       <Header appearance="space" />
       <main className={styles.page}>
         <section className={styles.hero} aria-labelledby="agent-title">
@@ -65,6 +70,7 @@ export default function AgentPage() {
           <div className={styles.actions}>
             <CTALink href={AGENT_DOWNLOAD_URL}>下载 Windows 测试版 <ArrowRight size={17} aria-hidden="true" /></CTALink>
             <CTALink href="#demo" variant="secondary" className={styles.secondaryAction}>观看演示</CTALink>
+            <a className={styles.textLink} href="https://github.com/gaopengbin/geod-agent" target="_blank" rel="noopener noreferrer"><Github size={17} aria-hidden="true" />查看开源代码</a>
           </div>
           <p className={styles.releaseNote}>当前可下载 0.2.3 测试版 · Windows x64<a href="#candidate">查看 0.2.4 本次改进 <ArrowRight size={13} aria-hidden="true" /></a></p>
           <div className={styles.promiseRow}>

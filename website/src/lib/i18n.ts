@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import dictionary from "./i18n/en.json";
 import templates from "./i18n/templates.json";
+import { DEFAULT_OG_IMAGE } from "./site";
 
 export type Locale = "zh" | "en";
 export const SITE_PATHS = ["/", "/agent", "/browser", "/cli", "/mcp", "/history", "/disclaimer", "/tools", "/login", "/dashboard"];
@@ -57,7 +58,7 @@ export function pageMetadata(source: Metadata, locale: Locale, path: string): Me
   const description = source.description ? translate(source.description, locale) : source.description;
   return { ...source, title, description, keywords: typeof source.keywords === "string" ? translate(source.keywords, locale) : source.keywords,
     alternates: { canonical: localePath(path, locale), languages: { "zh-CN": path, en: localePath(path, "en"), "x-default": path } },
-    openGraph: { ...source.openGraph, title: typeof title === "string" ? title : undefined, description: description ?? undefined, url: localePath(path, locale), locale: locale === "en" ? "en_US" : "zh_CN", alternateLocale: locale === "en" ? "zh_CN" : "en_US" },
-    twitter: { ...source.twitter, title: typeof title === "string" ? title : undefined, description: description ?? undefined },
+    openGraph: { type: "website", siteName: "GeoD", images: [DEFAULT_OG_IMAGE], ...source.openGraph, title: typeof title === "string" ? title : undefined, description: description ?? undefined, url: localePath(path, locale), locale: locale === "en" ? "en_US" : "zh_CN", alternateLocale: locale === "en" ? "zh_CN" : "en_US" },
+    twitter: { card: "summary_large_image", images: source.openGraph?.images ?? [DEFAULT_OG_IMAGE], ...source.twitter, title: typeof title === "string" ? title : undefined, description: description ?? undefined },
   };
 }

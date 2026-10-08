@@ -7,12 +7,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const [latestRelease] = await getStableReleases(1);
   const releaseDate = new Date(latestRelease.published_at);
   const pages = [
-    { path: "/", date: releaseDate, priority: 1 },
-    { path: "/agent", date: new Date("2026-10-07"), priority: 0.9 },
+    { path: "/", date: new Date("2026-10-08"), priority: 1 },
+    { path: "/agent", date: new Date("2026-10-08"), priority: 0.9 },
     { path: "/history", date: releaseDate, priority: 0.8 },
     { path: "/cli", date: new Date("2026-09-23"), priority: 0.9 },
     { path: "/mcp", date: new Date("2026-09-23"), priority: 0.9 },
     { path: "/browser", date: new Date("2026-09-24"), priority: 0.9 },
+    { path: "/tools", date: new Date("2026-10-08"), priority: 0.7 },
     { path: "/disclaimer", date: new Date("2026-08-11"), priority: 0.5 },
   ];
   const localized: MetadataRoute.Sitemap = pages.flatMap(page => (["zh", "en"] as const).map(locale => ({

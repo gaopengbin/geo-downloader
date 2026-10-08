@@ -4,30 +4,31 @@ import { LocaleProvider } from "./_components/LocaleProvider";
 import { type Locale } from "@/lib/i18n";
 import { DEFAULT_OG_IMAGE, SITE_URL, SITE_URL_OBJECT } from "@/lib/site";
 import { ProductPageView } from "@/app/_components/ProductAnalytics";
+import StructuredData from "@/app/_components/StructuredData";
 
 export const metadata: Metadata = {
   applicationName: "GeoD",
   title: {
-    default: "GeoD - GIS 桌面数据工作台",
+    default: "GeoD · AI 地理数据助手与 GIS 下载工具",
     template: "%s | GeoD",
   },
   metadataBase: SITE_URL_OBJECT,
   description:
-    "GeoD 是一款面向 GIS 场景的桌面客户端，支持 GeoTIFF、DEM、3D Tiles、矢量与时序影像下载。",
-  keywords: "GeoD,GeoDownloader,GIS,遥感,GeoTIFF,DEM,3D Tiles,矢量数据",
+    "GeoD Agent 用 AI 对话配置图源、规划任务与接入 MCP，在本机下载和处理影像、DEM、矢量及三维数据。开源 GIS 工具，提供桌面端、CLI 与浏览器入口。",
+  keywords: "GeoD,GeoD Agent,AI GIS,地理数据下载,遥感影像下载,GeoTIFF,DEM,Esri Wayback,3D Tiles,MCP,GIS",
   openGraph: {
     type: "website",
     url: SITE_URL,
     siteName: "GeoD",
-    title: "GeoD - GIS 桌面数据工作台",
+    title: "GeoD · AI 地理数据助手与 GIS 下载工具",
     description:
-      "面向 GIS 工作流的开源桌面工具，支持 GeoTIFF、DEM、3D Tiles、MVT 与历史影像任务。",
+      "用 AI 对话配置图源与任务，在本机下载影像、DEM、矢量和三维数据。",
     images: [DEFAULT_OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
-    title: "GeoD - GIS 桌面数据工作台",
-    description: "面向 GIS 工作流的开源桌面数据工具。",
+    title: "GeoD · AI 地理数据助手与 GIS 下载工具",
+    description: "用 AI 对话配置图源与任务，在本机下载影像、DEM、矢量和三维数据。",
     images: [DEFAULT_OG_IMAGE],
   },
   icons: {
@@ -38,6 +39,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   authors: [{ name: "gaopengbin", url: "https://github.com/gaopengbin" }],
   creator: "gaopengbin",
+  robots: { index: true, follow: true, googleBot: { index: true, follow: true, "max-image-preview": "large", "max-video-preview": -1, "max-snippet": -1 } },
 };
 
 export default function RootLayout({
@@ -54,6 +56,7 @@ export default function RootLayout({
         <meta name="theme-color" content="#ffffff" />
       </head>
       <body suppressHydrationWarning>
+        <StructuredData kind="site" locale={locale} />
         <LocaleProvider locale={locale}>
         <ProductPageView />
         <div className="min-h-screen">{children}</div>

@@ -4,9 +4,9 @@ import { DEFAULT_OG_IMAGE } from "@/lib/site";
 import SDKPage from "./sdk/SdkPage";
 
 export const metadata: Metadata = {
-  title: "GeoD - 地理空间数据下载与导出工具",
+  title: "GeoD · AI 地理数据助手与 GIS 下载工具",
   description:
-    "GeoD 是一款面向 GIS 工作流的开源桌面工具，支持 2D 地图瓦片、GeoTIFF、DEM、3D Tiles 与 Esri Wayback 历史影像下载，适用于 Windows、macOS、Linux。",
+    "GeoD 提供开源地理数据工具：GeoD Agent 用 AI 对话配置图源、MCP 与任务，在本机下载影像、DEM、历史影像、矢量与三维数据；同时提供桌面端、CLI、MCP 和浏览器入口。",
   alternates: {
     canonical: "/",
   },
