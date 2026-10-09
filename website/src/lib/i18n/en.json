@@ -1007,5 +1007,8 @@
   "用 AI 对话配置图源与任务，在本机下载影像、DEM、矢量和三维数据。": "Configure sources and tasks through AI conversations. Download imagery, DEMs, vectors and 3D data on your computer.",
   "GeoD Agent 对话与地图工作区": "GeoD Agent conversation and map workspace",
   "GeoD,GeoD Agent,AI GIS,地理数据下载,遥感影像下载,GeoTIFF,DEM,Esri Wayback,3D Tiles,MCP,GIS": "GeoD,GeoD Agent,AI GIS,geographic data downloads,satellite imagery downloads,GeoTIFF,DEM,Esri Wayback,3D Tiles,MCP,GIS",
-  "GeoD Agent,AI GIS,影像下载,历史影像,DEM,矢量数据,3D Tiles,GeoTIFF,坐标系转换,MCP,定时任务": "GeoD Agent,AI GIS,imagery downloads,historical imagery,DEM,vector data,3D Tiles,GeoTIFF,reprojection,MCP,scheduled tasks"
+  "GeoD Agent,AI GIS,影像下载,历史影像,DEM,矢量数据,3D Tiles,GeoTIFF,坐标系转换,MCP,定时任务": "GeoD Agent,AI GIS,imagery downloads,historical imagery,DEM,vector data,3D Tiles,GeoTIFF,reprojection,MCP,scheduled tasks",
+  "官网下载 Windows 测试版": "Website download · Windows beta",
+  "GitHub 下载": "Download from GitHub",
+  "安装包约 487 MB；官网下载较慢时，可切换 GitHub 线路。": "Installer: approximately 487 MB. If the website download is slow, try the GitHub route."
 }
