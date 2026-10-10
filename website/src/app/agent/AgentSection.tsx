@@ -14,7 +14,7 @@ export default function AgentSection() {
           <p>从影像、DEM 到矢量和三维数据，用对话组织下载与处理。文件、PostGIS 和手绘范围，都能接到你的任务里。</p>
           <a className={styles.homeWelcome} href="/agent#trial"><strong>新用户赠送 20,000 Credits 体验额度</strong><span>限量 100 名 · 登录后自动到账</span><ArrowRight size={16} aria-hidden="true" /></a>
           <div className={styles.actions}><CTALink href="/agent">了解 GeoD Agent <ArrowRight size={16} aria-hidden="true" /></CTALink></div>
-          <p className={styles.releaseNote}>Windows 0.2.3 测试版可下载 · 0.2.4 本地候选准备中</p>
+          <p className={styles.releaseNote}>Windows 0.2.4 测试版已发布 · 支持签名在线更新</p>
         </div>
         <figure className={styles.homeFigure}>
           <a href="/agent#workspace" aria-label="查看 GeoD Agent 开发版工作区"><img src="/geod-site/agent/workbench-light-20261008.png" alt="GeoD Agent 当前开发版：路线范围影像已完成，地图显示真实成果，任务区展示文件大小与坐标系" width={1440} height={900} loading="lazy" /></a>

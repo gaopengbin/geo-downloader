@@ -23,7 +23,7 @@ export function DataFeatures() {
   return <LocalizedContent><section id="data" className={styles.section} aria-labelledby="data-title">
     <span className={styles.eyebrow}>五类数据工作流</span>
     <h2 id="data-title">从平面影像，到三维场景。</h2>
-    <p className={styles.sectionLead}>在同一个对话工作区中规划、下载和查看不同类型的数据。以下包含 0.2.4 本地候选能力，公开 0.2.3 安装包的范围请查看版本说明。</p>
+    <p className={styles.sectionLead}>在同一个对话工作区中规划、下载和查看不同类型的数据。当前公开测试版为 0.2.4，具体能力与验证范围请查看版本说明。</p>
     <div className={styles.dataGrid}>{dataTypes.map(({ id, title, Icon, intro, points, output, proof }) => <article id={id} key={id} className={styles.dataCard}>
       <div className={styles.dataCardTop}><Icon size={28} strokeWidth={1.5} aria-hidden="true" /><span>开发版已验证</span></div>
       <h3>{title}</h3><p>{intro}</p>

@@ -1010,5 +1010,10 @@
   "GeoD Agent,AI GIS,影像下载,历史影像,DEM,矢量数据,3D Tiles,GeoTIFF,坐标系转换,MCP,定时任务": "GeoD Agent,AI GIS,imagery downloads,historical imagery,DEM,vector data,3D Tiles,GeoTIFF,reprojection,MCP,scheduled tasks",
   "官网下载 Windows 测试版": "Website download · Windows beta",
   "GitHub 下载": "Download from GitHub",
-  "安装包约 487 MB；官网下载较慢时，可切换 GitHub 线路。": "Installer: approximately 487 MB. If the website download is slow, try the GitHub route."
+  "安装包约 487 MB；官网下载较慢时，可切换 GitHub 线路。": "Installer: approximately 487 MB. If the website download is slow, try the GitHub route.",
+  "Windows 0.2.4 测试版已发布 · 支持签名在线更新": "Windows beta 0.2.4 available · Signed online updates",
+  "0.2.4 · 公开测试版": "0.2.4 · PUBLIC BETA",
+  "这一版精简模型输入，保留已确认参数与任务状态；改进对话、登录和托盘，缺少技能时引导安装。": "This release reduces model context while retaining confirmed choices and task state, improves chat, login and tray behavior, and guides optional skill installation.",
+  "0.2.4 已发布为公开测试版。全新 Windows、全部图源、规模或外部服务尚未全部验收。": "Version 0.2.4 is available as a public beta. Clean Windows, every source, workload and external service have not all been validated.",
+  "在同一个对话工作区中规划、下载和查看不同类型的数据。当前公开测试版为 0.2.4，具体能力与验证范围请查看版本说明。": "Plan, download and inspect different data types in one conversation workspace. The current public beta is 0.2.4; see its release notes for capabilities and the verified scope."
 }

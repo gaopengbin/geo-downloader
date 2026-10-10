@@ -121,7 +121,7 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
 
 
         <section id="candidate" className={styles.candidate} aria-labelledby="candidate-title">
-          <div className={styles.candidateHeading}><div><span className={styles.eyebrow}>0.2.4 · 本地候选</span><h2 id="candidate-title">重要选择，留给你。<br />繁琐步骤，交给工具。</h2></div><p>这一版重点打磨下载过程：参数不明确先问，确认过的选择保留，缺少技能时引导安装。当前尚未发布。</p></div>
+          <div className={styles.candidateHeading}><div><span className={styles.eyebrow}>0.2.4 · 公开测试版</span><h2 id="candidate-title">重要选择，留给你。<br />繁琐步骤，交给工具。</h2></div><p>这一版精简模型输入，保留已确认参数与任务状态；改进对话、登录和托盘，缺少技能时引导安装。</p></div>
           <div className={styles.highlightGrid}>
             <article><div className={styles.highlightText}><span className={styles.badge}>需求确认</span><h3>坐标系和历史时期，先选清楚。</h3><p>未明确的参数用选项卡询问。卡片留在会话中，可稍后打开；只改缩放等级时沿用已确认坐标系。</p></div><a className={styles.choiceScreenshot} href="/geod-site/agent/coordinate-choice.png" target="_blank" rel="noopener noreferrer" aria-label="查看完整的坐标系选择卡片"><img src="/geod-site/agent/coordinate-choice.png" width={620} height={760} alt="导出坐标系选择卡片，可选择 WGS84、Web 墨卡托、CGCS2000 或自定义坐标系" loading="lazy" /></a></article>
             <article><div className={styles.highlightText}><span className={styles.badge}>按需安装</span><h3>需要哪项 GIS 能力，就安装哪项。</h3><p>五项 GIS 技能可独立安装，共享已下载依赖。主安装包移除 Java 与本地 OCR；需要时再补充处理能力。</p></div><ul className={styles.skillList}>{gisSkills.map(([name, purpose]) => <li key={name}><Check size={18} aria-hidden="true" /><div><strong>{name}</strong><span>{purpose}</span></div></li>)}</ul><a className={styles.skillScreenshotLink} href="/geod-site/agent/gis-skills-light-20261008.png" target="_blank" rel="noopener noreferrer">查看技能界面截图 <ArrowUpRight size={15} aria-hidden="true" /></a></article>
@@ -161,7 +161,7 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
             <span className={styles.badge}>Windows x64 · 0.2.3 公开测试版</span>
             <h2 id="updates-title">下一次数据任务，<br />从一次对话开始。</h2>
             <p>先体验当前测试版，用你的实际工作流给我们反馈。关注公众号或加入技术交流群，获取版本更新与使用教程。</p>
-            <p className={styles.finePrint}>0.2.4 尚未发布，本页已明确标注本地候选改进。测试版不代表全部图源、规模或外部服务已经验收。</p>
+            <p className={styles.finePrint}>0.2.4 已发布为公开测试版。全新 Windows、全部图源、规模或外部服务尚未全部验收。</p>
             <div className={styles.actions}><CTALink href={AGENT_DOWNLOAD_URL}>官网下载 Windows 测试版 <ArrowRight size={16} aria-hidden="true" /></CTALink><CTALink href={AGENT_GITHUB_DOWNLOAD_URL} variant="secondary" className={styles.secondaryAction}>GitHub 下载 <ArrowUpRight size={16} aria-hidden="true" /></CTALink><Link className={styles.textLink} href="/mcp">已有 Agent？查看 MCP 接入 <ArrowRight size={16} aria-hidden="true" /></Link></div>
           </div>
           <div className={styles.qrGrid}>
