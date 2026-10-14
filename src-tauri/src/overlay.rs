@@ -5,7 +5,109 @@ use image::{DynamicImage, ImageFormat};
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+
+pub struct LayerDownloadReporter {
+    index: usize,
+    count: usize,
+    start: f64,
+    name: String,
+    last_emit: Option<Instant>,
+    last_log: Option<Instant>,
+    last_paused: Option<bool>,
+    last_bucket: u32,
+}
+
+pub struct LayerDownloadUpdate {
+    pub percent: f64,
+    pub message: String,
+    pub paused: bool,
+    pub log: bool,
+}
+
+impl LayerDownloadReporter {
+    pub fn new(index: usize, count: usize, name: &str) -> Self {
+        Self {
+            index,
+            count: count.max(1),
+            start: main_download_end(count),
+            name: name.into(),
+            last_emit: None,
+            last_log: None,
+            last_paused: None,
+            last_bucket: 0,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        progress: &crate::downloader::DownloadProgress,
+    ) -> Option<LayerDownloadUpdate> {
+        self.update_at(progress, Instant::now())
+    }
+
+    fn update_at(
+        &mut self,
+        progress: &crate::downloader::DownloadProgress,
+        now: Instant,
+    ) -> Option<LayerDownloadUpdate> {
+        let paused = progress.status == "paused";
+        let terminal = progress.status.starts_with("completed");
+        if !terminal
+            && self.last_paused == Some(paused)
+            && self
+                .last_emit
+                .is_some_and(|last| now.duration_since(last) < Duration::from_millis(500))
+        {
+            return None;
+        }
+        let fraction = (progress.completed as f64 / progress.total.max(1) as f64).clamp(0.0, 1.0);
+        let bucket = (fraction * 10.0).floor() as u32;
+        let log = terminal
+            || self.last_paused != Some(paused)
+            || bucket > self.last_bucket
+            || self
+                .last_log
+                .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(30));
+        self.last_emit = Some(now);
+        self.last_paused = Some(paused);
+        self.last_bucket = self.last_bucket.max(bucket);
+        if log {
+            self.last_log = Some(now);
+        }
+        let state = match progress.status.as_str() {
+            "downloading" => "下载中",
+            "paused" => "已暂停",
+            "completed" => "下载完成",
+            "completed_with_errors" => "下载完成，有失败瓦片",
+            "completed_with_no_data" => "下载完成，有无数据瓦片",
+            state => state,
+        };
+        Some(LayerDownloadUpdate {
+            // Allocate download progress across main imagery and annotation layers.
+            percent: self.start
+                + (87.0 - self.start) * (self.index as f64 + fraction) / self.count as f64,
+            message: format!(
+                "注记 {}/{} [{}]：{}/{}，失败 {}，无数据 {}；{}",
+                self.index + 1,
+                self.count,
+                self.name,
+                progress.completed,
+                progress.total,
+                progress.failed,
+                progress.no_data,
+                state
+            ),
+            paused,
+            log,
+        })
+    }
+}
+
+pub fn main_download_end(overlay_count: usize) -> f64 {
+    85.0 / (overlay_count as f64 + 1.0)
+}
 
 /// Only a bounded batch of paths crosses into the blocking image worker.
 /// Each encoded PNG is written directly to disk, never retained in the map.
@@ -26,6 +128,7 @@ pub async fn composite_tiles_to_disk(
             _ = cancellation.cancelled() => return Err("任务已取消".into()),
             _ = pause.wait_if_paused() => {},
         }
+        crate::fs_util::ensure_minimum_free_space(directory)?;
         let batch: Vec<_> = chunk
             .iter()
             .map(|&coord| {
@@ -81,7 +184,7 @@ pub fn composite_tile_to_disk(
         return Ok(false);
     }
     let bytes = main.bytes().map_err(|e| format!("读取主瓦片失败: {e}"))?;
-    let mut base = match image::load_from_memory(&bytes) {
+    let mut base = match crate::tile_payload::decode_image(&bytes) {
         Ok(image) => image.to_rgba8(),
         Err(_) => return Ok(false),
     };
@@ -89,7 +192,7 @@ pub fn composite_tile_to_disk(
     let mut layered = false;
     for overlay in overlays {
         let Ok(bytes) = overlay.bytes() else { continue };
-        let Ok(image) = image::load_from_memory(&bytes) else {
+        let Ok(image) = crate::tile_payload::decode_image(&bytes) else {
             continue;
         };
         let rgba = image.to_rgba8();
@@ -126,6 +229,138 @@ mod tests {
     use super::*;
     use image::{Rgba, RgbaImage};
 
+    fn download_progress(completed: u32, status: &str) -> crate::downloader::DownloadProgress {
+        crate::downloader::DownloadProgress {
+            total: 336_660,
+            completed,
+            failed: 0,
+            no_data: 0,
+            browse_filled: 0,
+            status: status.into(),
+        }
+    }
+
+    #[test]
+    fn annotation_progress_covers_each_layer_and_preserves_pause_retry_and_no_data() {
+        let now = Instant::now();
+        assert_eq!(main_download_end(0), 85.0);
+        let mut previous = main_download_end(3);
+        for index in 0..3 {
+            let mut reporter = LayerDownloadReporter::new(index, 3, "测试注记");
+            for step in 0..=10 {
+                let mut progress = download_progress(
+                    step * 33_666,
+                    if step == 10 {
+                        "completed_with_no_data"
+                    } else {
+                        "读取缓存瓦片"
+                    },
+                );
+                progress.no_data = 12;
+                let update = reporter
+                    .update_at(&progress, now + Duration::from_secs(step as u64))
+                    .unwrap();
+                assert!(update.percent >= previous && update.percent <= 87.0);
+                assert!(update.message.contains(&format!("注记 {}/3", index + 1)));
+                assert!(update.message.contains("无数据 12"));
+                previous = update.percent;
+            }
+        }
+        assert_eq!(previous, 87.0);
+        let mut reporter = LayerDownloadReporter::new(0, 1, "测试");
+        assert!(
+            reporter
+                .update_at(&download_progress(0, "downloading"), now)
+                .unwrap()
+                .log
+        );
+        assert!(reporter
+            .update_at(
+                &download_progress(1, "downloading"),
+                now + Duration::from_millis(1)
+            )
+            .is_none());
+        assert!(
+            reporter
+                .update_at(
+                    &download_progress(1, "paused"),
+                    now + Duration::from_millis(2)
+                )
+                .unwrap()
+                .paused
+        );
+        assert!(
+            !reporter
+                .update_at(
+                    &download_progress(1, "downloading"),
+                    now + Duration::from_millis(3)
+                )
+                .unwrap()
+                .paused
+        );
+        let retry = reporter
+            .update_at(
+                &download_progress(1, "重试第1轮：等待"),
+                now + Duration::from_secs(31),
+            )
+            .unwrap();
+        assert!(retry.log && retry.message.contains("重试第1轮"));
+        assert!(
+            reporter
+                .update_at(
+                    &download_progress(336_660, "completed"),
+                    now + Duration::from_secs(31)
+                )
+                .unwrap()
+                .log
+        );
+    }
+
+    #[tokio::test]
+    async fn large_three_layer_task_cancels_after_a_bounded_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut tiles, layers) = fixture_with_size(dir.path(), 336_660, 256);
+        let token = CancellationToken::new();
+        let output = dir.path().join("large-output");
+        let result = composite_tiles_to_disk(
+            &mut tiles,
+            &layers,
+            &output,
+            &token,
+            &PauseControl::default(),
+            |processed, total| {
+                assert_eq!(processed, 64);
+                assert_eq!(total, 336_660);
+                token.cancel();
+            },
+        )
+        .await;
+        assert!(result.unwrap_err().contains("取消"));
+        assert_eq!(
+            tiles
+                .values()
+                .filter(|tile| matches!(tile, TileSource::Path(path) if path.starts_with(&output)))
+                .count(),
+            64
+        );
+    }
+
+    #[test]
+    fn composite_decoder_rejects_oversized_annotation_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main.png");
+        let oversized = dir.path().join("oversized.png");
+        RgbaImage::new(4097, 1).save(&main).unwrap();
+        RgbaImage::new(4097, 1).save(&oversized).unwrap();
+        assert!(!composite_tile_to_disk(
+            &TileSource::from_path(main),
+            &[TileSource::from_path(oversized)],
+            &dir.path().join("out.png")
+        )
+        .unwrap());
+        assert!(!dir.path().join("out.png").exists());
+    }
+
     fn fixture(
         directory: &Path,
         count: u32,
@@ -133,8 +368,19 @@ mod tests {
         HashMap<(u32, u32), TileSource>,
         Vec<HashMap<(u32, u32), TileSource>>,
     ) {
+        fixture_with_size(directory, count, 2)
+    }
+
+    fn fixture_with_size(
+        directory: &Path,
+        count: u32,
+        side: u32,
+    ) -> (
+        HashMap<(u32, u32), TileSource>,
+        Vec<HashMap<(u32, u32), TileSource>>,
+    ) {
         let main_path = directory.join("main.png");
-        RgbaImage::from_pixel(2, 2, Rgba([10, 20, 30, 255]))
+        RgbaImage::from_pixel(side, side, Rgba([10, 20, 30, 255]))
             .save(&main_path)
             .unwrap();
         let main = TileSource::from_path(main_path);
@@ -145,7 +391,7 @@ mod tests {
             .enumerate()
         {
             let path = directory.join(format!("layer-{index}.png"));
-            RgbaImage::from_pixel(2, 2, Rgba(color))
+            RgbaImage::from_pixel(side, side, Rgba(color))
                 .save(&path)
                 .unwrap();
             let source = if index == 1 {

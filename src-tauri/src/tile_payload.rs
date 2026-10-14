@@ -3,6 +3,21 @@ use std::io::{Cursor, Read};
 
 pub const MAX_TILE_BYTES: usize = 16 * 1024 * 1024;
 
+pub fn decode_image(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    if bytes.is_empty() || bytes.len() > MAX_TILE_BYTES {
+        return Err("INVALID_TILE: 无效图像大小".into());
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| format!("INVALID_TILE: {e}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    reader.decode().map_err(|e| format!("INVALID_TILE: {e}"))
+}
+
 pub fn validate(bytes: &[u8], content_type: Option<&str>) -> Result<(), String> {
     let invalid =
         || "INVALID_TILE: 服务返回了无效瓦片，请检查图源或切换服务；未写入离线成果。".to_string();
@@ -19,17 +34,11 @@ pub fn validate(bytes: &[u8], content_type: Option<&str>) -> Result<(), String> 
     if mime.starts_with("text/") || mime.contains("json") || mime.contains("xml") {
         return Err(invalid());
     }
-    if let Ok(format) = image::guess_format(bytes) {
+    if image::guess_format(bytes).is_ok() {
         if mime.contains("protobuf") || mime.contains("mapbox-vector") {
             return Err(invalid());
         }
-        let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(4096);
-        limits.max_image_height = Some(4096);
-        limits.max_alloc = Some(64 * 1024 * 1024);
-        reader.limits(limits);
-        reader.decode().map_err(|_| invalid())?;
+        decode_image(bytes).map_err(|_| invalid())?;
         return Ok(());
     }
     if mime.starts_with("image/") {

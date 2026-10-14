@@ -56,6 +56,8 @@ pub fn is_terminal_download_error(error: &str) -> bool {
         "INVALID_TILE:",
         "TILE_TOO_LARGE:",
         "TILE_STORAGE_FAILED:",
+        "磁盘空间不足：",
+        "读取目标磁盘空间失败:",
     ]
     .iter()
     .any(|prefix| error.starts_with(prefix))
@@ -64,6 +66,14 @@ pub fn is_terminal_download_error(error: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn storage_reserve_errors_must_not_be_skipped_as_missing_annotations() {
+        for error in ["磁盘空间不足：任务数据已保留", "读取目标磁盘空间失败: test",
+            "TILE_STORAGE_FAILED: 写入缓存瓦片失败"] {
+            assert!(is_terminal_download_error(error));
+        }
+        assert!(!is_terminal_download_error("该区域在此缩放级别无可用数据（全部 64 张瓦片均返回 404）"));
+    }
     #[test]
     fn checks_normalized_host_instead_of_source_id_or_substrings() {
         for url in [

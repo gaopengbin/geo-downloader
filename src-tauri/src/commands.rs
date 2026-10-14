@@ -991,6 +991,19 @@ async fn execute_zoom_level(
         .map_err(|e| format!("创建临时目录失败: {}", e))?;
     task_log(app, tm, task_id, "INFO", &format!("瓦片临时目录: {}", temp_dir.display()));
     
+    // Resolve annotation layers before allocating download progress.
+    let all_sources = get_tile_sources(request.tianditu_token.clone());
+    let mut overlay_list: Vec<TileSource> = Vec::new();
+    for oid in request.overlay_sources.iter().flatten() {
+        let trimmed = oid.trim();
+        if trimmed.is_empty() || trimmed == request.source { continue; }
+        match all_sources.get(trimmed) {
+            Some(s) => overlay_list.push(s.clone()),
+            None => task_log(app, tm, task_id, "WARN", &format!("叠加图层不存在，已跳过: {}", trimmed)),
+        }
+    }
+    let main_download_end = crate::overlay::main_download_end(overlay_list.len());
+
     // 创建下载器
     let downloader = TileDownloader::new(source.clone(), request.proxy.as_deref())?
         .with_tianditu_tokens(tianditu_tokens.clone());
@@ -1007,6 +1020,7 @@ async fn execute_zoom_level(
     let mut last_log_pct: f64 = 0.0;
     
     let mut last_status = String::new();
+    let mut last_download_emit: Option<std::time::Instant> = None;
     let no_data_tracker = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let no_data_tracker_c = no_data_tracker.clone();
     
@@ -1015,15 +1029,27 @@ async fn execute_zoom_level(
     let mut tile_files = downloader.download_tiles(tiles, concurrency, &temp_dir, Some(cancel_token), Some(pause_control), move |progress| {
         no_data_tracker_c.store(progress.no_data, std::sync::atomic::Ordering::Relaxed);
         let p = progress.percent();
-        // 映射到本级 0-85% 范围，再映射到全局
-        let local_mapped = p * 0.85;
+        // Reserve progress for annotation downloads instead of declaring 85% at main completion.
+        let local_mapped = p * main_download_end / 100.0;
         let mapped = prog_off_dl + local_mapped * prog_span_dl / 100.0;
         
         // 检测重试状态变化，记录日志
         let is_terminal = progress.status == "completed" || progress.status == "completed_with_errors" || progress.status == "completed_with_no_data";
-        let is_normal = progress.status == "downloading" || is_terminal;
-        if progress.status != last_status {
-            last_status = progress.status.clone();
+        // Cache counters change every batch; keep them in the live message without
+        // appending thousands of log entries or refreshing the UI for every tile.
+        let status_key = if progress.status.starts_with("检查已有瓦片") { "checking_existing" }
+            else if progress.status.starts_with("查询缓存索引") { "checking_cache" }
+            else if progress.status.starts_with("读取缓存瓦片") { "reading_cache" }
+            else { progress.status.as_str() };
+        let is_normal = progress.status == "downloading" || is_terminal
+            || matches!(status_key, "checking_existing" | "checking_cache" | "reading_cache")
+            || progress.status.starts_with("缓存命中") || progress.status.starts_with("已跳过");
+        let status_changed = status_key != last_status;
+        if !is_terminal && !status_changed
+            && last_download_emit.is_some_and(|last| last.elapsed().as_millis() < 500) { return; }
+        last_download_emit = Some(std::time::Instant::now());
+        if status_changed {
+            last_status = status_key.to_string();
             if let Some(log) = tm_c.append_log(&tid, if is_normal { "INFO" } else { "WARN" }, &progress.status) {
                 let _ = app_c.emit(&format!("task-log-{}", tid), &log);
             }
@@ -1119,112 +1145,129 @@ async fn execute_zoom_level(
     // alpha-composite 到独立的 PNG 文件中，保留原始输入供中断恢复。downstream 流程（流式 GeoTIFF /
     // PNG / Mbtiles / 原始目录）随后会看到合成后的 PNG 内容，无须额外改造。
     let mut composited = false;
-    if let Some(overlay_ids) = request.overlay_sources.as_ref() {
-        // 过滤：剔除空白、与主源相同、不存在的图源
-        let all_sources = get_tile_sources(request.tianditu_token.clone());
-        let mut overlay_list: Vec<TileSource> = Vec::new();
-        for oid in overlay_ids {
-            let trimmed = oid.trim();
-            if trimmed.is_empty() || trimmed == request.source { continue; }
-            match all_sources.get(trimmed) {
-                Some(s) => overlay_list.push(s.clone()),
-                None => task_log(app, tm, task_id, "WARN", &format!("叠加图层不存在，已跳过: {}", trimmed)),
+    if !overlay_list.is_empty() && !tile_files.is_empty() {
+        task_log(app, tm, task_id, "INFO", &format!(
+            "叠加图层启用：{} 层 ({})",
+            overlay_list.len(),
+            overlay_list.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+        let p_overlay_start = map_progress(main_download_end);
+        tm.update_progress(task_id, TaskStatus::Downloading, p_overlay_start, completed_after_download, failed_after_download, Some("下载叠加图层...".to_string()));
+        let _ = app.emit(&event_name, TaskProgressPayload {
+            task_id: task_id.to_string(),
+            status: "downloading".to_string(),
+            progress: p_overlay_start,
+            completed: completed_after_download,
+            total: total_tiles,
+            message: Some("下载叠加图层...".to_string()),
+        });
+
+        // 重建 tile coord 列表（仅成功的主瓦片）
+        let main_tiles: Vec<crate::tile::TileCoord> = tile_files.keys()
+            .map(|&(x, y)| crate::tile::TileCoord { x, y, z: current_zoom })
+            .collect();
+
+        // 收集每层 overlay 的 tile_files
+        let mut per_layer_files: Vec<HashMap<(u32, u32), crate::merger::TileSource>> = Vec::with_capacity(overlay_list.len());
+        for (idx, ov_src) in overlay_list.iter().enumerate() {
+            if cancel_token.is_cancelled() {
+                return Err("任务已取消".to_string());
             }
-        }
-        if !overlay_list.is_empty() && !tile_files.is_empty() {
-            task_log(app, tm, task_id, "INFO", &format!(
-                "叠加图层启用：{} 层 ({})",
-                overlay_list.len(),
-                overlay_list.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
-            ));
-            let p_overlay_start = map_progress(85.0);
-            tm.update_progress(task_id, TaskStatus::Downloading, p_overlay_start, completed_after_download, failed_after_download, Some("下载叠加图层...".to_string()));
-            let _ = app.emit(&event_name, TaskProgressPayload {
-                task_id: task_id.to_string(),
-                status: "downloading".to_string(),
-                progress: p_overlay_start,
-                completed: completed_after_download,
-                total: total_tiles,
-                message: Some("下载叠加图层...".to_string()),
-            });
-
-            // 重建 tile coord 列表（仅成功的主瓦片）
-            let main_tiles: Vec<crate::tile::TileCoord> = tile_files.keys()
-                .map(|&(x, y)| crate::tile::TileCoord { x, y, z: current_zoom })
-                .collect();
-
-            // 收集每层 overlay 的 tile_files
-            let mut per_layer_files: Vec<HashMap<(u32, u32), crate::merger::TileSource>> = Vec::with_capacity(overlay_list.len());
-            for (idx, ov_src) in overlay_list.iter().enumerate() {
-                if cancel_token.is_cancelled() {
-                    return Err("任务已取消".to_string());
-                }
-                if current_zoom > ov_src.max_zoom {
-                    task_log(app, tm, task_id, "WARN", &format!(
-                        "叠加图层 [{}] max_zoom={} 不支持当前 z{}，本级跳过",
-                        ov_src.name, ov_src.max_zoom, current_zoom
-                    ));
-                    per_layer_files.push(HashMap::new());
-                    continue;
-                }
-                let ov_temp_dir = temp_dir.join(format!("__overlay_{}", idx));
-                std::fs::create_dir_all(&ov_temp_dir).map_err(|e| format!("创建叠加图层临时目录失败: {}", e))?;
-                let ov_dl = TileDownloader::new(ov_src.clone(), request.proxy.as_deref())?
-                    .with_tianditu_tokens(tianditu_tokens.clone());
-                let ov_files = ov_dl.download_tiles(
-                    main_tiles.clone(),
-                    request.concurrency,
-                    &ov_temp_dir,
-                    Some(cancel_token),
-                    Some(pause_control),
-                    |_p| {},
-                ).await.or_else(|e| {
-                    if crate::tile_policy::is_terminal_download_error(&e) { return Err(e); }
-                    task_log(app, tm, task_id, "WARN", &format!("叠加图层 [{}] 下载异常: {}（本层瓦片缺失部分将被跳过）", ov_src.name, e));
-                    Ok(HashMap::new())
-                })?;
-                task_log(app, tm, task_id, "INFO", &format!(
-                    "叠加图层 [{}] 完成：{}/{}",
-                    ov_src.name, ov_files.len(), main_tiles.len()
+            if current_zoom > ov_src.max_zoom {
+                task_log(app, tm, task_id, "WARN", &format!(
+                    "叠加图层 [{}] max_zoom={} 不支持当前 z{}，本级跳过",
+                    ov_src.name, ov_src.max_zoom, current_zoom
                 ));
-                per_layer_files.push(ov_files);
+                per_layer_files.push(HashMap::new());
+                continue;
             }
-
-            // 逐张合成落盘，导出仅持有路径；图像处理在 blocking worker 中进行。
-            let p_composite = map_progress(87.0);
-            tm.update_progress(task_id, TaskStatus::Downloading, p_composite, completed_after_download, failed_after_download, Some("合成叠加瓦片...".to_string()));
-            let (composite_ok, composite_err) = crate::overlay::composite_tiles_to_disk(
-                &mut tile_files,
-                &per_layer_files,
-                &temp_dir.join("__composited"),
-                cancel_token,
-                pause_control,
-                |processed, total| {
-                    let progress = map_progress(87.0 + 0.8 * processed as f64 / total.max(1) as f64);
-                    let message = format!("合成叠加瓦片：{}/{}", processed, total);
-                    tm.update_progress(task_id, TaskStatus::Downloading, progress, completed_after_download, failed_after_download, Some(message.clone()));
+            let ov_temp_dir = temp_dir.join(format!("__overlay_{}", idx));
+            std::fs::create_dir_all(&ov_temp_dir).map_err(|e| format!("创建叠加图层临时目录失败: {}", e))?;
+            let ov_dl = TileDownloader::new(ov_src.clone(), request.proxy.as_deref())?
+                .with_tianditu_tokens(tianditu_tokens.clone());
+            task_log(app, tm, task_id, "INFO", &format!(
+                "开始注记 {}/{} [{}]：{} 张瓦片（检查已有文件 / 读取缓存 / 网络下载）",
+                idx + 1, overlay_list.len(), ov_src.name, main_tiles.len()
+            ));
+            let mut reporter = crate::overlay::LayerDownloadReporter::new(idx, overlay_list.len(), &ov_src.name);
+            let ov_files = ov_dl.download_tiles(
+                main_tiles.clone(),
+                request.concurrency,
+                &ov_temp_dir,
+                Some(cancel_token),
+                Some(pause_control),
+                |download| {
+                    let Some(update) = reporter.update(&download) else { return };
+                    let progress = map_progress(update.percent);
+                    let status = if update.paused { TaskStatus::Paused } else { TaskStatus::Downloading };
+                    tm.update_progress(task_id, status, progress, completed_after_download,
+                        failed_after_download, Some(update.message.clone()));
                     let _ = app.emit(&event_name, TaskProgressPayload {
                         task_id: task_id.to_string(),
-                        status: "downloading".to_string(),
-                        progress,
-                        completed: completed_after_download,
-                        total: total_tiles,
-                        message: Some(message),
+                        status: if update.paused { "paused" } else { "downloading" }.into(),
+                        progress, completed: completed_after_download, total: total_tiles,
+                        message: Some(update.message.clone()),
                     });
+                    if update.log { task_log(app, tm, task_id, "INFO", &update.message); }
                 },
-            ).await?;
-            drop(per_layer_files);
-            // 清理 overlay 临时目录
-            for idx in 0..overlay_list.len() {
-                let _ = std::fs::remove_dir_all(temp_dir.join(format!("__overlay_{}", idx)));
-            }
+            ).await.or_else(|e| {
+                if cancel_token.is_cancelled() || crate::tile_policy::is_terminal_download_error(&e) { return Err(e); }
+                task_log(app, tm, task_id, "WARN", &format!("叠加图层 [{}] 下载异常: {}（本层瓦片缺失部分将被跳过）", ov_src.name, e));
+                Ok(HashMap::new())
+            })?;
             task_log(app, tm, task_id, "INFO", &format!(
-                "叠加合成完成：成功 {} / 跳过或失败 {}",
-                composite_ok, composite_err
+                "叠加图层 [{}] 完成：{}/{}",
+                ov_src.name, ov_files.len(), main_tiles.len()
             ));
-            if composite_ok > 0 {
-                composited = true;
-            }
+            per_layer_files.push(ov_files);
+        }
+
+        // 逐张合成落盘，导出仅持有路径；图像处理在 blocking worker 中进行。
+        let p_composite = map_progress(87.0);
+        tm.update_progress(task_id, TaskStatus::Downloading, p_composite, completed_after_download, failed_after_download, Some("合成叠加瓦片...".to_string()));
+        task_log(app, tm, task_id, "INFO", &format!("开始合成叠加瓦片：{} 张，{} 层", tile_files.len(), per_layer_files.len()));
+        let mut last_composite_log = std::time::Instant::now();
+        let mut last_composite_bucket = 0;
+        let mut last_composite_emit = std::time::Instant::now();
+        let (composite_ok, composite_err) = crate::overlay::composite_tiles_to_disk(
+            &mut tile_files,
+            &per_layer_files,
+            &temp_dir.join("__composited"),
+            cancel_token,
+            pause_control,
+            |processed, total| {
+                let progress = map_progress(87.0 + 0.8 * processed as f64 / total.max(1) as f64);
+                let message = format!("合成叠加瓦片：{}/{}", processed, total);
+                let bucket = processed.saturating_mul(10) / total.max(1);
+                if bucket > last_composite_bucket || last_composite_log.elapsed().as_secs() >= 30 {
+                    task_log(app, tm, task_id, "INFO", &message);
+                    last_composite_bucket = bucket;
+                    last_composite_log = std::time::Instant::now();
+                }
+                if processed != total && last_composite_emit.elapsed().as_millis() < 500 { return; }
+                last_composite_emit = std::time::Instant::now();
+                tm.update_progress(task_id, TaskStatus::Downloading, progress, completed_after_download, failed_after_download, Some(message.clone()));
+                let _ = app.emit(&event_name, TaskProgressPayload {
+                    task_id: task_id.to_string(),
+                    status: "downloading".to_string(),
+                    progress,
+                    completed: completed_after_download,
+                    total: total_tiles,
+                    message: Some(message),
+                });
+            },
+        ).await?;
+        drop(per_layer_files);
+        // 清理 overlay 临时目录
+        for idx in 0..overlay_list.len() {
+            let _ = std::fs::remove_dir_all(temp_dir.join(format!("__overlay_{}", idx)));
+        }
+        task_log(app, tm, task_id, "INFO", &format!(
+            "叠加合成完成：成功 {} / 跳过或失败 {}",
+            composite_ok, composite_err
+        ));
+        if composite_ok > 0 {
+            composited = true;
         }
     }
 

@@ -459,33 +459,51 @@ impl TileDownloader {
 
         // 检查已存在的瓦片文件（断点续传）
         let mut need_download: Vec<TileCoord> = Vec::new();
-        for (index, tile) in tiles.iter().enumerate() {
-            if index % 256 == 0 {
-                tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => return Err("任务已取消".into()),
-                    _ = async {
-                        if let Some(pc) = pause_control { pc.wait_if_paused().await; }
-                        tokio::task::yield_now().await;
-                    } => {},
-                }
+        progress_callback(DownloadProgress {
+            total, completed, failed, no_data: 0, browse_filled: 0,
+            status: format!("检查已有瓦片：0/{}", total),
+        });
+        let mut scanned = 0usize;
+        let mut scan_report = std::time::Instant::now();
+        for chunk in tiles.chunks(256) {
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                _ = async {
+                    if let Some(pc) = pause_control { pc.wait_if_paused().await; }
+                } => {},
             }
-            let sharded_path = temp_dir
-                .join(tile.x.to_string())
-                .join(format!("{}.png", tile.y));
-            let legacy_path = temp_dir.join(format!("{}_{}.png", tile.x, tile.y));
-            let file_path = if sharded_path.exists() {
-                sharded_path
-            } else {
-                legacy_path
-            };
-            if tile_payload::valid_file(&file_path) {
-                tile_files.insert((tile.x, tile.y), MergerTileSource::from_path(file_path));
-                completed += 1;
-            } else {
-                need_download.push(tile.clone());
+            let batch = chunk.to_vec();
+            let directory = temp_dir.clone();
+            let token = cancellation.clone();
+            let checked = tokio::task::spawn_blocking(move || {
+                let mut checked = Vec::with_capacity(batch.len());
+                for tile in batch {
+                    if token.is_cancelled() { return Err("任务已取消".to_string()); }
+                    let sharded = directory.join(tile.x.to_string()).join(format!("{}.png", tile.y));
+                    let path = if sharded.exists() { sharded }
+                        else { directory.join(format!("{}_{}.png", tile.x, tile.y)) };
+                    let existing = tile_payload::valid_file(&path).then_some(path);
+                    checked.push((tile, existing));
+                }
+                Ok(checked)
+            }).await.map_err(|e| format!("检查已有瓦片失败: {e}"))??;
+            scanned += checked.len();
+            for (tile, existing) in checked {
+                if let Some(path) = existing {
+                    tile_files.insert((tile.x, tile.y), MergerTileSource::from_path(path));
+                    completed += 1;
+                } else { need_download.push(tile); }
+            }
+            if scanned == tiles.len() || scan_report.elapsed().as_secs() >= 1 {
+                progress_callback(DownloadProgress {
+                    total, completed, failed, no_data: 0, browse_filled: 0,
+                    status: format!("检查已有瓦片：{}/{}", scanned, total),
+                });
+                scan_report = std::time::Instant::now();
             }
         }
+        drop(tiles);
         let skipped = completed;
 
         // 报告初始进度
@@ -520,51 +538,76 @@ impl TileDownloader {
                 .iter()
                 .map(|t| CacheCoord { z: t.z as u8, x: t.x, y: t.y })
                 .collect();
-            if let Ok(cached_set) = tcache::Store::global().contains_batch(&cache_src, &coords) {
-                if !cached_set.is_empty() {
-                    let (cached_tiles, mut real_need): (Vec<_>, Vec<_>) = need_download
-                        .into_iter()
-                        .partition(|t| {
-                            cached_set.contains(&CacheCoord {
-                                z: t.z as u8,
-                                x: t.x,
-                                y: t.y,
-                            })
-                        });
-
-                    for tile in cached_tiles {
-                        tokio::select! {
-                            biased;
-                            _ = cancellation.cancelled() => return Err("任务已取消".into()),
-                            _ = async {
-                                if let Some(pc) = pause_control { pc.wait_if_paused().await; }
-                            } => {},
-                        }
-                        let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
-                        if let Ok(Some(stored)) = tcache::Store::global().get(&cache_src, coord) {
-                            if tile_payload::validate(&stored.bytes, None).is_ok() {
-                                tile_files.insert(
-                                    (tile.x, tile.y),
-                                    persist_cached_tile(
-                                        temp_dir.join(tile.x.to_string()).join(format!("{}.png", tile.y)),
-                                        stored.bytes,
-                                    ).await?,
-                                );
-                                completed += 1;
-                                cache_hit_count += 1;
-                                if cache_hit_count % 1000 == 0 {
-                                    progress_callback(DownloadProgress {
-                                        total, completed, failed, no_data: 0, browse_filled: 0,
-                                        status: format!("读取缓存瓦片：{}/{}", completed, total),
-                                    });
-                                }
-                                continue;
-                            }
-                        }
-                        real_need.push(tile);
-                    }
-                    need_download = real_need;
+            let mut cached_set = std::collections::HashSet::new();
+            let mut queried = 0usize;
+            let mut query_report = std::time::Instant::now();
+            progress_callback(DownloadProgress {
+                total, completed, failed, no_data: 0, browse_filled: 0,
+                status: format!("查询缓存索引：0/{}", coords.len()),
+            });
+            for chunk in coords.chunks(1024) {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                    _ = async {
+                        if let Some(pc) = pause_control { pc.wait_if_paused().await; }
+                    } => {},
                 }
+                let batch = chunk.to_vec();
+                let source = cache_src.clone();
+                let found = tokio::task::spawn_blocking(move ||
+                    tcache::Store::global().contains_batch(&source, &batch))
+                    .await.map_err(|e| format!("查询缓存索引失败: {e}"))?;
+                if let Ok(found) = found { cached_set.extend(found); }
+                queried += chunk.len();
+                if queried == coords.len() || query_report.elapsed().as_secs() >= 1 {
+                    progress_callback(DownloadProgress {
+                        total, completed, failed, no_data: 0, browse_filled: 0,
+                        status: format!("查询缓存索引：{}/{}", queried, coords.len()),
+                    });
+                    query_report = std::time::Instant::now();
+                }
+            }
+            if !cached_set.is_empty() {
+                let (cached_tiles, mut real_need): (Vec<_>, Vec<_>) = need_download
+                    .into_iter()
+                    .partition(|t| {
+                        cached_set.contains(&CacheCoord {
+                            z: t.z as u8,
+                            x: t.x,
+                            y: t.y,
+                        })
+                    });
+
+                for chunk in cached_tiles.chunks(64) {
+                    tokio::select! {
+                        biased;
+                        _ = cancellation.cancelled() => return Err("任务已取消".into()),
+                        _ = async {
+                            if let Some(pc) = pause_control { pc.wait_if_paused().await; }
+                        } => {},
+                    }
+                    let batch = chunk.to_vec();
+                    let source = cache_src.clone();
+                    let directory = temp_dir.clone();
+                    let token = cancellation.clone();
+                    let restored = tokio::task::spawn_blocking(move || {
+                        restore_cached_batch(batch, &directory, &token,
+                            |coord| tcache::Store::global().get(&source, coord))
+                    }).await.map_err(|e| format!("读取缓存瓦片失败: {e}"))??;
+                    for (tile, path) in restored {
+                        if let Some(path) = path {
+                            tile_files.insert((tile.x, tile.y), path);
+                            completed += 1;
+                            cache_hit_count += 1;
+                        } else { real_need.push(tile); }
+                    }
+                    progress_callback(DownloadProgress {
+                        total, completed, failed, no_data: 0, browse_filled: 0,
+                        status: format!("读取缓存瓦片：{}/{}", completed, total),
+                    });
+                }
+                need_download = real_need;
             }
         }
         if cache_hit_count > 0 {
@@ -970,22 +1013,118 @@ async fn persist_cached_tile(
     path: std::path::PathBuf,
     bytes: Vec<u8>,
 ) -> Result<MergerTileSource, String> {
+    tokio::task::spawn_blocking(move || persist_cached_tile_on_disk(path, bytes))
+        .await.map_err(|e| format!("TILE_STORAGE_FAILED: 写入缓存瓦片失败: {e}"))?
+}
+
+fn persist_cached_tile_on_disk(path: std::path::PathBuf, bytes: Vec<u8>) -> Result<MergerTileSource, String> {
     let partial = path.with_extension("cache-part");
-    let result = async {
-        if let Some(parent) = path.parent() { tokio::fs::create_dir_all(parent).await?; }
-        tokio::fs::write(&partial, bytes).await?;
-        tokio::fs::rename(&partial, &path).await
-    }.await;
+    let result = (|| {
+        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+        std::fs::write(&partial, bytes)?;
+        std::fs::rename(&partial, &path)
+    })();
     if let Err(error) = result {
-        let _ = tokio::fs::remove_file(&partial).await;
+        let _ = std::fs::remove_file(&partial);
         return Err(format!("TILE_STORAGE_FAILED: 写入缓存瓦片失败: {error}"));
     }
     Ok(MergerTileSource::from_path(path))
 }
 
+fn restore_cached_batch(
+    batch: Vec<TileCoord>, directory: &Path, token: &CancellationToken,
+    mut read: impl FnMut(CacheCoord) -> Result<Option<StoredTile>, String>,
+) -> Result<Vec<(TileCoord, Option<MergerTileSource>)>, String> {
+    crate::fs_util::ensure_minimum_free_space(directory)
+        .map_err(|e| format!("TILE_STORAGE_FAILED: {e}"))?;
+    let mut restored = Vec::with_capacity(batch.len());
+    for tile in batch {
+        if token.is_cancelled() { return Err("任务已取消".into()); }
+        let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
+        let stored = read(coord).ok().flatten()
+            .filter(|stored| tile_payload::validate(&stored.bytes, None).is_ok());
+        let path = match stored {
+            Some(stored) => Some(persist_cached_tile_on_disk(
+                directory.join(tile.x.to_string()).join(format!("{}.png", tile.y)), stored.bytes)?),
+            None => None,
+        };
+        restored.push((tile, path));
+    }
+    Ok(restored)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_restore_reads_sqlite_one_tile_at_a_time_and_preserves_retry_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = tcache::store::TileStore::open(&dir.path().join("test.mbtiles"), "test").unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(256, 256))
+            .write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let original = png.into_inner();
+        let tiles: Vec<_> = (0..64).map(|x| TileCoord { x, y: 0, z: 15 }).collect();
+        for tile in &tiles {
+            store.put(CacheCoord { z: 15, x: tile.x, y: 0 }, &StoredTile {
+                bytes: if tile.x == 7 { b"bad cache".to_vec() } else { original.clone() },
+                content_type: "image/png".into(),
+            }).unwrap();
+        }
+        let out = dir.path().join("restored");
+        let paths = restore_cached_batch(tiles.clone(), &out, &CancellationToken::new(),
+            |coord| store.get(coord)).unwrap();
+        assert_eq!(paths.iter().filter(|(_, path)| path.is_some()).count(), 63);
+        for (tile, path) in paths {
+            if tile.x == 7 { assert!(path.is_none()); continue; }
+            assert!(matches!(path, Some(MergerTileSource::Path(_))));
+            assert_eq!(path.unwrap().bytes().unwrap().as_ref(), &original);
+            assert!(!out.join(format!("{}/0.cache-part", tile.x)).exists());
+        }
+        assert!(store.get(CacheCoord { z: 15, x: 7, y: 0 }).unwrap().is_some());
+        let cancelled = CancellationToken::new();
+        let mut reads = 0;
+        let result = restore_cached_batch(tiles.clone(), &dir.path().join("cancelled"), &cancelled,
+            |coord| { reads += 1; cancelled.cancel(); store.get(coord) });
+        assert!(result.unwrap_err().contains("取消"));
+        assert_eq!(reads, 1);
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        let error = restore_cached_batch(tiles, &blocked, &CancellationToken::new(),
+            |coord| store.get(coord)).unwrap_err();
+        assert!(error.starts_with("TILE_STORAGE_FAILED:"));
+        assert!(store.get(CacheCoord { z: 15, x: 0, y: 0 }).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn resumed_layer_reports_existing_scan_and_can_cancel_from_callback() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, requests, server) = mock_tile_server(wire("200 OK", "Content-Type: image/png\r\n", b"unused")).await;
+        let downloader = TileDownloader::new(custom_source(&url), None).unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(2, 2))
+            .write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let tiles: Vec<_> = (0..600).map(|x| TileCoord { x, y: 0, z: 15 }).collect();
+        for tile in &tiles {
+            std::fs::write(dir.path().join(format!("{}_0.png", tile.x)), png.get_ref()).unwrap();
+        }
+        let mut observed = Vec::new();
+        let paths = downloader.download_tiles(tiles.clone(), 4, dir.path(), None, None,
+            |p| observed.push(p)).await.unwrap();
+        assert_eq!(paths.len(), 600);
+        assert!(paths.values().all(|path| matches!(path, MergerTileSource::Path(_))));
+        assert!(observed.iter().any(|p| p.status == "检查已有瓦片：0/600"));
+        assert!(observed.iter().any(|p| p.status == "检查已有瓦片：600/600" && p.completed == 600));
+        assert_eq!(observed.last().unwrap().status, "completed");
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        let token = CancellationToken::new();
+        let result = downloader.download_tiles(tiles, 4, dir.path(), Some(&token), None,
+            |p| { if p.status.starts_with("检查已有瓦片") { token.cancel(); } }).await;
+        assert!(result.unwrap_err().contains("取消"));
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
 
     #[tokio::test]
     async fn cached_payload_is_persisted_and_only_a_path_is_retained() {
