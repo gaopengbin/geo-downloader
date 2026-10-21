@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/agent" },
   openGraph: {
     title: "GeoD Agent｜用对话完成地理数据任务",
-    description: "对话、地图与成果，在一个工作区中。Windows 正式版 0.2.8 现已发布。",
+    description: "对话、地图与成果，在一个工作区中。Windows 正式版 0.2.9 现已发布。",
     url: "/agent",
     images: [{ url: "/geod-site/agent/demo-poster-20261008-v6.jpg", width: 1920, height: 1080, alt: "GeoD Agent 对话与地图工作区" }],
   },
@@ -73,7 +73,7 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
             <CTALink href="#demo" variant="secondary" className={styles.secondaryAction}>观看演示</CTALink>
             <a className={styles.textLink} href="https://github.com/gaopengbin/geod-agent" target="_blank" rel="noopener noreferrer"><Github size={17} aria-hidden="true" />查看开源代码</a>
           </div>
-          <p className={styles.releaseNote}>当前可下载 0.2.8 正式版 · Windows x64<a href="#candidate">查看 0.2.8 本次改进 <ArrowRight size={13} aria-hidden="true" /></a></p>
+          <p className={styles.releaseNote}>当前可下载 0.2.9 正式版 · Windows x64<a href="#candidate">查看 0.2.9 本次改进 <ArrowRight size={13} aria-hidden="true" /></a></p>
           <p className={styles.releaseNote}>官网下载已接入国内 CDN；GitHub 为备用下载入口。</p>
           <div className={styles.promiseRow}>
             {["任务执行在本机", "图源与范围可核对", "成果文件可带走"].map((text) => <span key={text}><Check size={15} aria-hidden="true" />{text}</span>)}
@@ -121,7 +121,7 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
 
 
         <section id="candidate" className={styles.candidate} aria-labelledby="candidate-title">
-          <div className={styles.candidateHeading}><div><span className={styles.eyebrow}>0.2.8 · 正式版</span><h2 id="candidate-title">重要选择，留给你。<br />繁琐步骤，交给工具。</h2></div><p>这一版增加跨工具步骤记录、本机成果验收与局部恢复，并修复模型断连后的继续入口，减少重复下载和重复确认。</p></div>
+          <div className={styles.candidateHeading}><div><span className={styles.eyebrow}>0.2.9 · 正式版</span><h2 id="candidate-title">重要选择，留给你。<br />繁琐步骤，交给工具。</h2></div><p>这一版增加自愿开启的 Agent 活跃与自有模型渠道用量统计，下载统计独立控制；测试账号单独标记并从用户使用报表排除。</p></div>
           <div className={styles.highlightGrid}>
             <article><div className={styles.highlightText}><span className={styles.badge}>需求确认</span><h3>坐标系和历史时期，先选清楚。</h3><p>未明确的参数用选项卡询问。卡片留在会话中，可稍后打开；只改缩放等级时沿用已确认坐标系。</p></div><a className={styles.choiceScreenshot} href="/geod-site/agent/coordinate-choice.png" target="_blank" rel="noopener noreferrer" aria-label="查看完整的坐标系选择卡片"><img src="/geod-site/agent/coordinate-choice.png" width={620} height={760} alt="导出坐标系选择卡片，可选择 WGS84、Web 墨卡托、CGCS2000 或自定义坐标系" loading="lazy" /></a></article>
             <article><div className={styles.highlightText}><span className={styles.badge}>按需安装</span><h3>需要哪项 GIS 能力，就安装哪项。</h3><p>五项 GIS 技能可独立安装，共享已下载依赖。主安装包移除 Java 与本地 OCR；需要时再补充处理能力。</p></div><ul className={styles.skillList}>{gisSkills.map(([name, purpose]) => <li key={name}><Check size={18} aria-hidden="true" /><div><strong>{name}</strong><span>{purpose}</span></div></li>)}</ul><a className={styles.skillScreenshotLink} href="/geod-site/agent/gis-skills-light-20261008.png" target="_blank" rel="noopener noreferrer">查看技能界面截图 <ArrowUpRight size={15} aria-hidden="true" /></a></article>
@@ -158,10 +158,10 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
 
         <section id="updates" className={styles.updates} aria-labelledby="updates-title">
           <div className={styles.updateCopy}>
-            <span className={styles.badge}>Windows x64 · 0.2.8 正式版</span>
+            <span className={styles.badge}>Windows x64 · 0.2.9 正式版</span>
             <h2 id="updates-title">下一次数据任务，<br />从一次对话开始。</h2>
             <p>下载正式版，用 AI 对话完成地理数据任务。关注公众号或加入技术交流群，获取版本更新与使用教程。</p>
-            <p className={styles.finePrint}>0.2.8 已正式发布。功能与验证范围见版本说明；全新 Windows 和部分外部服务尚未覆盖。</p>
+            <p className={styles.finePrint}>0.2.9 已正式发布。功能与验证范围见版本说明；全新 Windows 和部分外部服务尚未覆盖。</p>
             <div className={styles.actions}><CTALink href={AGENT_DOWNLOAD_URL}>官网下载 Windows 正式版 <ArrowRight size={16} aria-hidden="true" /></CTALink><CTALink href={AGENT_GITHUB_DOWNLOAD_URL} variant="secondary" className={styles.secondaryAction}>GitHub 下载 <ArrowUpRight size={16} aria-hidden="true" /></CTALink><Link className={styles.textLink} href="/mcp">已有 Agent？查看 MCP 接入 <ArrowRight size={16} aria-hidden="true" /></Link></div>
           </div>
           <div className={styles.qrGrid}>
