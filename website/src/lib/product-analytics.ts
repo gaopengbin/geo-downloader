@@ -1,5 +1,9 @@
 const productionEndpoint = 'https://laogao.xyz/platform-api/v1/product-events'
 const visitorStorageKey = 'geod-web:analytics-visitor'
+export function setAnalyticsAudience(value: 'internal' | 'unclassified') {
+  localStorage.setItem('geod-web:analytics-audience', value);
+}
+
 const sessionStorageKey = 'geod-web:analytics-session'
 
 export type EventName =
@@ -62,7 +66,7 @@ export async function trackProductEvent(event: EventName, properties: Properties
           occurred_at: new Date().toISOString(),
           visitor_id: identifier(localStorage, visitorStorageKey),
           session_id: identifier(sessionStorage, sessionStorageKey),
-          properties: { ...context(), ...properties },
+          properties: { ...context(), ...properties, ...(localStorage.getItem('geod-web:analytics-audience') === 'internal' || process.env.NEXT_PUBLIC_ANALYTICS_INTERNAL === '1' ? { source: 'geod-internal' } : {}) },
         }],
       }),
       keepalive: true,
