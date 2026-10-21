@@ -1,6 +1,48 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { DownloadLifecycleTracker } from './download-lifecycle.ts'
+import { DownloadLifecycleTracker, reasonBucket } from './download-lifecycle.ts'
+
+test('stable download codes classify access, quota, rate limits, source data and storage errors', () => {
+  const cases = [
+    ['TILE_ACCESS_DENIED: HTTP 403; 请检查权限', 'auth'],
+    ['任务失败: TILE_TOKENS_EXHAUSTED: 所有 Token 额度不足', 'auth'],
+    ['TILE_RATE_LIMITED: HTTP 429', 'network'],
+    ['INVALID_TILE: 服务返回无效瓦片', 'network'],
+    ['TILE_TOO_LARGE: response exceeds limit', 'network'],
+    ['OSM_OFFLINE_FORBIDDEN: 请切换图源', 'permission'],
+    ['CARTO_OFFLINE_FORBIDDEN: API key required', 'permission'],
+    ['TILE_REDIRECT_DENIED: redirect rejected', 'permission'],
+    ['TILE_STORAGE_FAILED: 写入缓存瓦片失败: 指定的网络名不再可用 (os error 64)', 'disk'],
+    ['TILE_STORAGE_FAILED: Permission denied', 'permission'],
+    ['TILE_STORAGE_FAILED: 拒绝访问 (os error 5)', 'permission'],
+    ['写入合成瓦片失败: 磁盘空间不足', 'disk'],
+    ['创建叠加图层临时目录失败: I/O error', 'disk'],
+    ['HTTP 401 Unauthorized', 'auth'],
+    ['HTTP 403 Forbidden', 'auth'],
+    ['天地图 Token 失效，请重新保存', 'auth'],
+    ['令牌额度耗尽', 'auth'],
+    ['该区域无可用数据（全部瓦片均返回 404）', 'missing_tiles'],
+    ['下载超时，connection reset', 'network'],
+    ['请求过于频繁，请稍后重试', 'network'],
+    ['EACCES: open failed', 'permission'],
+    ['ENOSPC: no space left on device', 'disk'],
+    ['下载失败：403 张瓦片；文件 401.png', 'unknown'],
+    ['未识别的处理异常', 'unknown'],
+  ] as const
+  for (const [message, expected] of cases) assert.equal(reasonBucket('failed', message), expected, message)
+  assert.equal(reasonBucket('completed', 'TILE_STORAGE_FAILED:'), 'none')
+  assert.equal(reasonBucket('cancelled', 'TILE_RATE_LIMITED:'), 'cancelled')
+  assert.equal(reasonBucket('completed_with_gaps', 'TILE_TOKENS_EXHAUSTED:'), 'missing_tiles')
+})
+
+test('classification sends categories without leaking raw errors, paths or credentials', () => {
+  const tracker = new DownloadLifecycleTracker(() => 'attempt-1', () => 0)
+  tracker.observe([{id:'private-job', status:'downloading'}])
+  const events = tracker.observe([{id:'private-job', status:'failed', error:'TILE_TOKENS_EXHAUSTED: token=private-secret', message:'C:/private/output.png'}])
+  assert.equal(events[0].reason, 'auth')
+  assert.deepEqual(Object.keys(events[0]).sort(), ['attempt_id','duration','reason','state'])
+  assert.doesNotMatch(JSON.stringify(events), /private|secret|output|TILE_TOKENS/)
+})
 
 test('restarting the observer preserves attempt IDs and does not replay terminal outcomes', () => {
   let id = 0

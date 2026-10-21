@@ -15,10 +15,20 @@ export function reasonBucket(state: string, error?: string): DownloadReason {
   if (state === 'cancelled') return 'cancelled'
   if (state === 'completed_with_gaps') return 'missing_tiles'
   if (state !== 'failed') return 'none'
-  if (/disk|space|磁盘|空间不足/i.test(error ?? '')) return 'disk'
-  if (/permission|denied|权限/i.test(error ?? '')) return 'permission'
-  if (/401|403|auth|unauthorized|登录/i.test(error ?? '')) return 'auth'
-  if (/timeout|network|connect|超时|网络/i.test(error ?? '')) return 'network'
+  const text = error ?? ''
+  // Keep the wire schema unchanged. Match stable downloader codes before words
+  // such as "denied", "permission" or "network" inside nested error messages.
+  if (/\b(?:TILE_ACCESS_DENIED|TILE_TOKENS_EXHAUSTED):/.test(text)) return 'auth'
+  if (/\b(?:OSM_OFFLINE_FORBIDDEN|CARTO_OFFLINE_FORBIDDEN|TILE_REDIRECT_DENIED):/.test(text)) return 'permission'
+  if (/\b(?:TILE_RATE_LIMITED|INVALID_TILE|TILE_TOO_LARGE):/.test(text)) return 'network'
+  if (/\bTILE_STORAGE_FAILED:/.test(text)) {
+    return /permission denied|access (?:is )?denied|EACCES|EPERM|拒绝访问|权限|只读|read.only/i.test(text) ? 'permission' : 'disk'
+  }
+  if (/(?:HTTP(?:\/[\d.]+)?|status(?: code)?|状态码)[\s:：=]*(?:401|403)\b|unauthorized|认证失败|登录|(?:token|api[ _-]?key).*(?:invalid|expired|exhausted|失效|无效|耗尽|额度)|(?:令牌|密钥|额度|配额).*(?:不足|无效|失效|耗尽)/i.test(text)) return 'auth'
+  if (/permission|access (?:is )?denied|EACCES|EPERM|权限|拒绝访问|只读|read.only/i.test(text)) return 'permission'
+  if (/disk|ENOSPC|no space left|磁盘|空间不足|写入(?:缓存|合成)?瓦片失败|创建.*目录失败/i.test(text)) return 'disk'
+  if (/no_data|\b404\b|无可用数据|无覆盖|缺块|瓦片缺失/i.test(text)) return 'missing_tiles'
+  if (/timeout|network|connect|DNS|ECONN|ENOTFOUND|\b429\b|超时|网络|连接|限流|请求过于频繁|频率限制/i.test(text)) return 'network'
   return 'unknown'
 }
 
