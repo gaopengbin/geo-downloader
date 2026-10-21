@@ -8,6 +8,56 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+pub const OVERLAY_DOWNLOAD_END: f64 = 60.0;
+pub const COMPOSITE_END: f64 = 88.0;
+
+/// Report completed work, not elapsed-time estimates. Final updates bypass throttling.
+pub struct TileStageReporter {
+    start: f64,
+    end: f64,
+    label: String,
+    last_emit: Option<Instant>,
+    last_log: Option<Instant>,
+    last_bucket: usize,
+}
+
+pub struct TileStageUpdate {
+    pub percent: f64,
+    pub message: String,
+    pub log: bool,
+}
+
+impl TileStageReporter {
+    pub fn new(start: f64, end: f64, label: &str) -> Self {
+        Self { start, end, label: label.into(), last_emit: None, last_log: None, last_bucket: 0 }
+    }
+
+    pub fn update(&mut self, processed: usize, total: usize) -> Option<TileStageUpdate> {
+        self.update_at(processed, total, Instant::now())
+    }
+
+    fn update_at(&mut self, processed: usize, total: usize, now: Instant) -> Option<TileStageUpdate> {
+        let processed = processed.min(total);
+        let terminal = processed == total;
+        if !terminal && self.last_emit.is_some_and(|last| now.duration_since(last) < Duration::from_millis(500)) {
+            return None;
+        }
+        let fraction = if total == 0 { 1.0 } else { processed as f64 / total as f64 };
+        let bucket = (fraction * 10.0).floor() as usize;
+        let log = terminal || self.last_log.is_none()
+            || bucket > self.last_bucket
+            || self.last_log.is_some_and(|last| now.duration_since(last) >= Duration::from_secs(30));
+        self.last_emit = Some(now);
+        if log { self.last_log = Some(now); }
+        self.last_bucket = self.last_bucket.max(bucket);
+        Some(TileStageUpdate {
+            percent: self.start + (self.end - self.start) * fraction,
+            message: format!("{}：{}/{}", self.label, processed, total),
+            log,
+        })
+    }
+}
+
 pub struct LayerDownloadReporter {
     index: usize,
     count: usize,
@@ -87,7 +137,7 @@ impl LayerDownloadReporter {
         Some(LayerDownloadUpdate {
             // Allocate download progress across main imagery and annotation layers.
             percent: self.start
-                + (87.0 - self.start) * (self.index as f64 + fraction) / self.count as f64,
+                + (OVERLAY_DOWNLOAD_END - self.start) * (self.index as f64 + fraction) / self.count as f64,
             message: format!(
                 "注记 {}/{} [{}]：{}/{}，失败 {}，无数据 {}；{}",
                 self.index + 1,
@@ -106,7 +156,7 @@ impl LayerDownloadReporter {
 }
 
 pub fn main_download_end(overlay_count: usize) -> f64 {
-    85.0 / (overlay_count as f64 + 1.0)
+    if overlay_count == 0 { 85.0 } else { OVERLAY_DOWNLOAD_END / (overlay_count as f64 + 1.0) }
 }
 
 /// Only a bounded batch of paths crosses into the blocking image worker.
@@ -241,6 +291,94 @@ mod tests {
     }
 
     #[test]
+    fn stage_updates_throttle_but_force_final_counts_and_keep_completion_below_100() {
+        let now = Instant::now();
+        let mut reporter = TileStageReporter::new(88.0, 99.0, "写出原始瓦片目录");
+        let initial = reporter.update_at(0, 336_660, now).unwrap();
+        assert_eq!(initial.percent, 88.0);
+        assert!(initial.message.contains("0/336660"));
+        assert!(initial.log);
+        assert!(reporter.update_at(1, 336_660, now + Duration::from_millis(10)).is_none());
+        let middle = reporter.update_at(168_330, 336_660, now + Duration::from_millis(500)).unwrap();
+        assert_eq!(middle.percent, 93.5);
+        assert!(middle.message.contains("168330/336660"));
+        let end = reporter.update_at(336_660, 336_660, now + Duration::from_millis(501)).unwrap();
+        assert_eq!(end.percent, 99.0);
+        assert!(end.log && end.message.contains("336660/336660"));
+        assert_eq!(TileStageReporter::new(88.0, 99.0, "空任务").update_at(0, 0, now).unwrap().percent, 99.0);
+    }
+
+    #[test]
+    fn large_overlay_job_advances_through_download_composite_and_export_without_regression() {
+        let now = Instant::now();
+        for count in [1, 3] {
+            let mut previous = main_download_end(count);
+            for index in 0..count {
+                let update = LayerDownloadReporter::new(index, count, "注记")
+                    .update_at(&download_progress(336_660, "completed"), now).unwrap();
+                assert!(update.percent >= previous);
+                previous = update.percent;
+            }
+            assert_eq!(previous, 60.0);
+            for (start, end, label) in [(60.0, 88.0, "合成叠加瓦片"), (88.0, 99.0, "写出原始瓦片目录")] {
+                let mut reporter = TileStageReporter::new(start, end, label);
+                for step in 0..=10 {
+                    let update = reporter.update_at(step * 33_666, 336_660, now + Duration::from_secs(step as u64)).unwrap();
+                    assert!(update.percent >= previous && update.percent <= end);
+                    // Multi-zoom overall progress uses the same affine mapping.
+                    assert!(25.0 + update.percent * 0.5 >= 25.0 + previous * 0.5);
+                    previous = update.percent;
+                }
+            }
+            assert_eq!(previous, 99.0);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the recorded 336660-tile stress trace"]
+    fn replay_large_task_progress_trace() {
+        let trace = std::fs::read_to_string(std::env::var("GEOD_PROGRESS_TRACE").expect("trace path")).unwrap();
+        let now = Instant::now();
+        let mut layers: Vec<_> = (0..3).map(|i| LayerDownloadReporter::new(i,3,"注记")).collect();
+        let mut composite = TileStageReporter::new(OVERLAY_DOWNLOAD_END,COMPOSITE_END,"合成叠加瓦片");
+        let mut previous = 0.0;
+        let mut output = Vec::new();
+        for line in trace.lines() {
+            let event: serde_json::Value = serde_json::from_str(line).unwrap();
+            let phase = event["phase"].as_str().unwrap();
+            let done = event["done"].as_u64().unwrap() as usize;
+            let total = event["total"].as_u64().unwrap() as usize;
+            let elapsed = event["elapsed_seconds"].as_f64().unwrap();
+            let instant = now + Duration::from_secs_f64(elapsed);
+            let percent = match phase {
+                "main" => Some(main_download_end(3)*done as f64/total as f64),
+                "annotation-1" | "annotation-2" | "annotation-3" => {
+                    let index = phase.chars().last().unwrap().to_digit(10).unwrap() as usize-1;
+                    layers[index].update_at(&download_progress(done as u32,if done==total {"completed"} else {"downloading"}),instant).map(|u|u.percent)
+                },
+                "composite" => composite.update_at(done,total,instant).map(|u|u.percent),
+                "raw-export" => Some(88.0),
+                "completed" => Some(100.0),
+                _ => None,
+            };
+            if let Some(percent) = percent {
+                assert!(percent>=previous && percent<=100.0,"regression at {phase}: {previous} -> {percent}");
+                previous=percent;
+                output.push(serde_json::json!({"phase":phase,"done":done,"total":total,"elapsed_seconds":elapsed,"percent":percent}));
+            }
+        }
+        assert_eq!(previous,100.0);
+        let composite: Vec<_> = output.iter().filter(|e|e["phase"]=="composite").collect();
+        assert_eq!(composite.first().unwrap()["percent"],60.0);
+        assert_eq!(composite.last().unwrap()["percent"],88.0);
+        assert!(composite.len()>1000);
+        if let Ok(path) = std::env::var("GEOD_PROGRESS_REPLAY_OUTPUT") {
+            std::fs::write(path,serde_json::to_vec_pretty(&output).unwrap()).unwrap();
+        }
+        println!("replayed_events={} composite_events={} composite_range=60..88 regressions=0",output.len(),composite.len());
+    }
+
+    #[test]
     fn annotation_progress_covers_each_layer_and_preserves_pause_retry_and_no_data() {
         let now = Instant::now();
         assert_eq!(main_download_end(0), 85.0);
@@ -260,13 +398,13 @@ mod tests {
                 let update = reporter
                     .update_at(&progress, now + Duration::from_secs(step as u64))
                     .unwrap();
-                assert!(update.percent >= previous && update.percent <= 87.0);
+                assert!(update.percent >= previous && update.percent <= OVERLAY_DOWNLOAD_END);
                 assert!(update.message.contains(&format!("注记 {}/3", index + 1)));
                 assert!(update.message.contains("无数据 12"));
                 previous = update.percent;
             }
         }
-        assert_eq!(previous, 87.0);
+        assert_eq!(previous, OVERLAY_DOWNLOAD_END);
         let mut reporter = LayerDownloadReporter::new(0, 1, "测试");
         assert!(
             reporter

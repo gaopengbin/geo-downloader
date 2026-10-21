@@ -1223,12 +1223,16 @@ async fn execute_zoom_level(
         }
 
         // 逐张合成落盘，导出仅持有路径；图像处理在 blocking worker 中进行。
-        let p_composite = map_progress(87.0);
-        tm.update_progress(task_id, TaskStatus::Downloading, p_composite, completed_after_download, failed_after_download, Some("合成叠加瓦片...".to_string()));
+        let p_composite = map_progress(crate::overlay::OVERLAY_DOWNLOAD_END);
+        let composite_message = format!("合成叠加瓦片：0/{}", tile_files.len());
+        tm.update_progress(task_id, TaskStatus::Downloading, p_composite, completed_after_download, failed_after_download, Some(composite_message.clone()));
+        let _ = app.emit(&event_name, TaskProgressPayload {
+            task_id: task_id.to_string(), status: "downloading".into(), progress: p_composite,
+            completed: completed_after_download, total: total_tiles, message: Some(composite_message),
+        });
         task_log(app, tm, task_id, "INFO", &format!("开始合成叠加瓦片：{} 张，{} 层", tile_files.len(), per_layer_files.len()));
-        let mut last_composite_log = std::time::Instant::now();
-        let mut last_composite_bucket = 0;
-        let mut last_composite_emit = std::time::Instant::now();
+        let mut composite_reporter = crate::overlay::TileStageReporter::new(
+            crate::overlay::OVERLAY_DOWNLOAD_END, crate::overlay::COMPOSITE_END, "合成叠加瓦片");
         let (composite_ok, composite_err) = crate::overlay::composite_tiles_to_disk(
             &mut tile_files,
             &per_layer_files,
@@ -1236,16 +1240,10 @@ async fn execute_zoom_level(
             cancel_token,
             pause_control,
             |processed, total| {
-                let progress = map_progress(87.0 + 0.8 * processed as f64 / total.max(1) as f64);
-                let message = format!("合成叠加瓦片：{}/{}", processed, total);
-                let bucket = processed.saturating_mul(10) / total.max(1);
-                if bucket > last_composite_bucket || last_composite_log.elapsed().as_secs() >= 30 {
-                    task_log(app, tm, task_id, "INFO", &message);
-                    last_composite_bucket = bucket;
-                    last_composite_log = std::time::Instant::now();
-                }
-                if processed != total && last_composite_emit.elapsed().as_millis() < 500 { return; }
-                last_composite_emit = std::time::Instant::now();
+                let Some(update) = composite_reporter.update(processed, total) else { return };
+                let progress = map_progress(update.percent);
+                let message = update.message;
+                if update.log { task_log(app, tm, task_id, "INFO", &message); }
                 tm.update_progress(task_id, TaskStatus::Downloading, progress, completed_after_download, failed_after_download, Some(message.clone()));
                 let _ = app.emit(&event_name, TaskProgressPayload {
                     task_id: task_id.to_string(),
@@ -1404,23 +1402,39 @@ async fn execute_zoom_level(
             "使用{}输出（{} 张，扩展名 .{}）", label, actual_count, ext
         ));
         let p_export = map_progress(88.0);
-        tm.update_progress(task_id, TaskStatus::Exporting, p_export, completed_after_download, failed_after_download, Some(format!("写出{}...", label)));
+        let export_message = format!("写出{}：0/{}", label, tile_files.len());
+        tm.update_progress(task_id, TaskStatus::Exporting, p_export, completed_after_download, failed_after_download, Some(export_message.clone()));
         let _ = app.emit(&event_name, TaskProgressPayload {
             task_id: task_id.to_string(),
             status: "exporting".to_string(),
             progress: p_export,
             completed: completed_after_download,
             total: total_tiles,
-            message: Some(format!("写出{}...", label)),
+            message: Some(export_message),
         });
         let sp = save_path.clone();
         let cz = current_zoom;
         let tile_files_clone = tile_files.clone();
+        let export_app = app.clone();
+        let export_tm = tm.clone();
+        let export_id = task_id.to_string();
+        let export_event = event_name.clone();
         // Issue #32：瓦片已直接下载到 save_path，就地 rename 重组目录结构
         file_size = tokio::task::spawn_blocking(move || -> Result<u64, String> {
             let dir = std::path::Path::new(&sp);
             std::fs::create_dir_all(dir).map_err(|e| format!("创建输出目录失败 {}: {}", dir.display(), e))?;
-            crate::tile_pack::rename_raw_tiles_in_place(dir, cz, &tile_files_clone, ext)
+            let mut reporter = crate::overlay::TileStageReporter::new(88.0, 99.0, &format!("写出{}", label));
+            crate::tile_pack::rename_raw_tiles_in_place_with_progress(dir, cz, &tile_files_clone, ext, |processed, total| {
+                let Some(update) = reporter.update(processed, total) else { return };
+                let progress = prog_off + update.percent * prog_span / 100.0;
+                if update.log { task_log(&export_app, &export_tm, &export_id, "INFO", &update.message); }
+                export_tm.update_progress(&export_id, TaskStatus::Exporting, progress, completed_after_download,
+                    failed_after_download, Some(update.message.clone()));
+                let _ = export_app.emit(&export_event, TaskProgressPayload {
+                    task_id: export_id.clone(), status: "exporting".into(), progress,
+                    completed: completed_after_download, total: total_tiles, message: Some(update.message),
+                });
+            })
         }).await.map_err(|e| format!("原始瓦片写盘失败: {}", e))??;
     } else if is_pack {
         // ===== MBTiles / GPKG 直接打包瓦片（不拼接、不重投影）=====

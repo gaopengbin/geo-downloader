@@ -651,12 +651,24 @@ pub fn rename_raw_tiles_in_place(
     tile_files: &HashMap<(u32, u32), TileSource>,
     extension: &str,
 ) -> Result<u64, String> {
+    rename_raw_tiles_in_place_with_progress(save_dir, z, tile_files, extension, |_, _| {})
+}
+
+/// Invoke the callback only after a file has been successfully moved or written.
+pub fn rename_raw_tiles_in_place_with_progress(
+    save_dir: &Path,
+    z: u8,
+    tile_files: &HashMap<(u32, u32), TileSource>,
+    extension: &str,
+    mut progress: impl FnMut(usize, usize),
+) -> Result<u64, String> {
     let ext = extension.trim_start_matches('.');
     let z_dir = save_dir.join(z.to_string());
     std::fs::create_dir_all(&z_dir)
         .map_err(|e| format!("创建目录失败 {}: {}", z_dir.display(), e))?;
     let mut total: u64 = 0;
-    for ((x, y), source) in tile_files.iter() {
+    progress(0, tile_files.len());
+    for (index, ((x, y), source)) in tile_files.iter().enumerate() {
         let x_dir = z_dir.join(x.to_string());
         std::fs::create_dir_all(&x_dir)
             .map_err(|e| format!("创建目录失败 {}: {}", x_dir.display(), e))?;
@@ -680,6 +692,7 @@ pub fn rename_raw_tiles_in_place(
                 total = total.saturating_add(b.len() as u64);
             }
         }
+        progress(index + 1, tile_files.len());
     }
     Ok(total)
 }
@@ -688,6 +701,80 @@ pub fn rename_raw_tiles_in_place(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn raw_export_counts_successful_moves_and_writes_and_preserves_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.png");
+        fs::write(&source, b"path-tile").unwrap();
+        let tiles = HashMap::from([
+            ((1, 2), TileSource::from_path(source.clone())),
+            ((3, 4), TileSource::from_bytes(b"memory-tile".to_vec())),
+        ]);
+        let mut updates = Vec::new();
+        let bytes = rename_raw_tiles_in_place_with_progress(directory.path(), 15, &tiles, "png", |done, total| {
+            let existing: usize = ["15/1/2.png", "15/3/4.png"].iter().filter(|name| directory.path().join(name).is_file()).count();
+            assert_eq!(done, existing);
+            updates.push((done, total));
+        }).unwrap();
+        assert_eq!(updates, vec![(0, 2), (1, 2), (2, 2)]);
+        assert_eq!(bytes, 20);
+        assert!(!source.exists());
+        assert_eq!(fs::read(directory.path().join("15/1/2.png")).unwrap(), b"path-tile");
+        assert_eq!(fs::read(directory.path().join("15/3/4.png")).unwrap(), b"memory-tile");
+    }
+
+    #[test]
+    fn failed_raw_export_never_reports_the_failed_file_as_completed() {
+        let directory = tempfile::tempdir().unwrap();
+        let tiles = HashMap::from([((1, 2), TileSource::from_path(directory.path().join("missing.png")))]);
+        let mut updates = Vec::new();
+        assert!(rename_raw_tiles_in_place_with_progress(directory.path(), 15, &tiles, "png", |done,total| updates.push((done,total))).is_err());
+        assert_eq!(updates, vec![(0, 1)]);
+    }
+
+    #[test]
+    #[ignore = "opt-in full-volume raw export disk regression"]
+    fn large_raw_export_reports_real_counts_and_finishes_at_99() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = directory.path().join("fixture.png");
+        let bytes = write_png(&fixture);
+        let memory = TileSource::from_bytes(bytes.clone());
+        let mut tiles = HashMap::with_capacity(336_660);
+        let input = directory.path().join("input");fs::create_dir(&input).unwrap();
+        for i in 0..336_660u32 {
+            let source = if i%2==0 {
+                let path=input.join(format!("{i}.png"));fs::write(&path,&bytes).unwrap();TileSource::from_path(path)
+            } else {memory.clone()};
+            tiles.insert((i%620,i/620),source);
+        }
+        let mut reporter = crate::overlay::TileStageReporter::new(88.0,99.0,"写出原始瓦片目录");
+        let mut events = Vec::new();let mut callbacks=0;
+        let start=std::time::Instant::now();
+        let output=directory.path().join("output");
+        let count=rename_raw_tiles_in_place_with_progress(&output,15,&tiles,"png",|done,total| {
+            assert_eq!(done,callbacks);callbacks+=1;
+            if let Some(update)=reporter.update(done,total) {
+                events.push(serde_json::json!({"done":done,"total":total,"percent":update.percent,"message":update.message,"elapsed_seconds":start.elapsed().as_secs_f64()}));
+            }
+        }).unwrap();
+        assert_eq!(count,336_660*bytes.len() as u64);
+        assert_eq!(callbacks,336_661);
+        assert!(events.len()>2 && events.len()<10000);
+        assert_eq!(events.first().unwrap()["percent"],88.0);
+        assert_eq!(events.last().unwrap()["percent"],99.0);
+        assert_eq!(events.last().unwrap()["done"],336_660);
+        let mut actual=0usize;
+        for x in fs::read_dir(output.join("15")).unwrap() {
+            for entry in fs::read_dir(x.unwrap().path()).unwrap() {
+                assert_eq!(fs::metadata(entry.unwrap().path()).unwrap().len(),bytes.len() as u64);actual+=1;
+            }
+        }
+        assert_eq!(actual,336_660);
+        let receipt=serde_json::json!({"output_tiles":actual,"path_inputs":168330,"memory_inputs":168330,"bytes":count,"callbacks":callbacks,"updates":events.len(),"elapsed_seconds":start.elapsed().as_secs_f64(),"events":events});
+        if let Ok(path)=std::env::var("GEOD_RAW_EXPORT_RECEIPT") {fs::write(path,serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();}
+        println!("verified_raw_exports=336660 final_progress=99 callbacks={callbacks}");
+    }
 
     /// 写入一个最小 PNG 字节串到文件，用于打包测试
     fn write_png(path: &Path) -> Vec<u8> {
