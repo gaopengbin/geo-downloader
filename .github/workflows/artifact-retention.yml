@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Preview only; do not delete any artifacts
+        description: Preview only; do not delete artifacts or caches
         type: boolean
         default: true
 
@@ -28,6 +28,7 @@ jobs:
     permissions:
       contents: read
       actions: write
+      pull-requests: read
     steps:
       # Never execute an upstream PR's source in this privileged workflow.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,10 +39,15 @@ jobs:
         with:
           node-version: '24.20.0'
       - name: Test cleanup safety invariants
-        run: node --test .github/scripts/artifact-retention.test.cjs
+        run: node --test .github/scripts/artifact-retention.test.cjs .github/scripts/cache-retention.test.cjs
       - name: Apply allowlisted artifact retention
         env:
           GITHUB_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
           PINNED_RUN_IDS: ${{ vars.ARTIFACT_RETENTION_PINNED_RUN_IDS }}
         run: node .github/scripts/artifact-retention.cjs
+      - name: Apply dependency-cache retention
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        run: node .github/scripts/cache-retention.cjs

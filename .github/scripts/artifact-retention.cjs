@@ -2,6 +2,7 @@
 const DAY = 86400000;
 // Deliberately allowlisted. New artifact types are retained until reviewed.
 function rule(repository, name) {
+  if (!repository.startsWith('gaopengbin/')) return null;
   const repo = repository.split('/')[1];
   if (repo === 'geostyle' && name === 'geostyle-release') return {family:name, keep:2, days:3};
   if (repo === 'gaopengbin-dashboard') {
@@ -26,7 +27,7 @@ function rule(repository, name) {
   return null;
 }
 
-function plan({repository, artifacts, runs, now=Date.now(), pinned=[]}) {
+function plan({repository, artifacts, runs, now=Date.now(), pinned=[], active=false}) {
   const pinnedIds = new Set(pinned.map(String));
   const entries = artifacts.map(a => {
     const r = runs.get(a.workflow_run?.id);
@@ -34,7 +35,7 @@ function plan({repository, artifacts, runs, now=Date.now(), pinned=[]}) {
     const age = now - Date.parse(a.created_at);
     const trusted = r && r.repository?.full_name === repository && r.head_repository?.full_name === repository;
     const sameRun = r && a.workflow_run?.head_sha === r.head_sha && a.workflow_run?.head_branch === r.head_branch;
-    let reason = !policy ? 'unknown-type' : !r ? 'missing-run' : !trusted ? 'foreign-run' : !sameRun ? 'run-mismatch' : r.status !== 'completed' ? 'active-run' : pinnedIds.has(String(r.id)) ? 'pinned-run' : !Number.isFinite(age) || age < DAY ? 'grace-period' : null;
+    let reason = !policy ? 'unknown-type' : !r ? 'missing-run' : !trusted ? 'foreign-run' : !sameRun ? 'run-mismatch' : active ? 'active-consumer' : r.status !== 'completed' ? 'active-run' : pinnedIds.has(String(r.id)) ? 'pinned-run' : !Number.isFinite(age) || age < DAY ? 'grace-period' : null;
     return {artifact:a, run:r, policy, age, reason};
   });
   // Protect distinct successful runs, not merely the latest individual files.
@@ -63,8 +64,10 @@ function plan({repository, artifacts, runs, now=Date.now(), pinned=[]}) {
 
 async function main() {
   const fs=require('node:fs');
+  const {createApi,list,activeRuns}=require('./cache-retention.cjs');
   const repository=process.env.GITHUB_REPOSITORY;
-  const expected=JSON.parse(fs.readFileSync(`${__dirname}/artifact-retention.json`,'utf8')).repository;
+  const config=JSON.parse(fs.readFileSync(`${__dirname}/artifact-retention.json`,'utf8'));
+  const expected=config.repository;
   if (repository !== expected) throw new Error('Repository does not match the reviewed retention policy');
   if (!process.env.GITHUB_TOKEN) throw new Error('Missing Actions token');
   if (!['true','false'].includes(process.env.DRY_RUN)) throw new Error('DRY_RUN must be explicit');
@@ -72,39 +75,33 @@ async function main() {
   const pinText=process.env.PINNED_RUN_IDS || '';
   if (pinText && !/^\s*\d+(?:\s*,\s*\d+)*\s*$/.test(pinText)) throw new Error('Invalid pinned run list; refusing cleanup');
   const pinned=pinText.split(',').map(s=>s.trim()).filter(Boolean);
-  async function api(path,method='GET') {
-    const response=await fetch(`https://api.github.com/repos/${repository}/${path}`,{method,headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${process.env.GITHUB_TOKEN}`,'X-GitHub-Api-Version':'2022-11-28'},signal:AbortSignal.timeout(30000)});
-    if (method==='DELETE' && response.status===404) return null;
-    if (!response.ok) throw new Error(`GitHub API ${method} ${path}: ${response.status}`);
-    return response.status===204 ? null : response.json();
-  }
-  const artifacts=[];
-  for(let page=1;page<=100;page++) {
-    const data=await api(`actions/artifacts?per_page=100&page=${page}`);
-    artifacts.push(...data.artifacts);
-    if(data.artifacts.length<100) break;
-    if(page===100) throw new Error('Inventory limit reached; no artifacts deleted');
-  }
+  const api=createApi(repository,process.env.GITHUB_TOKEN);
+  const artifacts=await list(api,'actions/artifacts','artifacts');
   const runs=new Map();
   // Complete the entire inventory before the first mutation. Any lookup error fails closed.
   for(const id of new Set(artifacts.map(a=>a.workflow_run?.id).filter(Boolean))) runs.set(id,await api(`actions/runs/${id}`));
-  const decisions=plan({repository,artifacts,runs,pinned});
-  let deleted=0,bytes=0;
+  const active=await activeRuns(api,process.env.GITHUB_RUN_ID);
+  const decisions=plan({repository,artifacts,runs,pinned,active});
+  let deleted=0,bytes=0,missing=0;
   for(const decision of decisions) {
     console.log(JSON.stringify({...decision,fingerprint:undefined,dryRun}));
     if(!decision.delete || dryRun) continue;
     const fresh=await api(`actions/artifacts/${decision.id}`);
+    if(!fresh) {missing++;continue;}
     const fingerprint=JSON.stringify([fresh.name,fresh.created_at,fresh.workflow_run?.id,fresh.workflow_run?.head_sha]);
     if(fingerprint!==decision.fingerprint) throw new Error('Artifact identity changed; stopping cleanup');
     // A rerun may have started since planning. Never remove inputs from an active run.
     const run=await api(`actions/runs/${decision.runId}`);
-    if(run.status!=='completed') {console.log(`Skipped active rerun ${decision.runId}`);continue;}
-    await api(`actions/artifacts/${decision.id}`,'DELETE');
-    deleted++;bytes+=decision.bytes;
+    if(!run || run.status!=='completed' || await activeRuns(api,process.env.GITHUB_RUN_ID)) {console.log(`Skipped active or missing run ${decision.runId}`);continue;}
+    const result=await api(`actions/artifacts/${decision.id}`,'DELETE');
+    if(result?.deleted) {deleted++;bytes+=decision.bytes;} else missing++;
   }
-  const report={repository,dryRun,inspected:artifacts.length,candidates:decisions.filter(d=>d.delete).length,deleted,deletedBytes:bytes,retained:decisions.filter(d=>!d.delete).length};
+  const after=dryRun?artifacts:await list(api,'actions/artifacts','artifacts');
+  const remainingBytes=after.reduce((n,a)=>n+a.size_in_bytes,0);
+  const report={repository,dryRun,inspected:artifacts.length,candidates:decisions.filter(d=>d.delete).length,deleted,deletedBytes:bytes,alreadyMissing:missing,remainingBytes,budgetBytes:config.artifactBudgetBytes,retained:decisions.filter(d=>!d.delete).length};
   console.log(JSON.stringify(report));
-  if(process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Artifact retention\n\n\`\`\`json\n${JSON.stringify(report,null,2)}\n\`\`\`\n\nOnly allowlisted Actions artifacts were considered. Releases, caches, workflow logs, and server rollback files were not modified.\n`);
+  if(remainingBytes>config.artifactBudgetBytes) console.log('::warning::Artifact soft budget exceeded; protected or unknown artifacts retained. Review this run summary.');
+  if(process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Artifact retention\n\n\`\`\`json\n${JSON.stringify(report,null,2)}\n\`\`\`\n\n| Artifact | Decision | Reason |\n|---|---|---|\n${decisions.map(d=>`| ${d.id} | ${d.delete?'eligible':'keep'} | ${d.reason} |`).join('\n')}\n\nOnly allowlisted Actions artifacts were considered. Releases, caches, workflow logs, and server rollback files were not modified. Latest/pinned protection does not override GitHub's own upload expiry.\n`);
 }
 module.exports={rule,plan};
 if(require.main===module) main().catch(error=>{console.error(error.message);process.exitCode=1});

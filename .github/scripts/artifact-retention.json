@@ -1,1 +1,6 @@
-{"repository":"gaopengbin/geo-downloader"}
+{
+  "repository": "gaopengbin/geo-downloader",
+  "defaultBranch": "main",
+  "cacheBudgetBytes": 4294967296,
+  "artifactBudgetBytes": 402653184
+}
