@@ -23,7 +23,7 @@ export function DataFeatures() {
   return <LocalizedContent><section id="data" className={styles.section} aria-labelledby="data-title">
     <span className={styles.eyebrow}>五类数据工作流</span>
     <h2 id="data-title">从平面影像，到三维场景。</h2>
-    <p className={styles.sectionLead}>在同一个对话工作区中规划、下载和查看不同类型的数据。当前正式版为 0.2.10，具体能力与验证范围请查看版本说明。</p>
+    <p className={styles.sectionLead}>在同一个对话工作区中规划、下载和查看不同类型的数据。当前正式版为 0.2.11，具体能力与验证范围请查看版本说明。</p>
     <div className={styles.dataGrid}>{dataTypes.map(({ id, title, Icon, intro, points, output, proof }) => <article id={id} key={id} className={styles.dataCard}>
       <div className={styles.dataCardTop}><Icon size={28} strokeWidth={1.5} aria-hidden="true" /><span>开发版已验证</span></div>
       <h3>{title}</h3><p>{intro}</p>
@@ -107,8 +107,8 @@ export function RoadmapFeatures() {
   return <LocalizedContent><section className={styles.section} aria-labelledby="roadmap-title">
     <span className={styles.eyebrow}>版本与使用范围</span><h2 id="roadmap-title">先体验，再把你的工作流带进来。</h2>
     <div className={styles.roadmapGrid}>
-      <article><span>当前可下载</span><h3>0.2.10 · Windows 正式版</h3><p>独立桌面应用，支持自有模型渠道、二维与三维地图、可恢复任务清理、在线更新与消息中心。</p></article>
-      <article><span>更新方式</span><h3>0.2.10 · 组件更新</h3><p>旧版首次升级仍下载完整包。升级后，后续更新可以复用未变化的运行环境，仅下载应用和变化组件。</p></article>
+      <article><span>当前可下载</span><h3>0.2.11 · Windows 正式版</h3><p>独立桌面应用，支持自有模型渠道、二维与三维地图、可恢复任务清理、在线更新与消息中心。</p></article>
+      <article><span>更新方式</span><h3>0.2.11 · 组件更新</h3><p>旧版首次升级仍下载完整包。升级后，后续更新可以复用未变化的运行环境，仅下载应用和变化组件。</p></article>
       <article><span>具体数据具体核对</span><h3>授权、精度与覆盖</h3><p>数据许可、访问额度、影像日期与分辨率取决于图源。3D Tiles 范围筛选保留整块模型；并非精确切割模型。</p></article>
     </div>
   </section></LocalizedContent>;
