@@ -151,7 +151,7 @@ jobs:
         with:
           name: release-${{ matrix.label }}
           path: GeoDownloader_*
-          retention-days: 7
+          retention-days: 3
 
   release:
     needs: build

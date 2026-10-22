@@ -50,4 +50,4 @@ jobs:
             geod-mcp-linux-${{ github.sha }}.tar.gz
             geod-mcp-linux-${{ github.sha }}.tar.gz.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
