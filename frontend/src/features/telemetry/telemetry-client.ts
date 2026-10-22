@@ -1,6 +1,7 @@
 import type { AppMode, SidebarTab } from '@/store/app-store'
 import { isTauriRuntime } from '@/lib/tauri'
 import { useTelemetryStore } from './telemetry-store'
+import { sanitizeDownloadDiagnostics } from './download-diagnostics'
 import type { DownloadLifecycleEvent } from './download-lifecycle'
 
 interface TelemetryEventMap {
@@ -237,7 +238,7 @@ function sanitizeProperties<TName extends TelemetryEventName>(
     }
     case 'download_task_state': {
       const value = properties as DownloadLifecycleEvent
-      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason }
+      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason, ...sanitizeDownloadDiagnostics(value) }
     }
     case 'bookmark_action':
     case 'task_action':

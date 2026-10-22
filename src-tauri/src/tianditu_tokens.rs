@@ -1,5 +1,7 @@
 //! Ordered, task-scoped credential failover. Tokens never appear in task logs.
 use crate::settings::{AppSettings, SettingsManager};
+use std::collections::HashSet;
+use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 type Logger = Arc<dyn Fn(&str) + Send + Sync>;
@@ -66,10 +68,34 @@ pub fn token_url(url: &str, token: &str) -> String {
     parsed.to_string()
 }
 
+/// Only bounded counters and fixed categories cross the IPC boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenDiagnostics {
+    pub diagnostic_version: u8,
+    pub provider: String,
+    pub phase: String,
+    pub token_source: String,
+    pub configured_tokens: u32,
+    pub used_tokens: u32,
+    pub token_switches: u32,
+    pub recovered_switches: u32,
+    pub settings_updates: u32,
+    pub last_rejection_status: u16,
+    pub tokens_exhausted: bool,
+}
+
 struct State {
     tokens: Vec<String>,
     active: usize,
     generation: u64,
+    used_tokens: HashSet<String>,
+    switches: u32,
+    recovered: u32,
+    updates: u32,
+    last_status: u16,
+    awaiting_recovery: bool,
+    phase: String,
+    provider: String,
 }
 
 // Do not derive Debug: this value contains a credential.
@@ -92,6 +118,9 @@ impl TiandituTokens {
                 tokens,
                 active: 0,
                 generation: 0,
+                used_tokens: HashSet::new(), switches: 0, recovered: 0,
+                updates: 0, last_status: 0, awaiting_recovery: false,
+                phase: "prepare".into(), provider: "unknown".into(),
             }),
             logger,
         }
@@ -123,6 +152,38 @@ impl TiandituTokens {
             .ok_or_else(|| Self::exhausted(state.tokens.len()))
     }
 
+    pub fn set_stage(&self, phase: &str, tianditu: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.phase = phase.to_owned();
+        state.provider = if tianditu { "tianditu" } else { "other" }.into();
+    }
+
+    pub fn record_request(&self, used: &Selection) {
+        let mut state = self.state.lock().unwrap();
+        state.used_tokens.insert(used.token.clone());
+    }
+
+    pub fn record_success(&self, used: &Selection) {
+        let mut state = self.state.lock().unwrap();
+        if used.generation == state.generation && used.index == state.active && state.awaiting_recovery {
+            state.recovered = state.recovered.saturating_add(1);
+            state.awaiting_recovery = false;
+        }
+    }
+
+    pub fn diagnostics(&self) -> TokenDiagnostics {
+        let state = self.state.lock().unwrap();
+        TokenDiagnostics {
+            diagnostic_version: 1, provider: state.provider.clone(), phase: state.phase.clone(),
+            token_source: if state.tokens.len() == 1 && state.tokens[0] == crate::config::TIANDITU_DEFAULT_TOKEN { "builtin" } else { "user" }.into(),
+            configured_tokens: state.tokens.len().min(65535) as u32,
+            used_tokens: state.used_tokens.len().min(65535) as u32,
+            token_switches: state.switches.min(65535), recovered_switches: state.recovered.min(65535),
+            settings_updates: state.updates.min(65535), last_rejection_status: state.last_status,
+            tokens_exhausted: state.active >= state.tokens.len(),
+        }
+    }
+
     fn exhausted(count: usize) -> String {
         format!("TILE_TOKENS_EXHAUSTED: 天地图的 {} 个 Token 均不可用或额度不足；任务数据已保留。请修改并保存 Token 后继续任务，或稍后重试。", count)
     }
@@ -135,6 +196,7 @@ impl TiandituTokens {
             if used.generation != state.generation || used.index != state.active {
                 return Ok(());
             }
+            state.last_status = match reason { "HTTP 401" => 401, "HTTP 403" => 403, "HTTP 429" => 429, _ => 0 };
             state.active += 1;
             if state.active >= state.tokens.len() {
                 let error = Self::exhausted(state.tokens.len());
@@ -142,6 +204,8 @@ impl TiandituTokens {
                 (self.logger)(&error);
                 return Err(error);
             }
+            state.switches = state.switches.saturating_add(1);
+            state.awaiting_recovery = true;
             format!(
                 "天地图 {}，自动切换至第 {}/{} 个 Token，继续下载",
                 reason,
@@ -161,6 +225,8 @@ impl TiandituTokens {
             if state.tokens == tokens {
                 return;
             }
+            state.updates = state.updates.saturating_add(1);
+            state.awaiting_recovery = false;
             state.tokens = tokens;
             state.active = 0;
             state.generation = state.generation.wrapping_add(1);
@@ -284,6 +350,31 @@ mod tests {
             .all(|line| !line.contains("secret-")
                 && !line.contains("new-a")
                 && !line.contains("saved")));
+    }
+
+    #[test]
+    fn diagnostics_count_actual_unique_credentials_and_ignore_stale_concurrency() {
+        let pool = TiandituTokens::new(vec!["private-a".into(), "private-b".into()], Arc::new(|_| {}));
+        pool.set_stage("overlay_download", true);
+        let a = pool.current().unwrap();
+        assert_eq!(pool.diagnostics().used_tokens, 0); // selecting isn't a request
+        pool.record_request(&a); pool.record_request(&a);
+        pool.reject(&a, "HTTP 401").unwrap();
+        pool.reject(&a, "HTTP 403").unwrap(); // late failure must not advance again
+        pool.record_success(&a); // nor count as successful recovery
+        assert_eq!(pool.diagnostics().recovered_switches, 0);
+        let b = pool.current().unwrap();
+        pool.record_request(&b); pool.record_success(&b); pool.record_success(&b);
+        assert_eq!(pool.diagnostics().recovered_switches, 1);
+        pool.replace(vec!["private-b".into(), "private-c".into()]);
+        pool.record_request(&pool.current().unwrap());
+        pool.reject(&a, "HTTP 429").unwrap();
+        let d = pool.diagnostics();
+        assert_eq!((d.configured_tokens, d.used_tokens, d.token_switches, d.settings_updates), (2,2,1,1));
+        assert_eq!(d.last_rejection_status, 401);
+        assert_eq!(d.provider, "tianditu"); assert_eq!(d.phase, "overlay_download");
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(!json.contains("private-"));
     }
 
     #[test]

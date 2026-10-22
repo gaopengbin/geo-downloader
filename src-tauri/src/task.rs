@@ -57,6 +57,8 @@ pub struct TaskInfo {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_diagnostics: Option<crate::tianditu_tokens::TokenDiagnostics>,
 }
 
 /// 日志条目
@@ -73,7 +75,16 @@ struct TaskEntry {
     cancel_token: CancellationToken,
     pause_control: PauseControl,
     logs: Vec<TaskLog>,
+    token_pool: Option<Arc<crate::tianditu_tokens::TiandituTokens>>,
     log_writer: Option<Arc<Mutex<crate::task_log::TaskLogWriter>>>,
+}
+
+impl TaskEntry {
+    fn freeze_diagnostics(&mut self) {
+        if let Some(pool) = self.token_pool.take() {
+            self.info.download_diagnostics = Some(pool.diagnostics());
+        }
+    }
 }
 
 /// 全局任务管理器
@@ -130,6 +141,7 @@ impl TaskManager {
             file_size: 0,
             message: None,
             error: None,
+            download_diagnostics: None,
         };
         // 创建日志文件
         let log_path = self.log_dir.join(format!("task_{}.log", task_id_prefix(&id)));
@@ -142,6 +154,7 @@ impl TaskManager {
             cancel_token: cancel_token.clone(),
             pause_control: pause_control.clone(),
             logs: Vec::new(),
+            token_pool: None,
             log_writer,
         };
         self.tasks.lock().unwrap().insert(id, entry);
@@ -199,6 +212,7 @@ impl TaskManager {
                 return;
             }
             entry.info.status = TaskStatus::Completed;
+            entry.freeze_diagnostics();
             entry.info.progress = 100.0;
             entry.info.file_size = file_size;
             entry.info.message = Some("完成".to_string());
@@ -222,6 +236,7 @@ impl TaskManager {
                 return;
             }
             entry.info.status = TaskStatus::CompletedWithGaps;
+            entry.freeze_diagnostics();
             entry.info.progress = 100.0;
             entry.info.file_size = file_size;
             entry.info.failed_count = failed_count;
@@ -263,6 +278,7 @@ impl TaskManager {
                 return;
             }
             entry.info.status = TaskStatus::Failed;
+            entry.freeze_diagnostics();
             entry.info.error = Some(error);
         }
     }
@@ -290,6 +306,7 @@ impl TaskManager {
     pub fn mark_cancelled(&self, id: &str) {
         if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
             entry.info.status = TaskStatus::Cancelled;
+            entry.freeze_diagnostics();
             entry.info.message = Some("已取消".to_string());
         }
     }
@@ -324,12 +341,23 @@ impl TaskManager {
     }
 
     /// 获取所有任务信息
+    pub fn attach_token_diagnostics(&self, id: &str, pool: Arc<crate::tianditu_tokens::TiandituTokens>) {
+        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
+            entry.info.download_diagnostics = None;
+            entry.token_pool = Some(pool);
+        }
+    }
+
     pub fn get_all_tasks(&self) -> Vec<TaskInfo> {
         self.tasks
             .lock()
             .unwrap()
             .values()
-            .map(|e| e.info.clone())
+            .map(|e| {
+                let mut info = e.info.clone();
+                if let Some(pool) = e.token_pool.as_ref() { info.download_diagnostics = Some(pool.diagnostics()); }
+                info
+            })
             .collect()
     }
 
@@ -538,6 +566,23 @@ mod tests {
             tasks.iter().find(|task| task.id == "second-task").unwrap().status,
             TaskStatus::Downloading
         );
+    }
+
+    #[test]
+    fn task_polling_exposes_only_sanitized_token_counters() {
+        let tmp = TempDir::new().unwrap();
+        let manager = TaskManager::new_with_log_dir(tmp.path().to_path_buf());
+        manager.create_task("task".into(), "name".into(), "source".into(), "source".into(), 1, "tiles".into(), "output".into(), 1);
+        let pool = Arc::new(crate::tianditu_tokens::TiandituTokens::new(vec!["secret-token".into()], Arc::new(|_| {})));
+        pool.set_stage("base_download", true);
+        pool.record_request(&pool.current().unwrap());
+        manager.attach_token_diagnostics("task", pool.clone());
+        manager.fail_task("task", "failed".into());
+        pool.set_stage("export", false); // Late work/settings updates cannot change a terminal receipt.
+        let diagnostic = manager.get_all_tasks().remove(0).download_diagnostics.unwrap();
+        assert_eq!(diagnostic.used_tokens, 1);
+        assert_eq!(diagnostic.phase, "base_download");
+        assert!(!serde_json::to_string(&diagnostic).unwrap().contains("secret-token"));
     }
 
     #[test]

@@ -338,6 +338,7 @@ impl TileDownloader {
             let request_url = selected.as_ref().map(|selected| tianditu_tokens::token_url(url, &selected.token));
             let url = request_url.as_deref().unwrap_or(url);
             let req_fut = async {
+                if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_request(used); }
                 match client.get(url).headers(headers.clone()).send().await {
                     Ok(resp) => {
                         let status = resp.status();
@@ -349,7 +350,10 @@ impl TileDownloader {
                                     tile_payload::validate(&bytes, content_type.as_deref())
                                         .map_err(|e| (e, false))?;
                                     match tokio::fs::write(file_path, &bytes).await {
-                                    Ok(_) => Ok(()),
+                                    Ok(_) => {
+                                        if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_success(used); }
+                                        Ok(())
+                                    },
                                     Err(e) => Err((format!("写入失败: {}", e), false)),
                                     }
                                 }
@@ -1245,9 +1249,19 @@ mod tests {
         let gate = RateLimitGate::default();
         let dir = tempfile::tempdir().unwrap();
         for layer in ["main", "annotation"] {
+            pool.set_stage(if layer == "main" { "base_download" } else { "overlay_download" }, true);
             let path = dir.path().join(format!("{layer}.png"));
             TileDownloader::download_one_tile(&client, &url, &Default::default(), &path, 0, None, &gate, Some(&pool)).await.unwrap();
             assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+        let diagnostics = pool.diagnostics();
+        assert_eq!((diagnostics.configured_tokens, diagnostics.used_tokens, diagnostics.token_switches, diagnostics.recovered_switches), (4, 4, 3, 1));
+        assert_eq!(diagnostics.last_rejection_status, 403);
+        assert!(!diagnostics.tokens_exhausted);
+        let json = serde_json::to_string(&diagnostics).unwrap();
+        assert!(!json.contains("quota") && !json.contains("invalid") && !json.contains("denied") && !json.contains("valid"));
+        if let Ok(directory) = std::env::var("GEOD_TOKEN_DIAGNOSTIC_FIXTURES") {
+            std::fs::write(std::path::Path::new(&directory).join("recovered.json"), json).unwrap();
         }
         server.abort();
         let requests = requests.lock().unwrap();
@@ -1274,6 +1288,15 @@ mod tests {
             assert!(error.starts_with(if tianditu { "TILE_TOKENS_EXHAUSTED:" } else { "TILE_RATE_LIMITED:" }), "{error}");
             assert!(tile_policy::is_terminal_download_error(&error));
             assert!(!error.contains("private-"));
+            if tianditu {
+                let diagnostics = pool.diagnostics();
+                assert_eq!((diagnostics.used_tokens, diagnostics.token_switches, diagnostics.recovered_switches), (2, 1, 0));
+                assert_eq!(diagnostics.last_rejection_status, 429);
+                assert!(diagnostics.tokens_exhausted);
+                if let Ok(directory) = std::env::var("GEOD_TOKEN_DIAGNOSTIC_FIXTURES") {
+                    std::fs::write(std::path::Path::new(&directory).join("exhausted.json"), serde_json::to_string(&diagnostics).unwrap()).unwrap();
+                }
+            }
             assert_eq!(count.load(Ordering::SeqCst), if tianditu { 2 } else { 1 });
             assert!(!path.exists());
         }

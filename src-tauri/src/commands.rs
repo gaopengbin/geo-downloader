@@ -1005,6 +1005,7 @@ async fn execute_zoom_level(
     let main_download_end = crate::overlay::main_download_end(overlay_list.len());
 
     // 创建下载器
+    tianditu_tokens.set_stage("base_download", crate::tianditu_tokens::is_tianditu_url(&source.url));
     let downloader = TileDownloader::new(source.clone(), request.proxy.as_deref())?
         .with_tianditu_tokens(tianditu_tokens.clone());
     
@@ -1182,6 +1183,7 @@ async fn execute_zoom_level(
                 continue;
             }
             let ov_temp_dir = temp_dir.join(format!("__overlay_{}", idx));
+            tianditu_tokens.set_stage("overlay_download", crate::tianditu_tokens::is_tianditu_url(&ov_src.url));
             std::fs::create_dir_all(&ov_temp_dir).map_err(|e| format!("创建叠加图层临时目录失败: {}", e))?;
             let ov_dl = TileDownloader::new(ov_src.clone(), request.proxy.as_deref())?
                 .with_tianditu_tokens(tianditu_tokens.clone());
@@ -1222,6 +1224,7 @@ async fn execute_zoom_level(
             per_layer_files.push(ov_files);
         }
 
+        tianditu_tokens.set_stage("composite", false);
         // 逐张合成落盘，导出仅持有路径；图像处理在 blocking worker 中进行。
         let p_composite = map_progress(crate::overlay::OVERLAY_DOWNLOAD_END);
         let composite_message = format!("合成叠加瓦片：0/{}", tile_files.len());
@@ -1312,6 +1315,7 @@ async fn execute_zoom_level(
         });
     }
 
+    tianditu_tokens.set_stage("export", false);
     // 判断是否使用流式写入路径
     // GeoTIFF: 流式 BigTIFF（streaming_tiff）
     // PNG: 流式 PNG（streaming_raster）
@@ -1780,6 +1784,7 @@ async fn execute_download_task(
         request.tianditu_token.as_deref(), Arc::new(move |message| {
             if uses_tianditu { task_log(&app_tokens, &tm_tokens, &tid_tokens, "INFO", message); }
         }));
+    if uses_tianditu { tm.attach_token_diagnostics(task_id, tianditu_tokens.clone()); }
     let start_time = std::time::Instant::now();
     let z_min = request.zoom;
     let z_max = request.zoom_max.unwrap_or(z_min).max(z_min);

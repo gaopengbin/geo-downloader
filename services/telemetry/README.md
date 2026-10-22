@@ -27,6 +27,20 @@ and OAuth service; neither account system belongs in this anonymous collector.
 `download_task_state` reports random attempt IDs, started/completed/
 completed_with_gaps/failed/cancelled, elapsed duration ranges and error categories.
 No task name, path, coordinates, source URL or raw diagnostic is accepted.
+Starting with 3.6.17, an optional complete `diagnostic_version: 1` block adds
+provider category, phase, stable final error category, HTTP status, current
+configured token count, distinct tokens actually requested, switches,
+recoveries, configuration updates, last rejection status and exhaustion flag.
+No token value, fingerprint or raw response is accepted. Counts are integers
+0–65535; categories are allowlisted. Legacy four-property events remain valid.
+Recovery means a valid tile was downloaded after a switch, not that the task
+completed. Used-token counts span settings updates within the same attempt.
+
+Production uses the native SQLite WAL adapter in `database.mjs`, explicit
+database identity and readiness health checks. The database must be initialized
+or adopted explicitly with the offline tool before starting; local configuration
+also requires `NODE_ENV` and `TELEMETRY_DATABASE_ID`. Do not point a local test at
+the production database or use the historical sql.js whole-file writer.
 The desktop consent notice is version 3 and requires renewed consent for this
 scope. `telemetry_metadata.download_lifecycle_started_at` declares when the
 server became able to accept these events; old clients remain uninstrumented.

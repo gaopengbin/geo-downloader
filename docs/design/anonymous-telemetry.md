@@ -85,3 +85,10 @@ It validates this schema, rejects unknown fields, rate-limits requests,
 deduplicates by `event_id`, and does not retain request IP addresses in the
 database or application logs. The dashboard exposes installs, DAU, MAU,
 version distribution, and event counts rather than raw event browsing.
+# 3.6.17 下载诊断补充
+
+在现有用户同意的匿名下载使用统计内，`download_task_state` 可附带版本为 1 的完整诊断块。字段仅含固定图源类别（天地图、其他、未知）、阶段、最终错误类别和 HTTP 状态，以及当前配置 Token 数、实际请求使用的不同 Token 数、切换次数、切换后首次成功取片次数、设置更新次数、最后一次凭证被拒绝的状态和是否全部不可用。
+
+不同 Token 数仅在本机计算；不传 Token 本身、哈希、指纹、URL、图源自定义名称、路径、坐标、原始报错或响应体。计数为 0–65535 的整数。客户端逐字段构造，采集端拒绝额外字段、不完整诊断块、未知类别和越界计数。旧四字段事件仍然接受，历史缺失诊断不能推测为零。
+
+诊断跟随随机下载尝试 ID，不新增永久标识；原有未同意不排队、不发送的边界不变。恢复仅代表备用切换后至少成功取得并校验一张瓦片，不能替代任务终态。最后拒绝状态与最终 HTTP 状态分开，以免把切换前的鉴权失败误报为后来存储失败的原因。401/403/429 不能单独证明 Token 具体权限或日额度状态。
