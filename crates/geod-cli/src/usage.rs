@@ -297,10 +297,8 @@ impl Usage {
             // Different authorization bindings must never share a request.
             for _ in 0..4 {
                 if !enabled(&usage.home) { break; }
-                let count = usage.pending_count();
-                if count == 0 { break; }
-                usage.send_batch().await;
-                if usage.pending_count() >= count { break; }
+                if usage.pending_count() == 0 { break; }
+                if !usage.send_batch().await { break; }
             }
         }).await;
         drop(guard);
@@ -405,13 +403,13 @@ impl Usage {
         self.send_batch().await;
         self.sending.store(false, Ordering::SeqCst);
     }
-    async fn send_batch(&self) {
+    async fn send_batch(&self) -> bool {
         if !enabled(&self.home) {
-            return;
+            return false;
         }
         let out = self.home.join("usage-outbox");
         let Ok(entries) = fs::read_dir(&out) else {
-            return;
+            return false;
         };
         let mut events = Vec::new();
         let mut paths = Vec::new();
@@ -491,14 +489,14 @@ impl Usage {
             paths.push(item.path());
         }
         if events.is_empty() {
-            return;
+            return false;
         }
         let Ok(client) = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::none())
             .build()
         else {
-            return;
+            return false;
         };
         let mut request = client.post(&self.endpoint).json(&json!({"events":events}));
         if let Some(session) = load_json(&self.home.join("account.json")).filter(|_| {
@@ -520,7 +518,9 @@ impl Usage {
             for p in paths {
                 let _ = fs::remove_file(p);
             }
+            return true;
         }
+        false
     }
     pub async fn finish(&self, result: &Result<Value, String>) {
         let (state, why) = match result {
