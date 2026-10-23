@@ -14,7 +14,9 @@ import sys
 from datetime import datetime, timezone
 import zipfile
 
-VERSION = '0.3.3'
+# Use the same version source as the native executable and portable packager.
+_manifest = (Path(__file__).resolve().parents[2] / 'crates/geod-cli/Cargo.toml').read_text(encoding='utf8')
+VERSION = re.search(r'(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', _manifest).group(1)
 LIMIT = 128 * 1024 * 1024
 
 
