@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 let installedCliRoot;
 try { installedCliRoot = path.dirname(require.resolve('geod-cli/package.json')); } catch { /* Source checkout may use its own release binary. */ }
 const MAX_INLINE = 8 * 1024 * 1024;
-const MCP_VERSION = '0.1.6';
+const MCP_VERSION = '0.1.7';
 const PUBLIC_SOURCE = {
   id: 'nasa_gibs_blue_marble', name: 'NASA GIBS Blue Marble', kind: 'builtIn',
   attribution: 'NASA GIBS', maxZoom: 8, tileSize: 256, available: true, availabilityVerified: false, default: false, reason: null,

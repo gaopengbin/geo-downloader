@@ -33,7 +33,7 @@ export function validateUsage(event, { local = false, now = Date.now() } = {}) {
 
 export function usageEvent(context, details) {
   return validateUsage({ schemaVersion: 1, eventId: randomUUID(), attemptId: randomUUID(),
-    occurredAt: new Date().toISOString(), product: 'mcp', transport: 'stdio', version: '0.1.6',
+    occurredAt: new Date().toISOString(), product: 'mcp', transport: 'stdio', version: '0.1.7',
     installationId: null, isTest: false, reason: 'none', ...context, ...details });
 }
 

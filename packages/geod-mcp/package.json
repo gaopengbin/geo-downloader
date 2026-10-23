@@ -1,6 +1,6 @@
 {
   "name": "geod-mcp",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "GeoD CLI imagery download tools for local and remote MCP clients",
   "type": "module",
   "license": "MIT",
