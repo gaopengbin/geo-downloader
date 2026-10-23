@@ -1,6 +1,6 @@
 "use strict";
 module.exports = Object.freeze({
-  "version": "0.3.3",
+  "version": "0.3.4",
   "platform": "windows-x64",
   "sourceRevision": "c5d7a4c71d8d8b7e1a3081a7d4fc21f4ed559f51",
   "binarySha256": "cd85e326b775800f9c0cee527d3294b99f1e18931c36873cfbd3fe52fd3991df",

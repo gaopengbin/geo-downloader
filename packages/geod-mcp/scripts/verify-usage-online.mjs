@@ -14,7 +14,7 @@ const qa=JSON.parse(await readFile(path.join(root,'artifacts/tools-usage-release
 assert.equal(qa.isTestAccount,true);assert.equal(qa.analyticsAudience,'internal');
 const base='https://laogao.xyz/geod-mcp',resource=base+'/mcp';
 const cli=path.join(root,'output/geod-cli-public-0.3.3/npm/package/native/geod.exe');
-const mcp=path.join(root,'output/geod-mcp-package-0.1.7/stage');
+const mcp=path.join(root,'output/geod-mcp-package-0.1.8/stage');
 const env={...process.env,GEOD_USAGE_TEST:'1',GEOD_TELEMETRY:'1'};
 delete env.GEOD_USAGE_ENDPOINT;delete env.GEOD_USAGE_PARENT;delete env.GEOD_SERVER_AUTHENTICATED;
 const receipt={startedAt:new Date().toISOString(),accountId:qa.accountId,isTestAccount:true,checks:{}};
