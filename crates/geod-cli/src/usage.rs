@@ -314,14 +314,29 @@ impl Usage {
     fn handoff_pending(&self) {
         if !enabled(&self.home) || self.pending_count() == 0 { return; }
         let Ok(exe) = std::env::current_exe() else { return };
+        #[cfg(windows)] {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::{CreateProcessW, STARTUPINFOW, PROCESS_INFORMATION, CREATE_NO_WINDOW}};
+            let executable: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+            let mut arguments: Vec<u16> = format!("\"{}\" __usage-flush", exe.display()).encode_utf16().chain(Some(0)).collect();
+            // Do not inherit ANY handles: even redirected stdio can otherwise
+            // keep a caller's original output pipes open after the CLI exits.
+            unsafe {
+                let mut startup: STARTUPINFOW = std::mem::zeroed();
+                startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+                let mut process: PROCESS_INFORMATION = std::mem::zeroed();
+                if CreateProcessW(executable.as_ptr(), arguments.as_mut_ptr(), std::ptr::null(), std::ptr::null(), 0,
+                    CREATE_NO_WINDOW, std::ptr::null(), std::ptr::null(), &startup, &mut process) != 0 {
+                    CloseHandle(process.hThread); CloseHandle(process.hProcess);
+                }
+            }
+        }
+        #[cfg(not(windows))] {
         let mut command = std::process::Command::new(exe);
         command.arg("__usage-flush").stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-        #[cfg(windows)] {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
         let _ = command.spawn();
+        }
     }
     pub fn download_started(&self) {
         if !self.download_started.swap(true, Ordering::SeqCst) {

@@ -20,3 +20,6 @@ rand = "=0.8.5"
 sha2 = "=0.10.9"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 image = { version = "=0.25.9", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security"] }

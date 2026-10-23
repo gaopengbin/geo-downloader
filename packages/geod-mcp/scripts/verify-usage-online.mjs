@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 const root=fileURLToPath(new URL('../../..',import.meta.url));
-const out=path.join(root,'artifacts/tools-usage-release/online');await mkdir(out,{recursive:true});
+const out=path.join(root,'artifacts/tools-usage-release/online-final');await mkdir(out,{recursive:true});
 const qa=JSON.parse(await readFile(path.join(root,'artifacts/tools-usage-release/qa-private.json'),'utf8'));
 assert.equal(qa.isTestAccount,true);assert.equal(qa.analyticsAudience,'internal');
 const base='https://laogao.xyz/geod-mcp',resource=base+'/mcp';
