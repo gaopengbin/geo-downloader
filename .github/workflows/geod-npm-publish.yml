@@ -1,0 +1,134 @@
+name: Publish GeoD npm packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Published release tag (geod-cli-vX.Y.Z or geod-mcp-vX.Y.Z)'
+        required: true
+        type: string
+      verify_only:
+        description: 'Validate release and install without publishing'
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - '.github/workflows/geod-npm-publish.yml'
+      - 'scripts/npm_release.py'
+      - 'scripts/test_npm_release.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: geod-npm-${{ inputs.release_tag || github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s scripts -p test_npm_release.py -v
+
+  prepare:
+    needs: test
+    if: >-
+      github.repository == 'gaopengbin/geo-downloader' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'release' &&
+        (startsWith(github.event.release.tag_name, 'geod-cli-v') ||
+         startsWith(github.event.release.tag_name, 'geod-mcp-v'))))
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify release assets and isolated Windows installation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+          GEOD_CLI_HOME: ${{ runner.temp }}/geod-npm-smoke
+          GEOD_TELEMETRY: '0'
+        run: python scripts/npm_release.py prepare --tag "$env:RELEASE_TAG" --directory output/npm-release --smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-candidate
+          path: |
+            output/npm-release/*.tgz
+            output/npm-release/candidate.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: prepare
+    if: ${{ !inputs.verify_only }}
+    runs-on: ubuntu-24.04
+    environment: npm-production
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Use tested npm with trusted publishing support
+        run: npm install --global npm@11.21.1 --ignore-scripts --no-audit --no-fund
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-candidate
+          path: output/npm-release
+      - name: Publish once with OIDC and verify registry delivery
+        env:
+          NPM_CONFIG_BROWSER: 'false'
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: python scripts/npm_release.py publish --directory output/npm-release
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-publication-receipt
+          path: output/npm-release/receipt.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+  verify_install:
+    needs: publish
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-candidate
+          path: output/npm-release
+      - name: Install exact public version and verify native executable
+        env:
+          GEOD_CLI_HOME: ${{ runner.temp }}/geod-npm-public-smoke
+          GEOD_TELEMETRY: '0'
+        run: python scripts/npm_release.py install --directory output/npm-release
