@@ -1,10 +1,8 @@
 "use strict";
-
-// Frozen upstream portable release. Update these together for a new package version.
 module.exports = Object.freeze({
-  version: "0.3.2",
-  platform: "windows-x64",
-  sourceRevision: "ef6023e1a4176266acedec2e340cde1430d72664",
-  portableZipSha256: "26f646b8b581938e793fd09262482be4bb20b5ac110af7cdaff5255c5d3ce41a",
-  binarySha256: "997f75ddcf4d17e76e195ea5006f0aed48ded460469ee12735508142c218802d",
+  "version": "0.3.3",
+  "platform": "windows-x64",
+  "sourceRevision": "c5d7a4c71d8d8b7e1a3081a7d4fc21f4ed559f51",
+  "binarySha256": "cd85e326b775800f9c0cee527d3294b99f1e18931c36873cfbd3fe52fd3991df",
+  "portableZipSha256": "baa3c3e321e9ffb0312d7b5d81c84dc067a1c3526b9ec2b4959c8d0878c2d9f3"
 });
