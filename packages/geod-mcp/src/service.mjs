@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { randomUUID, createHash } from 'node:crypto';
+import { UsageClient } from './usage-client.mjs';
+import { downloadOutcome, usageReason } from './usage-schema.mjs';
 
 const packageRoot = fileURLToPath(new URL('../', import.meta.url));
 const repoRoot = path.resolve(packageRoot, '../..');
@@ -38,6 +40,7 @@ export class GeoDService {
     this.maxJobs = Number(env.GEOD_MAX_CONCURRENT_JOBS || 2);
     if (!Number.isInteger(this.maxJobs) || this.maxJobs < 1 || this.maxJobs > 4) throw fail('CONFIG_ERROR', 'GEOD_MAX_CONCURRENT_JOBS must be 1..4');
     this.env = { ...process.env, ...env };
+    this.usage = this.env.GEOD_TRANSPORT === 'streamable-http' ? null : new UsageClient(this.env);
     this.jobs = new Map();
     this.closed = false;
     this.activeCalls = new Set();
@@ -133,7 +136,7 @@ export class GeoDService {
     signal?.addEventListener('abort', relay, { once: true });
     this.activeCalls.add(controller);
     return new Promise((resolve, reject) => {
-      const child = spawn(command, args, { cwd: this.workspace, env: this.env, windowsHide: true, shell: false, stdio: ipc ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(command, args, { cwd: this.workspace, env: { ...this.env, GEOD_USAGE_PARENT: 'mcp' }, windowsHide: true, shell: false, stdio: ipc ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'] });
       let stdout = '', stdoutBytes = 0, stderr = '', forced, hardKill, settled = false;
       const stop = error => {
         if (forced) return;
@@ -224,6 +227,7 @@ export class GeoDService {
     this.jobs.set(jobId, job);
     try { await mkdir(dir); await this.persist(job); }
     catch (error) { this.jobs.delete(jobId); finishJob(); throw error; }
+    if (kind === 'fetch') this.observe({ kind: 'download', operation: 'geod_fetch', attemptId: jobId, state: 'started' });
     void (async () => {
       try {
         if (this.closed || job.controller.signal.aborted) throw fail('CANCELLED', 'Operation cancelled');
@@ -237,6 +241,11 @@ export class GeoDService {
       } finally {
         job.record.finishedAt = new Date().toISOString();
         await this.persist(job).catch(error => { job.record.persistenceError = this.error(error); });
+        if (kind === 'fetch') {
+          const state = job.record.status === 'completed' ? downloadOutcome(job.record.result) : job.record.status;
+          if (state) this.observe({ kind: 'download', operation: 'geod_fetch', attemptId: jobId, state,
+            reason: job.record.error ? usageReason(job.record.error) : state === 'partial' ? 'incomplete' : 'none' });
+        }
         finishJob();
       }
     })();
@@ -328,5 +337,9 @@ export class GeoDService {
     for (const controller of this.activeCalls) controller.abort();
     for (const job of this.jobs.values()) if (!terminal(job.record.status)) job.controller?.abort();
     await Promise.allSettled([...this.jobs.values()].map(job => job.done));
+    // A bounded best-effort drain. Pending observations remain in the local outbox.
+    await this.usage?.close?.().catch(() => {});
   }
+
+  observe(details) { try { this.usage?.emit(details); } catch { /* Observations never change business results. */ } }
 }

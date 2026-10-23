@@ -1,5 +1,10 @@
 # GeoD CLI
 
+Optional anonymous usage reporting is off by default. Use `geod telemetry
+enable|disable|status` to manage it. Statistics contain tool types and outcomes,
+not arguments, paths, coordinates, source URLs or keys. An existing login may
+associate observations with the GeoD account; reporting never requires login.
+
 Install the GeoD command line on **Windows x64** with **Node.js 18 or newer**:
 
 ```powershell

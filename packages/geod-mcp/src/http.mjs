@@ -1,5 +1,5 @@
 import { createServer as createHttpServer } from 'node:http';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,6 +9,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { GeoDService, highestImageryZoom } from './service.mjs';
 import { createServer } from './server.mjs';
 import { createOAuth } from './oauth.mjs';
+import { UsageStore, usageIngest } from './usage-store.mjs';
 
 const hash = value => createHash('sha256').update(value).digest();
 
@@ -25,6 +26,8 @@ export async function createGeoDHttpServer(env = process.env) {
   const allowedHosts = new Set([publicHost.toLowerCase(), `127.0.0.1:${port}`, `localhost:${port}`]);
   const allowedOrigins = new Set([`https://${publicHost.toLowerCase()}`, `http://127.0.0.1:${port}`, `http://localhost:${port}`]);
   const service = new GeoDService({ ...env, GEOD_TRANSPORT: 'streamable-http', GEOD_SERVER_AUTHENTICATED: '1' });
+  const usage = new UsageStore(env.GEOD_USAGE_DIR, { isTest: env.GEOD_USAGE_TEST === '1' });
+  service.usage = usage.observer({ transport: 'http' }, { internal: true });
   await service.ready;
   if (!existsSync(service.bin)) throw new Error('GEOD_BIN is unavailable');
   const signature = (userId, jobId, artifactId, expires) => createHmac('sha256', token).update(`${userId ? `${userId}\n` : ''}${jobId}\n${artifactId}\n${expires}`).digest('hex');
@@ -38,13 +41,22 @@ export async function createGeoDHttpServer(env = process.env) {
   };
   const handler = createMcpHandler(() => createServer(service));
   const nodeHandler = toNodeHandler(handler);
-  const oauth = env.GEOD_MCP_OAUTH_STATE_FILE ? await createOAuth({ file: env.GEOD_MCP_OAUTH_STATE_FILE, publicHost, accountApi: env.GEOD_ACCOUNT_API_URL }) : null;
+  const oauth = env.GEOD_MCP_OAUTH_STATE_FILE ? await createOAuth({ file: env.GEOD_MCP_OAUTH_STATE_FILE, publicHost, accountApi: env.GEOD_ACCOUNT_API_URL,
+    onAuthorization: ({ userId, product, operation }) => usage.observer({ product, transport: product === 'cli' ? 'cli' : product === 'mcp' ? 'http' : 'oauth' }, { userId }).emit({ kind: 'authorization', operation, state: 'succeeded' }) }) : null;
+  const ingestUsage = usageIngest(usage, authorization => {
+    if (!authorization) return {};
+    const provided = /^Bearer (.+)$/.exec(String(authorization))?.[1] || '';
+    if (provided.length >= 32 && timingSafeEqual(hash(provided), expected)) return { internal: true };
+    const userId = oauth?.validate(provided);
+    return userId ? { userId } : null;
+  });
   let globalJobs = 0;
   let guestDaily = { date: '', count: 0 };
   const guestWorkspace = path.join(service.workspace, 'guests');
   if (oauth) await mkdir(guestWorkspace, { recursive: true, mode: 0o700 });
   const guestService = oauth ? new GeoDService({ ...env, GEOD_WORKSPACE: guestWorkspace, GEOD_OUTPUT_DIR: path.join(guestWorkspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1', GEOD_ANONYMOUS_MCP: '1', GEOD_SERVER_AUTHENTICATED: '0' }) : null;
   if (guestService) {
+    guestService.usage = usage.observer({ transport: 'http' });
     await guestService.ready;
     const start = guestService.startJob.bind(guestService);
     guestService.startJob = async (kind, worker) => {
@@ -81,6 +93,7 @@ export async function createGeoDHttpServer(env = process.env) {
     const workspace = path.join(service.workspace, 'users', userId);
     await mkdir(workspace, { recursive: true, mode: 0o700 });
     const userService = new GeoDService({ ...env, GEOD_WORKSPACE: workspace, GEOD_OUTPUT_DIR: path.join(workspace, 'jobs'), GEOD_MAX_CONCURRENT_JOBS: '1', GEOD_TRANSPORT: 'streamable-http', GEOD_PUBLIC_MCP: '1', GEOD_SERVER_AUTHENTICATED: '1' });
+    userService.usage = usage.observer({ transport: 'http' }, { userId });
     await userService.ready;
     const startJob = userService.startJob.bind(userService);
     userService.startJob = async (kind, worker) => {
@@ -127,6 +140,10 @@ export async function createGeoDHttpServer(env = process.env) {
       return;
     }
     const artifactMatch = /^\/artifacts\/(?:(?<user>user-[a-f0-9-]{36}|guest)\/)?(?<job>[a-zA-Z0-9_-]{1,160})\/(?<artifact>[a-zA-Z0-9_-]{1,160})$/.exec(pathname);
+    if (pathname === '/usage') {
+      void ingestUsage(req, res).catch(() => { if (!res.headersSent) { res.writeHead(503); res.end(); } });
+      return;
+    }
     if (!artifactMatch && (pathname !== '/mcp' || !['POST', 'GET', 'DELETE'].includes(req.method))) { res.writeHead(404); res.end(); return; }
     if (artifactMatch) {
       if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
@@ -177,6 +194,9 @@ export async function createGeoDHttpServer(env = process.env) {
         try { message = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
         if (message?.method === 'tools/call' && message.params?.name === 'geod_fetch' &&
             highestImageryZoom(message.params?.arguments?.request) > 5) {
+          const attemptId = randomUUID();
+          guestService.observe({ kind: 'tool', operation: 'geod_fetch', attemptId, state: 'started' });
+          guestService.observe({ kind: 'tool', operation: 'geod_fetch', attemptId, state: 'failed', reason: 'auth' });
           res.writeHead(401, { 'www-authenticate': `Bearer resource_metadata="${oauth.metadataUrl}", scope="geod:tools"`, 'cache-control': 'no-store' });
           res.end(); return;
         }
@@ -185,5 +205,5 @@ export async function createGeoDHttpServer(env = process.env) {
     } else void guestNodeHandler(req, res);
   });
   server.on('close', () => { void handler.close(); void service.close(); void guestHandler?.close(); void guestService?.close(); for (const entry of userServices.values()) { void entry.handler.close(); void entry.service.close(); } });
-  return { server, service, port };
+  return { server, service, port, usage };
 }

@@ -18,4 +18,5 @@ reqwest = "=0.12.28"
 base64 = "=0.22.1"
 rand = "=0.8.5"
 sha2 = "=0.10.9"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 image = { version = "=0.25.9", default-features = false, features = ["png", "jpeg", "webp"] }

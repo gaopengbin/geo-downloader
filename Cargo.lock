@@ -557,6 +557,7 @@ name = "geod-cli"
 version = "0.3.2"
 dependencies = [
  "base64",
+ "chrono",
  "geod-core",
  "image",
  "rand",

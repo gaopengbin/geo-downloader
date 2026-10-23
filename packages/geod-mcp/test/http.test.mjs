@@ -9,7 +9,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { createGeoDHttpServer } from '../src/http.mjs';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-const geodBin = path.join(repoRoot, 'target', 'release', process.platform === 'win32' ? 'geod.exe' : 'geod');
+const geodBin = process.env.GEOD_TEST_BIN || path.join(repoRoot, 'target', 'release', process.platform === 'win32' ? 'geod.exe' : 'geod');
 
 test('HTTP MCP requires bearer auth and serves real GeoD tools', async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), 'geod-http-'));

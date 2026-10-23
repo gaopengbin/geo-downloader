@@ -1,0 +1,3 @@
+# Isolated tool QA contains disposable local OAuth credentials and source outputs.
+tools-usage-*/
+tools-usage-*.json

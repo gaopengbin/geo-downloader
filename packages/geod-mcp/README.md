@@ -1,5 +1,12 @@
 # GeoD MCP 0.1.6
 
+Local usage reporting is optional and off by default. Use `geod-mcp telemetry
+enable|disable|status` (shared with `geod telemetry`) to control it. Hosted service
+statistics distinguish authorization, actual tool execution and download
+outcomes. They do not record tool arguments, paths, coordinates, source URLs or
+keys. Missing results remain unknown. See `docs/operations/cli-mcp-usage.md` in
+the repository for the event contract, exclusions and verification procedure.
+
 GeoD MCP wraps the GeoD CLI imagery download workflow for AI agents: plan a bounded download, start it, follow progress, inspect the actual result, and read or download verified files. The CLI can also acquire a prepared administrative GeoJSON boundary to clip imagery; this is part of the download request.
 
 Anonymous imagery downloads cover levels 0–5. A request containing level 6 or higher requires a GeoD account. Local MCP uses the user's `geod auth login` session; hosted MCP challenges the high-zoom fetch through OAuth. Planning and vector-only requests remain available without login.

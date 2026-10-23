@@ -152,7 +152,7 @@ async fn login() -> Result<Value, String> {
     let redirect = format!("http://127.0.0.1:{port}/callback");
     let client = reqwest::Client::new();
     let registration = client.post(format!("{ISSUER}/oauth/register"))
-        .json(&json!({"client_name":"GeoD CLI","redirect_uris":[redirect],"token_endpoint_auth_method":"none"}))
+        .json(&json!({"client_name":"GeoD CLI","geod_product":if std::env::var("GEOD_AUTH_CLIENT_PRODUCT").as_deref()==Ok("mcp") {"mcp"} else {"cli"},"redirect_uris":[redirect],"token_endpoint_auth_method":"none"}))
         .timeout(Duration::from_secs(15)).send().await.map_err(|_| "GeoD authorization service is unavailable".to_string())?;
     if !registration.status().is_success() {
         return Err("GeoD authorization registration failed".into());

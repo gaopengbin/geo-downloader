@@ -11,7 +11,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { createGeoDHttpServer } from '../src/http.mjs';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
-const bin = path.join(root, 'target', 'release', process.platform === 'win32' ? 'geod.exe' : 'geod');
+const bin = process.env.GEOD_TEST_BIN || path.join(root, 'target', 'release', process.platform === 'win32' ? 'geod.exe' : 'geod');
 const post = (url, value, form = false, headers = {}) => fetch(url, { method: 'POST', headers: { 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json', ...headers }, body: form ? new URLSearchParams(value) : JSON.stringify(value) });
 
 test('separate account OAuth uses PKCE, resource binding and isolated MCP workspace', async () => {

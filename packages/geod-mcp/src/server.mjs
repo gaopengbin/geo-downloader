@@ -1,5 +1,7 @@
 import { McpServer, ProtocolError, ResourceNotFoundError, ResourceTemplate } from '@modelcontextprotocol/server';
 import { toolSchemas } from './schemas.mjs';
+import { randomUUID } from 'node:crypto';
+import { usageReason } from './usage-schema.mjs';
 
 const ARTIFACT_URI_TEMPLATE = 'geod://artifacts/{jobId}/{artifactId}';
 const NATIVE_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
@@ -79,8 +81,23 @@ export function createServer(service) {
   });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   const createJob = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+  const observe = (name, operation) => async (...args) => {
+    const attemptId = randomUUID();
+    const emit = detail => { try { service.observe?.({ kind: 'tool', operation: name, attemptId, ...detail }); } catch { /* optional */ } };
+    emit({ state: 'started' });
+    try {
+      const value = await operation(...args);
+      const failed = value?.isError || value?.structuredContent?.ok === false;
+      emit({ state: failed ? 'failed' : 'succeeded', reason: failed ? usageReason(value.structuredContent?.error) : 'none' });
+      return value;
+    } catch (error) {
+      const reason = usageReason(error);
+      emit({ state: reason === 'cancelled' ? 'cancelled' : 'failed', reason });
+      throw error;
+    }
+  };
   const register = (name, title, description, inputSchema, annotations, operation) => {
-    server.registerTool(name, { title, description, inputSchema, annotations }, (args, ctx) => safely(async () => jsonResult(await operation(args, ctx)), safeError));
+    server.registerTool(name, { title, description, inputSchema, annotations }, (args, ctx) => safely(() => observe(name, async () => jsonResult(await operation(args, ctx)))(), safeError));
   };
 
   register('geod_capabilities', 'GeoD capabilities',
@@ -116,14 +133,14 @@ export function createServer(service) {
     description: 'Read a registered job artifact within the configured inline size limit (default 8 MiB). PNG/JPEG/WebP/GIF return a native image; GeoJSON/JSON/text return their UTF-8 contents. Every result includes original metadata and a resource link. Large artifacts and GeoTIFF are intended for local processing using the job artifact path.',
     inputSchema: toolSchemas.getArtifact,
     annotations: readOnly,
-  }, ({ jobId, artifactId }) => safely(async () => {
+  }, ({ jobId, artifactId }) => safely(observe('geod_get_artifact', async () => {
     const { artifact, data, uri, mimeType } = artifactPayload(await service.readArtifact(jobId, artifactId), jobId, artifactId);
     const result = jsonResult({ artifact });
     result.content.push({ type: 'resource_link', uri, name: artifact.name ?? artifact.id, mimeType, size: data.byteLength });
     if (NATIVE_IMAGE_MIMES.has(mimeType.toLowerCase())) result.content.push({ type: 'image', data: data.toString('base64'), mimeType });
     else if (isText(mimeType)) result.content.push({ type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) });
     return withinWireLimit(result, artifact.path);
-  }, safeError));
+  }), safeError));
 
   if (typeof service.artifactLink === 'function') register('geod_artifact_link', 'Download a GeoD artifact',
     'Create a signed HTTPS download URL for a completed registered artifact, including files too large for inline MCP reads. The link expires in ten minutes; share it only with the intended recipient.',

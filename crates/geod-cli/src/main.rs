@@ -1,6 +1,7 @@
 use geod_core::pipeline;
 mod sources;
 mod auth;
+mod usage;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -17,6 +18,8 @@ const HELP: &str = r#"Download and inspect imagery and boundary data
   geod sources default --id my_source
   geod sources probe --id my_source [--zoom 0 --x 0 --y 0]
   geod auth login|status|logout
+  geod telemetry enable|disable|status
+Anonymous local usage reporting is optional and off by default.
 Use --source ID with plan/fetch, or imagery.sourceId in job.json. A default
 source is used when imagery has no url/sourceId. Registered sources are local
 to this user's GeoD CLI configuration; they are not uploaded to GeoD.
@@ -64,7 +67,7 @@ fn absolute(path: &str) -> Result<PathBuf, String> {
     }
 }
 
-async fn run(command: &str, args: &[String]) -> Result<Value, String> {
+async fn run(command: &str, args: &[String], usage: Option<&usage::Usage>) -> Result<Value, String> {
     match command {
         "plan" => {
             let options = options(args, &["--request", "--source"])?;
@@ -92,6 +95,7 @@ async fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 .get("--work-dir")
                 .map(|value| absolute(value))
                 .transpose()?;
+            if let Some(usage) = usage { usage.download_started(); }
             let manifest = pipeline::fetch_local_with_work_dir(
                 request,
                 path.parent().ok_or("Invalid request path")?,
@@ -111,6 +115,7 @@ async fn run(command: &str, args: &[String]) -> Result<Value, String> {
         }
         "sources" => sources::run(args).await,
         "auth" => auth::run(args).await,
+        "telemetry" => usage::configure(args),
         "geostyle-import" => {
             let options = options(args, &["--bundle", "--url", "--token-env", "--style"])?;
             let token = options
@@ -162,10 +167,12 @@ async fn main() {
         println!("geod {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    let usage = usage::Usage::start(&args[0]);
     let result = tokio::select! {
-        result=run(&args[0],&args[1..])=>result,
+        result=run(&args[0],&args[1..],usage.as_ref())=>result,
         _=tokio::signal::ctrl_c()=>Err("CANCELLED: operation interrupted".into()),
     };
+    if let Some(usage) = usage { usage.finish(&result).await; }
     match result {
         Ok(value) => println!("{}", serde_json::to_string(&value).expect("JSON result")),
         Err(message) => {

@@ -30,7 +30,7 @@ async function body(req, form = false) {
   return form ? Object.fromEntries(new URLSearchParams(text)) : JSON.parse(text);
 }
 
-export async function createOAuth({ file, publicHost, accountApi = 'https://geod.laogao.xyz/api/account' }) {
+export async function createOAuth({ file, publicHost, accountApi = 'https://geod.laogao.xyz/api/account', onAuthorization = () => {} }) {
   const issuer = `https://${publicHost}/geod-mcp`;
   const resource = `${issuer}/mcp`;
   const metadataUrl = `https://${publicHost}/.well-known/oauth-protected-resource/geod-mcp/mcp`;
@@ -82,7 +82,7 @@ export async function createOAuth({ file, publicHost, accountApi = 'https://geod
 <p id="passwordHelp" hidden>注册密码为 8–128 个字符。</p>
 <div id="login"><button id="loginBtn">登录并授权</button><button id="registerBtn" class="sub">注册账号</button></div>
 <div id="register" hidden><button id="codeBtn" class="sub">发送邮箱验证码</button><label for="code">邮箱验证码</label><input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位数字"><button id="createBtn">注册并授权</button><button id="backBtn" class="sub">返回登录</button></div>
-<p id="message" role="status" aria-live="polite"></p><small>授权后将返回你的 Agent。GeoD 不保存你的账号密码；授权令牌只用于 GeoD MCP。</small></main><script>
+<p id="message" role="status" aria-live="polite"></p><small>授权后将返回你的 Agent。GeoD 不保存你的账号密码；授权令牌只用于 GeoD MCP。云端记录授权、工具类型和任务结果以改善服务，不记录工具参数、路径、坐标或图源地址。本地使用统计默认关闭，可自行开启。</small></main><script>
 const tx=${JSON.stringify(txId)},api='/geod-mcp/oauth/account/';let challengeId='';const $=id=>document.getElementById(id),msg=t=>$('message').textContent=t;
 const errorText={INVALID_EMAIL:'请输入有效的邮箱地址。',INVALID_PASSWORD:'密码须为 8–128 个字符。',INVALID_CREDENTIALS:'邮箱或密码不正确，请检查后重试。',LOGIN_RATE_LIMIT:'登录尝试过多，请 15 分钟后再试。',VERIFICATION_INVALID:'验证码错误、已过期或已使用，请重新获取。',VERIFICATION_RATE_LIMIT:'验证码发送太频繁，请稍后再试。',VERIFICATION_SEND_FAILED:'验证码发送失败，请稍后重试。',ACCOUNT_ALREADY_REGISTERED:'该邮箱已注册，请返回登录；忘记密码请联系支持。',ACCOUNT_NOT_FOUND:'该邮箱尚未注册，请先注册。',AUTH_REQUIRED:'登录状态已失效，请重新登录。',IDENTITY_ALREADY_BOUND:'该邮箱或手机号已绑定其他账号。',ACCOUNT_UNAVAILABLE:'账号服务暂时不可用，请稍后重试。',temporarily_unavailable:'账号服务暂时不可用，请稍后重试。',invalid_request:'授权页面已过期，请从 Codex 重新发起登录。'};
 function email(){const value=$('email').value.trim();if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(value))throw Error(errorText.INVALID_EMAIL);return value}
@@ -146,7 +146,7 @@ $('createBtn').onclick=()=>run(async()=>{const address=email();if(!challengeId)t
         if (!input.redirect_uris.every(validRedirect)) return reject('invalid_redirect_uri', 'Redirect URI must use HTTPS, a local HTTP loopback, or an application-specific scheme');
         if (input.token_endpoint_auth_method && input.token_endpoint_auth_method !== 'none') return reject('invalid_client_metadata', 'Only public clients with token_endpoint_auth_method none are supported');
         const clientId = secret();
-        state.clients[clientId] = { name: String(input.client_name || 'Agent client').slice(0, 100), redirectUris: input.redirect_uris, created: now() };
+        state.clients[clientId] = { name: String(input.client_name || 'Agent client').slice(0, 100), redirectUris: input.redirect_uris, created: now(), product: ['cli', 'mcp'].includes(input.geod_product) ? input.geod_product : 'unknown' };
         await save();
         json(res, 201, { client_id: clientId, client_name: state.clients[clientId].name, redirect_uris: input.redirect_uris, token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] });
       } catch {
@@ -205,6 +205,7 @@ $('createBtn').onclick=()=>run(async()=>{const address=email();if(!challengeId)t
         state.access[digest(access)] = { userId, resource, expires: now() + 3600 };
         state.refresh[digest(refresh)] = { userId, clientId: input.client_id, expires: now() + 30 * 86400 };
         await save();
+        try { onAuthorization({ userId, product: client.product || 'unknown', operation: input.grant_type === 'authorization_code' ? 'login' : 'refresh' }); } catch { /* Optional statistics cannot break login. */ }
         json(res, 200, { access_token: access, token_type: 'Bearer', expires_in: 3600, refresh_token: refresh, scope: 'geod:tools' });
       } catch { error(res, 400, 'invalid_request', 'Invalid token request'); }
       return true;

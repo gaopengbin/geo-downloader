@@ -26,12 +26,15 @@ if (!args.length || (args.length === 1 && args[0] === 'serve')) {
   const result = spawnSync('powershell.exe', ['-NoProfile', '-File', path.join(root, 'scripts', script), '-PackageSpec', packageSpec, '-Workspace', workspace], { stdio: 'inherit', windowsHide: true, shell: false });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
+} else if (args[0] === 'telemetry' && ['enable', 'disable', 'status'].includes(args[1]) && args.length === 2) {
+  const { configureUsage } = await import('../src/usage-client.mjs');
+  process.stdout.write(`${JSON.stringify(await configureUsage(args[1]))}\n`);
 } else if (args[0] === 'auth' && ['login', 'status', 'logout'].includes(args[1]) && args.length === 2) {
   const binary = path.join(root, 'bin', process.platform === 'win32' ? 'geod.exe' : 'geod');
-  const result = spawnSync(binary, ['auth', args[1]], { stdio: 'inherit', windowsHide: true, shell: false });
+  const result = spawnSync(binary, ['auth', args[1]], { stdio: 'inherit', windowsHide: true, shell: false, env: { ...process.env, GEOD_AUTH_CLIENT_PRODUCT: 'mcp', GEOD_USAGE_PARENT: 'mcp' } });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;
 } else {
-  process.stderr.write('Usage: geod-mcp [serve | install codex|workbuddy [--workspace PATH] [--package SPEC] | auth login|status|logout]\n');
+  process.stderr.write('Usage: geod-mcp [serve | install codex|workbuddy [--workspace PATH] [--package SPEC] | auth login|status|logout | telemetry enable|disable|status]\n');
   process.exitCode = 2;
 }
