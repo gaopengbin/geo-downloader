@@ -159,6 +159,10 @@ async fn run(command: &str, args: &[String], usage: Option<&usage::Usage>) -> Re
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["__usage-flush"] {
+        usage::Usage::flush_pending().await;
+        return;
+    }
     if args.is_empty() || args.iter().any(|s| s == "--help" || s == "-h") {
         print!("GeoD CLI {}\n{HELP}", env!("CARGO_PKG_VERSION"));
         return;

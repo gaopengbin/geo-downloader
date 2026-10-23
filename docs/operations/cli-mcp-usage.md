@@ -70,8 +70,11 @@ copied into the outbox. Statistics never open login or refresh a token.
 
 Delivery goes only to `https://laogao.xyz/geod-mcp/usage`. A loopback HTTP
 `GEOD_USAGE_ENDPOINT` override supports isolated verification. Redirects are
-rejected. Network sends run in the background with a 1-second timeout; normal
-shutdown waits at most 200 ms. Atomic outbox files survive a failed send.
+rejected. MCP sends have a 1-second timeout. CLI sends have a 5-second timeout; normal
+shutdown still waits at most 200 ms, then a hidden background worker can drain
+pending observations for at most 12 seconds. A local lock prevents concurrent
+workers. The worker emits no events, does not log in and never runs a download.
+Atomic outbox files survive a failed send.
 The next command/call can replay them. Duplicate IDs are deduplicated again in
 the report, including across collector restarts. Statistics failures never
 change command exit codes, authentication or task results.

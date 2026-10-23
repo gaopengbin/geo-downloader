@@ -235,6 +235,11 @@ impl Usage {
         {
             return None;
         }
+        let usage = Self::prepare(operation)?;
+        usage.emit("tool", "started", "none");
+        Some(usage)
+    }
+    fn prepare(operation: &str) -> Option<Self> {
         let home = crate::sources::home().ok()?;
         if !enabled(&home) {
             return None;
@@ -276,8 +281,47 @@ impl Usage {
             sending: Arc::new(AtomicBool::new(false)),
             download_started: Arc::new(AtomicBool::new(false)),
         };
-        usage.emit("tool", "started", "none");
         Some(usage)
+    }
+    // A detached, bounded worker can finish HTTPS after a short command exits.
+    // It emits no events, performs no product operation and never logs in.
+    pub async fn flush_pending() {
+        let Some(usage) = Self::prepare("flush") else { return };
+        let lock = usage.home.join("usage-flush.lock");
+        if fs::metadata(&lock).ok().and_then(|m| m.modified().ok())
+            .and_then(|t| t.elapsed().ok()).is_some_and(|age| age > Duration::from_secs(30)) {
+            let _ = fs::remove_file(&lock);
+        }
+        let Ok(guard) = fs::OpenOptions::new().write(true).create_new(true).open(&lock) else { return };
+        let _ = tokio::time::timeout(Duration::from_secs(12), async {
+            // Different authorization bindings must never share a request.
+            for _ in 0..4 {
+                if !enabled(&usage.home) { break; }
+                let count = usage.pending_count();
+                if count == 0 { break; }
+                usage.send_batch().await;
+                if usage.pending_count() >= count { break; }
+            }
+        }).await;
+        drop(guard);
+        let _ = fs::remove_file(lock);
+    }
+    fn pending_count(&self) -> usize {
+        fs::read_dir(self.home.join("usage-outbox")).map(|r|
+            r.flatten().filter(|e| pending_name(&e.file_name().to_string_lossy())).take(MAX_PENDING).count()
+        ).unwrap_or(0)
+    }
+    fn handoff_pending(&self) {
+        if !enabled(&self.home) || self.pending_count() == 0 { return; }
+        let Ok(exe) = std::env::current_exe() else { return };
+        let mut command = std::process::Command::new(exe);
+        command.arg("__usage-flush").stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        #[cfg(windows)] {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let _ = command.spawn();
     }
     pub fn download_started(&self) {
         if !self.download_started.swap(true, Ordering::SeqCst) {
@@ -435,7 +479,7 @@ impl Usage {
             return;
         }
         let Ok(client) = reqwest::Client::builder()
-            .timeout(Duration::from_secs(1))
+            .timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::none())
             .build()
         else {
@@ -510,6 +554,7 @@ impl Usage {
             self.send().await;
         })
         .await;
+        self.handoff_pending();
     }
 }
 
