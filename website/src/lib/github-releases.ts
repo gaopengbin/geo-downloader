@@ -28,22 +28,22 @@ export interface GitHubRelease {
 }
 
 const fallbackRelease: GitHubRelease = {
-  tag_name: "v3.6.17",
-  name: "GeoDownloader v3.6.17",
-  html_url: `${RELEASES_URL}/tag/v3.6.17`,
-  published_at: "2026-10-22T12:38:40Z",
+  tag_name: "v3.6.18",
+  name: "GeoDownloader v3.6.18",
+  html_url: `${RELEASES_URL}/tag/v3.6.18`,
+  published_at: "2026-10-27T13:49:36Z",
   body: "",
   draft: false,
   prerelease: false,
   assets: [
-    "GeoDownloader_3.6.17_windows_x64-setup.exe",
-    "GeoDownloader_3.6.17_macos_arm64.dmg",
-    "GeoDownloader_3.6.17_macos_x64.dmg",
-    "GeoDownloader_3.6.17_linux_amd64.deb",
-    "GeoDownloader_3.6.17_linux_amd64.AppImage",
+    "GeoDownloader_3.6.18_windows_x64-setup.exe",
+    "GeoDownloader_3.6.18_macos_arm64.dmg",
+    "GeoDownloader_3.6.18_macos_x64.dmg",
+    "GeoDownloader_3.6.18_linux_amd64.deb",
+    "GeoDownloader_3.6.18_linux_amd64.AppImage",
   ].map((name) => ({
     name,
-    browser_download_url: `${RELEASES_URL}/download/v3.6.17/${name}`,
+    browser_download_url: `${RELEASES_URL}/download/v3.6.18/${name}`,
     size: 0,
     download_count: 0,
   })),
