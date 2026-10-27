@@ -161,6 +161,24 @@ impl TileDownloader {
         if !preview_only {
             builder = builder.redirect(if std::env::var_os("GEOD_PUBLIC_MCP").is_some() { reqwest::redirect::Policy::none() } else { tile_policy::offline_redirect_policy() });
         }
+        if crate::geovis::is_geovis_url(&source.url) {
+            builder = builder.redirect(reqwest::redirect::Policy::none());
+        }
+        if source.url.starts_with("earth-history://") {
+            let parsed=reqwest::Url::parse(&source.url).map_err(|_|"EARTH_PLAN: invalid provider context")?;
+            let id=parsed.host_str().ok_or("EARTH_PLAN: plan identity missing")?;
+            let plan=crate::earth_history::planner::Plan::load(id)?;
+            if source.id!=format!("earth_history_{id}")||source.max_zoom!=plan.output_zoom{
+                return Err("EARTH_PLAN: source namespace does not match the frozen plan".into());
+            }
+            builder = builder.redirect(reqwest::redirect::Policy::none()).no_gzip().no_brotli().no_deflate().no_zstd();
+        }
+        if source.url.starts_with("keyhole-history://") {
+            let id=source.url.strip_prefix("keyhole-history://").and_then(|s|s.split('/').next()).ok_or("EARTH_PLAN: Keyhole context")?;
+            let context=crate::earth_history::keyhole::Context::load(id)?;
+            if context.tiles.is_none() || source.id!=context.source().id || source.max_zoom!=context.source().max_zoom{return Err("EARTH_PLAN: download requires a frozen Keyhole plan".into());}
+            builder=builder.redirect(reqwest::redirect::Policy::none()).no_gzip().no_brotli().no_deflate().no_zstd();
+        }
 
         // 配置代理
         if let Some(proxy_url) = proxy {
@@ -227,7 +245,11 @@ impl TileDownloader {
         let mut headers = reqwest::header::HeaderMap::new();
 
         let is_osm_standard = tile_policy::is_osm_standard_url(&self.source.url);
-        let ua = if is_osm_standard {
+        let is_geovis = crate::geovis::is_geovis_url(&self.source.url);
+        let is_nasa_gibs = crate::historical_sources::is_gibs_url(&self.source.url);
+        let is_eox = crate::historical_sources::is_eox_url(&self.source.url);
+        let is_earth_history = self.source.url.starts_with("earth-history://") || self.source.url.starts_with("keyhole-history://");
+        let ua = if is_osm_standard || is_geovis || is_nasa_gibs || is_eox || is_earth_history {
             concat!(
                 "GeoD/",
                 env!("CARGO_PKG_VERSION"),
@@ -247,7 +269,7 @@ impl TileDownloader {
         );
 
         // 设置 Referer
-        let referer = if is_osm_standard {
+        let referer = if is_osm_standard || is_geovis || is_nasa_gibs || is_eox || is_earth_history {
             None
         } else if self.source.url.contains("tianditu") {
             Some("https://map.tianditu.gov.cn/")
@@ -323,6 +345,24 @@ impl TileDownloader {
         tokens: Option<&TiandituTokens>,
     ) -> Result<(), String> {
         tile_policy::ensure_offline_allowed(url)?;
+        if url.starts_with("keyhole-history://") {
+            let(source,z,x,y)=crate::earth_history::keyhole::parse_url(url)?;
+            let bytes=crate::earth_history::keyhole::read_tile(&source,z,x,y,client.clone()).await?;
+            tile_payload::validate(&bytes,Some("image/png"))?;
+            if let Some(parent)=file_path.parent(){tokio::fs::create_dir_all(parent).await.map_err(|e|e.to_string())?;}
+            return tokio::fs::write(file_path,bytes).await.map_err(|e|e.to_string());
+        }
+        if url.starts_with("earth-history://") {
+            return match crate::earth_history::planner::read_tile(url, client.clone()).await {
+                Ok(bytes) => {
+                    tile_payload::validate(&bytes, Some("image/png"))?;
+                    if let Some(parent) = file_path.parent() { tokio::fs::create_dir_all(parent).await.map_err(|e|e.to_string())?; }
+                    tokio::fs::write(file_path, bytes).await.map_err(|e|e.to_string())
+                }
+                Err(error) if error.starts_with("EARTH_NO_DATA:") => { let _=tokio::fs::remove_file(file_path).await; Ok(()) }
+                Err(error) => Err(error),
+            };
+        }
         let tokens = tokens.filter(|_| tianditu_tokens::is_tianditu_url(url));
         let mut last_error: String;
         if let Some(parent) = file_path.parent() {
@@ -339,7 +379,8 @@ impl TileDownloader {
             let url = request_url.as_deref().unwrap_or(url);
             let req_fut = async {
                 if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_request(used); }
-                match client.get(url).headers(headers.clone()).send().await {
+                let request = crate::geovis::request(client, url).map_err(|e| (e, false))?;
+                match request.headers(headers.clone()).send().await {
                     Ok(resp) => {
                         let status = resp.status();
                         if status.is_success() {
@@ -347,6 +388,8 @@ impl TileDownloader {
                                 .and_then(|v| v.to_str().ok()).map(str::to_owned);
                             match bounded_tile_body(resp, MAX_TILE_RESPONSE_BYTES).await {
                                 Ok(bytes) => {
+                                    if crate::geovis::is_geovis_url(url) { crate::geovis::validate_tile(&bytes).map_err(|e|(e,false))?; }
+                                    if crate::historical_sources::is_no_data_tile(url,&bytes) {let _=tokio::fs::remove_file(file_path).await;return Ok(());}
                                     tile_payload::validate(&bytes, content_type.as_deref())
                                         .map_err(|e| (e, false))?;
                                     match tokio::fs::write(file_path, &bytes).await {
@@ -469,6 +512,10 @@ impl TileDownloader {
         });
         let mut scanned = 0usize;
         let mut scan_report = std::time::Instant::now();
+        for tile in &tiles {
+            if (self.source.url.starts_with("earth-history://") && tile.z>self.source.max_zoom) || (self.source.url.starts_with("keyhole-history://") && tile.z!=self.source.max_zoom) {return Err("EARTH_PLAN: tile exceeds frozen output detail".into());}
+            crate::historical_sources::validate_zoom(&self.source.url,tile.z)?;
+        }
         for chunk in tiles.chunks(256) {
             tokio::select! {
                 biased;
@@ -480,6 +527,7 @@ impl TileDownloader {
             let batch = chunk.to_vec();
             let directory = temp_dir.clone();
             let token = cancellation.clone();
+            let historical_url=self.source.url.clone();
             let checked = tokio::task::spawn_blocking(move || {
                 let mut checked = Vec::with_capacity(batch.len());
                 for tile in batch {
@@ -487,7 +535,7 @@ impl TileDownloader {
                     let sharded = directory.join(tile.x.to_string()).join(format!("{}.png", tile.y));
                     let path = if sharded.exists() { sharded }
                         else { directory.join(format!("{}_{}.png", tile.x, tile.y)) };
-                    let existing = tile_payload::valid_file(&path).then_some(path);
+                    let existing = (tile_payload::valid_file(&path) && (!crate::historical_sources::is_weld_url(&historical_url) || std::fs::read(&path).is_ok_and(|b|crate::historical_sources::usable_cached_tile(&historical_url,&b)))).then_some(path);
                     checked.push((tile, existing));
                 }
                 Ok(checked)
@@ -595,9 +643,10 @@ impl TileDownloader {
                     let source = cache_src.clone();
                     let directory = temp_dir.clone();
                     let token = cancellation.clone();
+                    let historical_url=self.source.url.clone();
                     let restored = tokio::task::spawn_blocking(move || {
                         restore_cached_batch(batch, &directory, &token,
-                            |coord| tcache::Store::global().get(&source, coord))
+                            |coord| tcache::Store::global().get(&source, coord).map(|stored|stored.filter(|s|crate::historical_sources::usable_cached_tile(&historical_url,&s.bytes))))
                     }).await.map_err(|e| format!("读取缓存瓦片失败: {e}"))??;
                     for (tile, path) in restored {
                         if let Some(path) = path {
@@ -657,7 +706,7 @@ impl TileDownloader {
                 // 1) 检查是否已被浏览补齐（Issue #28）
                 if !active_downloads::is_still_pending(&ask, coord) {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                        if tile_payload::validate(&stored.bytes, None).is_ok() {
+                        if crate::historical_sources::usable_cached_tile(&url, &stored.bytes) {
                             return (tile, persist_cached_tile(file_path, stored.bytes).await);
                         }
                     }
@@ -666,7 +715,7 @@ impl TileDownloader {
                 // 2) 优先查缓存，逐张落盘以限制内存占用
                 if tcache::get_config().enabled {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                        if tile_payload::validate(&stored.bytes, None).is_ok() {
+                        if crate::historical_sources::usable_cached_tile(&url, &stored.bytes) {
                             return (tile, persist_cached_tile(file_path, stored.bytes).await);
                         }
                     }
@@ -709,6 +758,7 @@ impl TileDownloader {
         let mut no_data_count = 0u32;
         // 一次性告警：no_data 占比过高时主动提示用户图源可能无覆盖
         let mut high_nodata_warned = false;
+        let mut last_progress_report = std::time::Instant::now();
         // 一次性告警：缓存写入失败次数过多
         let mut high_putfail_warned = false;
 
@@ -759,7 +809,7 @@ impl TileDownloader {
                                         no_data: no_data_count,
                                         browse_filled: active_downloads::browse_filled_count() as u32,
                                         status: format!(
-                                            "已有 {} 张瓦片返回 404（占已完成 {}%），图源在此区域/级别可能无覆盖，建议降低缩放级别后重试",
+                                            "已有 {} 张瓦片无数据（占已完成 {}%），图源在此区域/级别可能无覆盖，建议切换年份、区域或级别",
                                             no_data_count, pct
                                         ),
                                     });
@@ -779,6 +829,9 @@ impl TileDownloader {
                     }
                     if (completed + failed) % 50 == 0 || (completed + failed) == total {
                         crate::fs_util::ensure_minimum_free_space(&temp_dir)?;
+                    }
+                    if report_progress_now(total, completed + failed, last_progress_report.elapsed()) {
+                        last_progress_report = std::time::Instant::now();
                         let retrying = retrying_counter.load(Ordering::Relaxed);
                         let status = if retrying > 0 {
                             format!("下载中，{} 个瓦片正在重试", retrying)
@@ -809,12 +862,10 @@ impl TileDownloader {
                         if token.is_cancelled() { return Err("任务已取消".to_string()); }
                     }
                     let retrying = retrying_counter.load(Ordering::Relaxed);
-                    if retrying > 0 {
-                        progress_callback(DownloadProgress {
-                            total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
-                            status: format!("下载中，{} 个瓦片正在重试", retrying),
-                        });
-                    }
+                    progress_callback(DownloadProgress {
+                        total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
+                        status: if retrying > 0 { format!("下载中，{} 个瓦片正在重试", retrying) } else { "downloading".into() },
+                    });
                 }
             }
         }
@@ -879,7 +930,7 @@ impl TileDownloader {
                     // 重试命中同样落盘，不累计压缩字节
                     if tcache::get_config().enabled {
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                            if tile_payload::validate(&stored.bytes, None).is_ok() {
+                            if crate::historical_sources::usable_cached_tile(&url, &stored.bytes) {
                                 return (tile, persist_cached_tile(file_path, stored.bytes).await);
                             }
                         }
@@ -1057,9 +1108,46 @@ fn restore_cached_batch(
     Ok(restored)
 }
 
+fn report_progress_now(total:u32,finished:u32,since_last:Duration)->bool {total<=50 || finished>=total || since_last>=Duration::from_millis(100)}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn small_downloads_report_each_tile_while_large_downloads_are_throttled(){
+        assert!(report_progress_now(4,1,Duration::ZERO));
+        assert!(!report_progress_now(400,1,Duration::from_millis(10)));
+        assert!(report_progress_now(400,8,Duration::from_millis(100)));
+        assert!(report_progress_now(400,400,Duration::ZERO));
+    }
+
+
+
+    #[tokio::test]
+    async fn small_network_downloads_expose_every_intermediate_completion() {
+        let _cache_test_lock=crate::tile_cache::CACHE_TEST_LOCK.lock().unwrap();
+        struct RestoreCache(crate::tile_cache::CacheConfig);
+        impl Drop for RestoreCache { fn drop(&mut self){crate::tile_cache::set_config(self.0.clone());} }
+        let _restore=RestoreCache(crate::tile_cache::get_config());
+        crate::tile_cache::set_enabled(false);
+        for total in [4u32,25] {
+            let mut png=std::io::Cursor::new(Vec::new());
+            image::RgbaImage::from_pixel(256,256,image::Rgba([20,80,120,255])).write_to(&mut png,image::ImageFormat::Png).unwrap();
+            let (url,requests,server)=mock_tile_server(wire("200 OK","Content-Type: image/png\r\n",&png.into_inner())).await;
+            let mut source=custom_source(&format!("{url}/{{z}}/{{x}}/{{y}}"));source.id=format!("progress_{}",uuid::Uuid::new_v4());
+            let downloader=TileDownloader::new(source,None).unwrap();let directory=tempfile::tempdir().unwrap();
+            let tiles=(0..total).map(|i|TileCoord{x:i%5,y:i/5,z:5}).collect();
+            let mut observed=Vec::new();
+            let files=downloader.download_tiles(tiles,2,directory.path(),None,None,|p|observed.push(p.completed)).await.unwrap();server.abort();
+            assert_eq!(files.len(),total as usize);assert_eq!(requests.load(Ordering::SeqCst),total);
+            for completed in 0..=total{assert!(observed.contains(&completed),"missing {completed}: {observed:?}");}
+        }
+    }
+
+
+
+
+
 
     #[test]
     fn cache_restore_reads_sqlite_one_tile_at_a_time_and_preserves_retry_inputs() {

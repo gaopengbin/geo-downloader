@@ -4,6 +4,7 @@ import 'driver.js/dist/driver.css'
 
 import { MAIN_TOUR_STEPS, TOUR_STORAGE_KEY, TOUR_VERSION } from './tour-config'
 import { trackTelemetry, type TelemetryTour } from '@/features/telemetry/telemetry-client'
+import { runtimePolicy } from '@/lib/runtime-policy'
 
 type SeenMap = Record<string, number>
 
@@ -114,6 +115,7 @@ export function useOnboardingTour(options: UseOnboardingTourOptions) {
 
   // 首次访问自动启动
   useEffect(() => {
+    if (!runtimePolicy.automaticOnboarding) return
     if (!autoStartOnFirstVisit) return
     if (startedRef.current) return
     const seen = readSeen()

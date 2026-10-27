@@ -8,7 +8,7 @@ interface TaskObservation { id: string; status: string; error?: string; message?
 interface Attempt { attemptId: string; status: string; startedAt: number | null }
 export type DownloadTrackerState = [string, Attempt][]
 const terminal = new Set(['completed','completed_with_gaps','failed','cancelled'])
-const active = new Set(['pending','downloading','paused','pending_decision','merging','processing','exporting','building_pyramid'])
+const active = new Set(['pending','preparing','downloading','paused','pending_decision','merging','processing','exporting','building_pyramid'])
 export function durationBucket(ms: number | null): DownloadDuration {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return 'unknown'
   return ms < 10_000 ? 'under_10s' : ms < 60_000 ? '10-60s' : ms < 300_000 ? '1-5m' : ms < 1_800_000 ? '5-30m' : '30m+'

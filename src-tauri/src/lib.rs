@@ -33,8 +33,17 @@ pub mod source_analyzer;
 pub mod assistant;
 pub mod region_bookmarks;
 pub mod geotiff_sidecar;
+pub mod geovis;
+pub mod geovis_commands;
+pub mod historical_sources;
+pub mod earth_history;
+pub mod earth_history_commands;
+#[cfg(debug_assertions)] pub mod earth_history_qa;
 
 // Tauri commands
+#[cfg(debug_assertions)]
+pub mod commands;
+#[cfg(not(debug_assertions))]
 mod commands;
 mod notifications;
 
@@ -43,12 +52,18 @@ use task::TaskManager;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
-    Manager, RunEvent, WindowEvent,
+    Emitter, Manager, RunEvent, WindowEvent,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("keyhole", |_ctx,request,responder| {
+            let uri=request.uri().to_string();
+            tauri::async_runtime::spawn(async move {
+                responder.respond(earth_history_commands::keyhole_response(&uri).await);
+            });
+        })
         .register_uri_scheme_protocol("gdcache", |_ctx, request| {
             // 解析 gdcache://localhost/<source>/<z>/<x>/<y>[.ext]
             let uri = request.uri().to_string();
@@ -108,6 +123,19 @@ pub fn run() {
             notifications::notifications_open_link,
             commands::get_tile_sources,
             commands::get_builtin_sources,
+            geovis_commands::geovis_status,
+            geovis_commands::geovis_set_token,
+            geovis_commands::geovis_delete_token,
+            geovis_commands::geovis_probe_access,
+            geovis_commands::geovis_preview_tile,
+            earth_history_commands::earth_history_catalog,
+            earth_history_commands::earth_history_cancel,
+            earth_history_commands::earth_history_prepare,
+            earth_history_commands::earth_history_preview_tile,
+            earth_history_commands::keyhole_history_dates,
+            earth_history_commands::keyhole_history_session,
+            earth_history_commands::keyhole_history_plan,
+            earth_history_commands::keyhole_history_status,
             commands::analyze_tile_source_url,
             commands::estimate_download,
             commands::get_system_memory,
@@ -192,6 +220,8 @@ pub fn run() {
             cache_migration::cache_migration_delete_source,
         ])
         .setup(|app| {
+            let task_events=app.handle().clone();
+            app.state::<Arc<TaskManager>>().set_event_sink(Arc::new(move|snapshot|{let _=task_events.emit("task-updated",snapshot);}));
             // 启动时从用户设置同步 TLS 严格性开关（默认 false = 严格验证证书）
             if let Ok(sm) = settings::SettingsManager::new() {
                 if let Ok(s) = sm.get() {

@@ -1,9 +1,11 @@
 import { invokeCommand } from '@/lib/tauri'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import type { CreateTaskResult, PersistedTask, TaskInfo, TaskLog } from '@/types/api'
+import { taskProgressState } from './task-progress-state'
 
 export function getActiveTasks() {
-  return invokeCommand<TaskInfo[]>('get_active_tasks')
+  const startedAt = taskProgressState.checkpoint()
+  return invokeCommand<TaskInfo[]>('get_active_tasks').then((tasks) => taskProgressState.reconcile(tasks, startedAt))
 }
 
 export function cancelTask(taskId: string) {
@@ -22,6 +24,7 @@ export function togglePauseTask(taskId: string) {
 
 export function removeTask(taskId: string) {
   return invokeCommand<void>('remove_task', { taskId }).then((result) => {
+    taskProgressState.forget(taskId)
     void trackTelemetry('task_action', { action: 'delete' })
     return result
   })

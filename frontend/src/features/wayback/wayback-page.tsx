@@ -36,6 +36,9 @@ import {
 import { useSelectionStore } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
 import { useWaybackStore } from '@/store/wayback-store'
+import { ImageryPage } from '@/features/imagery/imagery-page'
+import { EarthHistoryPage } from './earth-history-page'
+import { matchesHistoricalProvider, type HistoryProvider } from '@/features/sources/historical-source-info'
 import {
   cancelWaybackScan,
   createWaybackTask,
@@ -109,6 +112,30 @@ function formatBytes(mb?: number | null): string {
 }
 
 export function WaybackPage() {
+  const { t } = useTranslation()
+  const provider = useWaybackStore((state) => state.provider)
+  const changeProvider = (next: HistoryProvider) => {
+    const state = useWaybackStore.getState()
+    const current = useAppStore.getState().selectedSourceByMode.wayback
+    if (state.provider !== 'esri' && current && matchesHistoricalProvider(current, state.provider)) state.rememberSource(state.provider, current)
+    if (next !== 'esri') useAppStore.getState().setSelectedSourceForMode('wayback', state.sourceByProvider[next] ?? null)
+    state.setProvider(next)
+  }
+  const historySelector = <PanelSection icon={History} title={t('wayback.sources.title')} description={t('wayback.sources.description')}>
+      <Label className="text-xs" htmlFor="history-provider">{t('wayback.sources.provider')}</Label>
+      <Select value={provider} onValueChange={(value) => changeProvider(value as HistoryProvider)}>
+        <SelectTrigger id="history-provider" data-agent-target="history-provider-select"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {(['esri', 'nasa', 'eox', 'geovis', 'earth'] as const).map((value) => <SelectItem key={value} value={value}>{t(`wayback.sources.${value}`)}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </PanelSection>
+  return <div className="space-y-4" data-history-provider={provider}>
+    {provider === 'esri' ? <EsriWaybackPage historySelector={historySelector} /> : provider === 'earth' ? <EarthHistoryPage historySelector={historySelector} /> : <ImageryPage key={provider} mode="wayback" historyProvider={provider} historySelector={historySelector} />}
+  </div>
+}
+
+function EsriWaybackPage({ historySelector }: { historySelector: import('react').ReactNode }) {
   const { t, i18n } = useTranslation()
   const inTauri = isTauriRuntime()
   const qc = useQueryClient()
@@ -623,6 +650,7 @@ export function WaybackPage() {
   return (
     <div className="space-y-4">
       <RegionSelector />
+      {historySelector}
 
       <PanelSection
         icon={History}

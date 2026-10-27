@@ -31,11 +31,13 @@ import {
   removeTask,
   togglePauseTask,
 } from '@/features/tasks/tasks-api'
-import { getTaskStatusKey } from '@/features/tasks/task-copy'
+import { getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
+import { useTaskUpdates } from '@/features/tasks/use-task-updates'
 import type { TaskInfo, TaskStatus } from '@/types/api'
 
 const ACTIVE_STATES: TaskStatus[] = [
   'pending',
+  'preparing',
   'downloading',
   'merging',
   'processing',
@@ -192,8 +194,8 @@ function TaskRow({ task }: { task: TaskInfo }) {
           )}
         </div>
         {task.message && (
-          <p className="truncate text-xs text-muted-foreground" title={task.message}>
-            {task.message}
+          <p className="truncate text-xs text-muted-foreground" title={getTaskMessage(task, t)}>
+            {getTaskMessage(task, t)}
           </p>
         )}
         {task.error && (
@@ -207,6 +209,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
 }
 
 export function TasksDialog() {
+  useTaskUpdates()
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const qc = useQueryClient()

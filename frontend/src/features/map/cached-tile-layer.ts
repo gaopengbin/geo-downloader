@@ -38,6 +38,12 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     this._cacheDisplayName = options.displayName ?? options.sourceKey
     this._cacheFormat = options.format
     this._cacheReadOnly = options.readOnly === true
+    this.on('tileunload', (event: L.TileEvent) => {
+      const tile = event.tile as HTMLImageElement & { earthAbort?: AbortController; earthRequest?: string; earthBlob?: string }
+      tile.earthAbort?.abort()
+      if (tile.earthRequest) void invokeCommand('earth_history_cancel', { requestId: tile.earthRequest }).catch(() => {})
+      if (tile.earthBlob) URL.revokeObjectURL(tile.earthBlob)
+    })
   },
 
   getTileUrl: function (coords: L.Coords): string {
@@ -72,7 +78,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     }
     const onLoadFromNetwork = () => {
       done(undefined, tile)
-      if (!this._cacheReadOnly && TAURI) {
+      if (!this._cacheReadOnly && TAURI && !this._cacheSourceKey.startsWith('geovis_') && !this._cacheSourceKey.startsWith('earth_history_') && !this._cacheSourceKey.startsWith('earth_keyhole_')) {
         // 异步回写，不阻塞渲染
         this._writeBackTile(tile, coords).catch(() => {
           /* swallow */
@@ -80,7 +86,9 @@ const CachedTileLayerImpl = L.TileLayer.extend({
       }
     }
 
-    if (TAURI) {
+    if (TAURI && this._cacheSourceKey.startsWith('earth_keyhole_')) {
+      this._loadFromNetwork(tile, coords, onLoadFromNetwork, onError)
+    } else if (TAURI) {
       // 先尝试缓存：直接走 gdcache 自定义协议（避免 base64 中转）
       // Tauri v2 在 Windows/Android 上以 http://<scheme>.localhost/... 暴露，其它平台为 <scheme>://localhost/...
       const isWindows = navigator.userAgent.toLowerCase().includes('windows')
@@ -106,6 +114,38 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     onLoad: () => void,
     onError: () => void,
   ) {
+    if (this._cacheSourceKey.startsWith('earth_keyhole_')) {
+      if (!TAURI) { onError(); return }
+      const image = tile as HTMLImageElement & { earthAbort?: AbortController; earthRequest?: string; earthBlob?: string }
+      const controller = new AbortController()
+      const requestId = crypto.randomUUID()
+      image.earthAbort = controller
+      image.earthRequest = requestId
+      image.dataset.earthSource = this._cacheSourceKey
+      image.dataset.earthCoords = `${coords.z}/${coords.x}/${coords.y}`
+      const prefix = navigator.userAgent.toLowerCase().includes('windows') ? 'http://keyhole.localhost' : 'keyhole://localhost'
+      const url = `${prefix}/${encodeURIComponent(this._cacheSourceKey)}/${coords.z}/${coords.x}/${coords.y}?request=${requestId}`
+      tile.onload = () => { image.earthRequest = undefined; onLoad(); if (image.earthBlob) { URL.revokeObjectURL(image.earthBlob); image.earthBlob = undefined } }
+      tile.onerror = onError
+      void fetch(url, { signal: controller.signal }).then(async (response) => {
+        if (!response.ok) throw new Error(`Historical tile HTTP ${response.status}`)
+        const blob = await response.blob()
+        if (controller.signal.aborted) return
+        image.earthBlob = URL.createObjectURL(blob)
+        tile.src = image.earthBlob
+      }).catch(() => { image.earthRequest = undefined; if (!controller.signal.aborted) onError() })
+      return
+    }
+    if (this._cacheSourceKey.startsWith('geovis_') || this._cacheSourceKey.startsWith('earth_history_')) {
+      // The native client attaches the Key. Never expose it to Leaflet or the DOM.
+      tile.onload = onLoad
+      tile.onerror = onError
+      if (!TAURI) { onError(); return }
+      void invokeCommand<string>(this._cacheSourceKey.startsWith('earth_history_') ? 'earth_history_preview_tile' : 'geovis_preview_tile', {
+        sourceKey: this._cacheSourceKey, z: coords.z, x: coords.x, y: coords.y,
+      }).then((dataUrl) => { tile.src = dataUrl }).catch(onError)
+      return
+    }
     tile.onload = onLoad
     tile.onerror = onError
     const url = this.getTileUrl(coords)

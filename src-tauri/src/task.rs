@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 #[serde(rename_all = "lowercase")]
 pub enum TaskStatus {
     Pending,
+    Preparing,
     Downloading,
     Paused,
     /// Issue #31：成功率过低，跳过自动导出，等待用户决策（补漏重试 / 强制导出）。
@@ -43,6 +44,9 @@ pub struct TaskInfo {
     pub format: String,
     pub save_path: String,
     pub status: TaskStatus,
+    pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preparation: Option<PreparationProgress>,
     pub progress: f64,
     pub completed: u32,
     pub total: u32,
@@ -60,6 +64,9 @@ pub struct TaskInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download_diagnostics: Option<crate::tianditu_tokens::TokenDiagnostics>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PreparationProgress { pub completed: u32, pub total: u32 }
 
 /// 日志条目
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +98,8 @@ impl TaskEntry {
 pub struct TaskManager {
     tasks: Arc<Mutex<HashMap<String, TaskEntry>>>,
     log_dir: PathBuf,
+    event_sink: Mutex<Option<Arc<dyn Fn(TaskInfo) + Send + Sync>>>,
+    revision: std::sync::atomic::AtomicU64,
 }
 
 impl TaskManager {
@@ -107,7 +116,41 @@ impl TaskManager {
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             log_dir,
+            event_sink: Mutex::new(None),
+            revision: std::sync::atomic::AtomicU64::new(1),
         }
+    }
+
+    pub fn set_event_sink(&self, sink: Arc<dyn Fn(TaskInfo) + Send + Sync>) {
+        *self.event_sink.lock().unwrap() = Some(sink);
+    }
+    fn notify_changed(&self, id: &str) {
+        let snapshot = {
+            let mut tasks = self.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else { return };
+            entry.info.revision = self.revision.fetch_add(1, Ordering::Relaxed);
+            let mut snapshot=entry.info.clone();
+            if let Some(pool)=entry.token_pool.as_ref(){snapshot.download_diagnostics=Some(pool.diagnostics());}
+            snapshot
+        };
+        let sink = self.event_sink.lock().unwrap().clone();
+        if let Some(sink) = sink { sink(snapshot); }
+    }
+    pub fn update_preparation(&self, id: &str, completed: u32, total: u32) {
+        {
+            let mut tasks = self.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else { return };
+            if matches!(entry.info.status, TaskStatus::Cancelled | TaskStatus::Completed | TaskStatus::CompletedWithGaps | TaskStatus::Failed) { return; }
+            entry.info.status = if entry.pause_control.is_paused() { TaskStatus::Paused } else { TaskStatus::Preparing };
+            entry.info.preparation = Some(PreparationProgress { completed, total });
+            entry.info.progress = if total > 0 { completed as f64 / total as f64 * 10.0 } else { 0.0 };
+            entry.info.message = Some(format!("准备历史影像索引 {completed}/{total}"));
+        }
+        self.notify_changed(id);
+    }
+    pub fn set_task_source(&self, id: &str, source: String) {
+        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) { entry.info.source = source; }
+        self.notify_changed(id);
     }
 
     /// 创建新任务，返回 (task_id, CancellationToken)
@@ -133,6 +176,8 @@ impl TaskManager {
             format,
             save_path,
             status: TaskStatus::Pending,
+            revision: 0,
+            preparation: None,
             progress: 0.0,
             completed: 0,
             total,
@@ -157,7 +202,8 @@ impl TaskManager {
             token_pool: None,
             log_writer,
         };
-        self.tasks.lock().unwrap().insert(id, entry);
+        self.tasks.lock().unwrap().insert(id.clone(), entry);
+        self.notify_changed(&id);
         (cancel_token, pause_control)
     }
 
@@ -183,19 +229,21 @@ impl TaskManager {
                 return;
             }
             entry.info.status = if entry.pause_control.is_paused()
-                && matches!(status, TaskStatus::Pending | TaskStatus::Downloading)
+                && matches!(status, TaskStatus::Pending | TaskStatus::Preparing | TaskStatus::Downloading)
             {
                 TaskStatus::Paused
             } else {
                 status
             };
             entry.info.progress = progress;
+            entry.info.preparation = None;
             entry.info.completed = completed;
             entry.info.failed_count = failed_count;
             // Issue #31：success_count 自动推算，避免调用方分散维护
             entry.info.success_count = completed.saturating_sub(failed_count);
             entry.info.message = message;
         }
+        self.notify_changed(id);
     }
 
     /// 标记任务完成
@@ -217,6 +265,7 @@ impl TaskManager {
             entry.info.file_size = file_size;
             entry.info.message = Some("完成".to_string());
         }
+        self.notify_changed(id);
     }
 
     /// 标记任务完成但有缺块（Issue #31）
@@ -242,6 +291,7 @@ impl TaskManager {
             entry.info.failed_count = failed_count;
             entry.info.message = Some(format!("完成但有 {} 张缺块", failed_count));
         }
+        self.notify_changed(id);
     }
 
     /// 标记任务等待用户决策（Issue #31）
@@ -263,6 +313,7 @@ impl TaskManager {
             entry.info.status = TaskStatus::PendingDecision;
             entry.info.message = Some(reason);
         }
+        self.notify_changed(id);
     }
 
     /// 标记任务失败
@@ -281,6 +332,7 @@ impl TaskManager {
             entry.freeze_diagnostics();
             entry.info.error = Some(error);
         }
+        self.notify_changed(id);
     }
 
     /// 取消任务
@@ -309,14 +361,15 @@ impl TaskManager {
             entry.freeze_diagnostics();
             entry.info.message = Some("已取消".to_string());
         }
+        self.notify_changed(id);
     }
 
     /// 暂停/恢复任务，返回 (成功, 当前是否暂停)
     pub fn toggle_pause(&self, id: &str) -> (bool, bool) {
-        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
+        let result = if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
             if !matches!(
                 entry.info.status,
-                TaskStatus::Pending | TaskStatus::Downloading | TaskStatus::Paused
+                TaskStatus::Pending | TaskStatus::Preparing | TaskStatus::Downloading | TaskStatus::Paused
             ) {
                 return (false, false);
             }
@@ -325,7 +378,7 @@ impl TaskManager {
                 // 恢复
                 entry.pause_control.flag.store(false, Ordering::Relaxed);
                 entry.pause_control.notify.notify_waiters();
-                entry.info.status = TaskStatus::Downloading;
+                entry.info.status = if entry.info.preparation.is_some() { TaskStatus::Preparing } else { TaskStatus::Downloading };
                 entry.info.message = Some("已恢复下载".to_string());
                 (true, false)
             } else {
@@ -337,7 +390,9 @@ impl TaskManager {
             }
         } else {
             (false, false)
-        }
+        };
+        self.notify_changed(id);
+        result
     }
 
     /// 获取所有任务信息
@@ -486,6 +541,31 @@ fn task_id_prefix(id: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preparation_updates_are_visible_pauseable_and_revisioned_until_export_completion() {
+        let directory=tempfile::tempdir().unwrap();
+        let manager=TaskManager::new_with_log_dir(directory.path().to_owned());
+        let frames=Arc::new(Mutex::new(Vec::new()));let captured=frames.clone();
+        manager.set_event_sink(Arc::new(move|task|captured.lock().unwrap().push(task)));
+        manager.create_task("progress".into(),"History".into(),"preview".into(),"Earth".into(),17,"geotiff".into(),"test.tif".into(),4);
+        manager.update_preparation("progress",1,4);
+        assert_eq!(manager.get_all_tasks()[0].progress,2.5);
+        assert_eq!(manager.toggle_pause("progress"),(true,true));
+        manager.update_preparation("progress",2,4);
+        assert_eq!(manager.get_all_tasks()[0].status,TaskStatus::Paused);
+        assert_eq!(manager.toggle_pause("progress"),(true,false));
+        assert_eq!(manager.get_all_tasks()[0].status,TaskStatus::Preparing);
+        manager.set_task_source("progress","frozen".into());
+        manager.update_progress("progress",TaskStatus::Exporting,89.2,4,0,Some("Exporting".into()));
+        assert!(manager.get_all_tasks()[0].preparation.is_none());
+        manager.complete_task("progress",100);
+        manager.update_preparation("progress",1,4);
+        let frames=frames.lock().unwrap();
+        assert!(frames.windows(2).all(|w|w[0].revision<w[1].revision));
+        assert_eq!(frames.last().unwrap().status,TaskStatus::Completed);
+        assert_eq!(frames.last().unwrap().source,"frozen");
+        assert_eq!(frames.last().unwrap().progress,100.0);
+    }
     use tempfile::TempDir;
 
     #[test]
@@ -693,7 +773,7 @@ pub fn resolved_task_work_dir(task: &PersistedTask) -> Option<PathBuf> {
     }
 }
 
-fn load_task_file(task_id: &str) -> Option<PersistedTask> {
+pub(crate) fn load_task_file(task_id: &str) -> Option<PersistedTask> {
     let path = tasks_dir().join(format!("{}.json", task_id));
     let content = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()

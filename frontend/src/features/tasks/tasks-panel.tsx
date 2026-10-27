@@ -30,11 +30,13 @@ import {
   resumeTask,
   togglePauseTask,
 } from '@/features/tasks/tasks-api'
-import { getTaskStatusKey } from '@/features/tasks/task-copy'
+import { getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
+import { useTaskUpdates } from '@/features/tasks/use-task-updates'
 import type { PersistedTask, TaskInfo, TaskLog, TaskStatus } from '@/types/api'
 
 const ACTIVE_STATES: TaskStatus[] = [
   'pending',
+  'preparing',
   'downloading',
   'merging',
   'processing',
@@ -247,7 +249,6 @@ function TaskRow({
   }
   const [showLogs, setShowLogs] = useState(false)
   const [elapsed, setElapsed] = useState<number>(0)
-  const inTauri = isTauriRuntime()
   const status = String(task.status)
   const statusKey = getTaskStatusKey(status)
   const locale = i18n.resolvedLanguage ?? i18n.language
@@ -268,25 +269,6 @@ function TaskRow({
       clearInterval(id)
     }
   }, [task.id, task.status])
-
-  // 订阅本任务进度事件，触发列表刷新（保证状态变化即时）
-  useEffect(() => {
-    if (!inTauri) return
-    let unlisten: UnlistenFn | undefined
-    let cancelled = false
-    listen(`task-progress-${task.id}`, () => {
-      qc.invalidateQueries({ queryKey: ['active-tasks'] })
-    })
-      .then((fn) => {
-        if (cancelled) fn()
-        else unlisten = fn
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-      if (unlisten) unlisten()
-    }
-  }, [inTauri, qc, task.id])
 
   const pauseMutation = useMutation({
     mutationFn: () => togglePauseTask(task.id),
@@ -407,7 +389,7 @@ function TaskRow({
           </Button>
           {isActive(status) && (
             <>
-              {(status === 'pending' || status === 'downloading' || status === 'paused') && (
+              {(status === 'pending' || status === 'preparing' || status === 'downloading' || status === 'paused') && (
                 <Button
                   size="icon"
                   variant="ghost"
@@ -437,7 +419,7 @@ function TaskRow({
                 </Button>
               )}
               {/* Issue #31：暂停 / 待决策态加「强制按现状导出」入口 */}
-              {(status === 'paused' || status === 'pending_decision') && (
+              {(status === 'paused' || status === 'pending_decision') && !task.preparation && (
                 <Button
                   size="icon"
                   variant="ghost"
@@ -498,8 +480,8 @@ function TaskRow({
           )}
         </div>
         {task.message && (
-          <p className="truncate text-xs text-muted-foreground" title={task.message}>
-            {task.message}
+          <p className="truncate text-xs text-muted-foreground" title={getTaskMessage(task, t)}>
+            {getTaskMessage(task, t)}
           </p>
         )}
         {task.error && (
@@ -632,6 +614,7 @@ function ResumableRow({
 }
 
 export function TasksPanel() {
+  useTaskUpdates()
   const { t } = useTranslation()
   const qc = useQueryClient()
   const inTauri = isTauriRuntime()
@@ -713,7 +696,7 @@ export function TasksPanel() {
     () =>
       selectedActiveTasks.filter((t) => {
         const status = String(t.status)
-        return status === 'pending' || status === 'downloading'
+        return status === 'pending' || status === 'preparing' || status === 'downloading'
       }).length,
     [selectedActiveTasks],
   )
@@ -762,7 +745,7 @@ export function TasksPanel() {
     mutationFn: async () => {
       const targets = selectedActiveTasks.filter((t) => {
         const status = String(t.status)
-        return status === 'pending' || status === 'downloading'
+        return status === 'pending' || status === 'preparing' || status === 'downloading'
       })
       let success = 0
       for (const task of targets) {

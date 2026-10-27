@@ -34,6 +34,7 @@ import {
 import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { historicalSourceInfo, historicalZoomLevels, sourceMatchesHistoryContext, type HistoricalProvider } from '@/features/sources/historical-source-info'
 import {
   focusImagerySourcePicker,
   requestOsmDownloadApproval,
@@ -43,6 +44,7 @@ import { useSelectionStore, type MapBounds } from '@/store/selection-store'
 import { useMultiFeatureSubmit } from '@/features/region/use-multi-feature-submit'
 import { DispatchModeRadio } from '@/features/region/dispatch-mode-radio'
 import { useAppStore, type AppMode } from '@/store/app-store'
+import { useWaybackStore } from '@/store/wayback-store'
 import { useImageryParamsStore } from '@/store/imagery-params-store'
 import type { DownloadEstimate, DownloadRequest, OutputFormat } from '@/types/api'
 import { StatCard } from '@/components/layout/stat-card'
@@ -305,7 +307,11 @@ function BoundsInputs({ showError = true }: { showError?: boolean } = {}) {
   )
 }
 
-export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | 'mvt' } = {}) {
+export function ImageryPage({ mode = 'imagery', historyProvider, historySelector }: {
+  mode?: 'imagery' | 'dem' | 'mvt' | 'wayback'
+  historyProvider?: HistoricalProvider
+  historySelector?: import('react').ReactNode
+} = {}) {
   const { t, i18n } = useTranslation()
   const isDemMode = mode === 'dem'
   const isMvtMode = mode === 'mvt'
@@ -321,12 +327,15 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       .map(([k, v]) => ({ key: k, ...v }))
       .filter((s) => {
         const id = (s.id as string) ?? s.key
+        if (!sourceMatchesHistoryContext(id, historyProvider)) return false
         if (isMvtMode) return isMvtUrl((s as { url?: string }).url)
         if (isDemMode) return isDemSource(id)
         return !isDemSource(id) && !isMvtUrl((s as { url?: string }).url)
       })
-    return all.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }, [sourcesQuery.data, isDemMode, isMvtMode])
+    return all.sort((a, b) => historyProvider
+      ? (historicalSourceInfo(b.id ?? b.key)?.year ?? 0) - (historicalSourceInfo(a.id ?? a.key)?.year ?? 0)
+      : (a.name || '').localeCompare(b.name || ''))
+  }, [sourcesQuery.data, isDemMode, isMvtMode, historyProvider])
 
   // 同步从 store 读取持久化值作为表单初值，避免组件每次重挂时表单
   // 短暂闪现 DEFAULT_VALUES（mode 切换时 ImageryPage 销毁重挂特别明显）。
@@ -335,6 +344,8 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
   const initialFormValues = useMemo<DownloadFormValues>(() => {
     const persisted = useImageryParamsStore.getState()
     const remembered = useAppStore.getState().selectedSourceByMode[mode] ?? ''
+    const initialSource = sourceList.some((entry) => (entry.id ?? entry.key) === remembered)
+      ? remembered : sourceList[0]?.id ?? sourceList[0]?.key ?? ''
     const fmt: DownloadFormValues['format'] = isDemMode
       ? 'geotiff'
       : isMvtMode
@@ -344,7 +355,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     const rememberedOverlays = persisted.overlaySourcesByMode?.[mode]
     return {
       ...DEFAULT_VALUES,
-      source: remembered,
+      source: initialSource,
       format: fmt,
       compression: persisted.compression,
       build_pyramid: persisted.buildPyramid,
@@ -383,12 +394,13 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     formState: { errors, submitCount },
   } = form
 
+  const source = useWatch({ control, name: 'source' })
   const [initedForMode, setInitedForMode] = useState<AppMode | null>(null)
   const [cropToShape, setCropToShape] = useState(
     () => useImageryParamsStore.getState().cropToShape,
   )
   useEffect(() => {
-    if (initedForMode === mode) return
+    if (initedForMode === mode && sourceList.some((entry) => (entry.id ?? entry.key) === form.getValues('source'))) return
     if (!settingsQuery.data || !sourcesQuery.data || sourceList.length === 0) return
     const s = settingsQuery.data
     const persistedParams = useImageryParamsStore.getState()
@@ -396,8 +408,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     const remembered = useAppStore.getState().selectedSourceByMode[mode] ?? null
     const isValidRemembered =
       remembered != null &&
-      sourcesQuery.data[remembered] != null &&
-      (isDemMode ? isDemSource(remembered) : !isDemSource(remembered))
+      sourceList.some((entry) => (entry.id ?? entry.key) === remembered)
 
     let firstSourceId: string
     if (isValidRemembered) {
@@ -412,7 +423,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
       firstSourceId = sourceList[0]?.id ?? sourceList[0]?.key ?? ''
     } else {
       firstSourceId =
-        (s.default_source && sourcesQuery.data[s.default_source] && !isDemSource(s.default_source)
+        (s.default_source && sourceList.some((entry) => (entry.id ?? entry.key) === s.default_source)
           ? s.default_source
           : null) ??
         sourceList[0]?.id ??
@@ -456,9 +467,30 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, settingsQuery.data, sourcesQuery.data, sourceList])
 
-  const source = useWatch({ control, name: 'source' })
+  const selectedSourceInMode = useAppStore((state) => state.selectedSourceByMode[mode])
+  useEffect(() => {
+    if (historyProvider && selectedSourceInMode && selectedSourceInMode !== source
+      && sourceMatchesHistoryContext(selectedSourceInMode, historyProvider)
+      && sourceList.some((entry) => (entry.id ?? entry.key) === selectedSourceInMode)) {
+      setValue('source', selectedSourceInMode, { shouldValidate: true })
+    }
+  }, [historyProvider, selectedSourceInMode, source, sourceList, setValue])
+  useEffect(() => {
+    if (historyProvider && sourceMatchesHistoryContext(source, historyProvider)) {
+      useWaybackStore.getState().rememberSource(historyProvider, source)
+    }
+  }, [historyProvider, source])
   const format = useWatch({ control, name: 'format' })
-  const zoomLevels = useWatch({ control, name: 'zoom_levels' }) ?? []
+  const watchedZoomLevels = useWatch({ control, name: 'zoom_levels' })
+  const zoomLevels = useMemo(() => watchedZoomLevels ?? [], [watchedZoomLevels])
+  const historicalSource = historicalSourceInfo(source)
+  const sourceZoomLimit = historicalSource?.maxZoom ?? 22
+  useEffect(() => {
+    const supported = historicalZoomLevels(source, zoomLevels)
+    if (supported.join(',') !== zoomLevels.join(',')) {
+      setValue('zoom_levels', supported, { shouldValidate: true })
+    }
+  }, [source, zoomLevels, setValue])
   const sortedLevels = useMemo(() => [...zoomLevels].sort((a, b) => a - b), [zoomLevels])
   const zoom = sortedLevels[0] ?? 15
   const zoomMax = sortedLevels[sortedLevels.length - 1] ?? zoom
@@ -488,7 +520,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         throw new Error('__user_cancelled__')
       }
       if (policyDecision === 'cancel') throw new Error('__user_cancelled__')
-      const levels = [...values.zoom_levels].sort((a, b) => a - b)
+      const levels = [...historicalZoomLevels(values.source, values.zoom_levels)].sort((a, b) => a - b)
       const zMin = levels[0]
       const zMax = levels[levels.length - 1]
       // 探测选区中心瓦片是否有数据（按最高级别探测）
@@ -791,6 +823,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         }
       />
 
+      {historySelector}
       <form className="space-y-3">
         <PanelSection
           icon={Layers}
@@ -800,11 +833,13 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
         >
           <div className="space-y-1.5">
             <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-              {t('download.source.label')}
+              {t(historyProvider ? 'wayback.sources.version' : 'download.source.label')}
             </Label>
           <Select
             value={source}
             onValueChange={(v) => {
+              // A provider/list change can briefly clear Radix's hidden native select.
+              if (!v) return
               setValue('source', v, { shouldValidate: true })
               if (v) useAppStore.getState().setSelectedSourceForMode(mode, v)
             }}
@@ -827,12 +862,27 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
             </SelectContent>
           </Select>
           {errors.source && <p className="text-xs text-destructive">{errors.source.message}</p>}
+          {historyProvider && !sourcesLoading && sourceList.length === 0 && (
+            <p className="text-xs text-muted-foreground">{t(historyProvider === 'geovis' ? 'wayback.sources.geovisEmpty' : 'wayback.sources.empty')}</p>
+          )}
         </div>
 
         {isMvtMode && (
           <p className="text-xs text-muted-foreground">
             {t('download.source.mvtHint')}
           </p>
+        )}
+
+        {historicalSource && (
+          <div className="space-y-1 rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 p-2 text-xs leading-relaxed text-muted-foreground" data-testid="historical-source-notice">
+            <p>{t(`download.source.history.${historicalSource.provider}Hint`, { year: historicalSource.year, previousYear: historicalSource.year - 1 })}</p>
+            <a className="inline-flex items-center gap-1 underline underline-offset-4" target="_blank" rel="noreferrer"
+              href={historicalSource.provider === 'nasa' ? 'https://nasa-gibs.github.io/gibs-api-docs/'
+                : historicalSource.provider === 'geovis' ? 'https://open.geovisearth.com/product/Image_Map'
+                  : 'https://cloudless.eox.at/license-non-commercial'}>
+              {t('download.source.history.providerInfo')}<ExternalLink className="size-3" aria-hidden="true" />
+            </a>
+          </div>
         )}
 
         {source.startsWith('tianditu_') && !tiandituToken && (
@@ -906,7 +956,7 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
               }
               const selectRange = (a: number, b: number) => {
                 const arr: number[] = []
-                for (let z = a; z <= b; z++) arr.push(z)
+                for (let z = a; z <= Math.min(b, sourceZoomLimit); z++) arr.push(z)
                 field.onChange(arr)
               }
               const clear = () => field.onChange([])
@@ -920,7 +970,8 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                           key={z}
                           type="button"
                           onClick={() => toggle(z)}
-                          className={`h-7 rounded border text-xs transition ${
+                           disabled={z > sourceZoomLimit}
+                           className={`h-7 rounded border text-xs transition disabled:cursor-not-allowed disabled:opacity-35 ${
                             checked
                               ? 'border-primary bg-primary text-primary-foreground'
                               : 'border-border bg-background text-foreground hover:bg-muted'
@@ -936,9 +987,9 @@ export function ImageryPage({ mode = 'imagery' }: { mode?: 'imagery' | 'dem' | '
                     })}
                   </div>
                   <div className="flex flex-wrap gap-1 text-xs">
-                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted" onClick={() => selectRange(10, 14)}>z10~14</button>
-                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted" onClick={() => selectRange(14, 18)}>z14~18</button>
-                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted" onClick={() => selectRange(15, 19)}>z15~19</button>
+                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-35" disabled={sourceZoomLimit < 10} onClick={() => selectRange(10, 14)}>z10~{Math.min(14, sourceZoomLimit)}</button>
+                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-35" disabled={sourceZoomLimit < 14} onClick={() => selectRange(14, 18)}>z14~18</button>
+                    <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted disabled:opacity-35" disabled={sourceZoomLimit < 15} onClick={() => selectRange(15, 19)}>z15~19</button>
                     <button type="button" className="rounded border px-2 py-0.5 hover:bg-muted text-muted-foreground" onClick={clear}>{t('download.zoom.clear')}</button>
                   </div>
                 </div>

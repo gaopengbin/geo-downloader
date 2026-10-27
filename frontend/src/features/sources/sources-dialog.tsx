@@ -55,6 +55,7 @@ import {
   upsertSourceOverride,
 } from './sources-api'
 import type { AppSettings, CustomTileSource, SourceUrlAnalysis, TileSource } from '@/types/api'
+import { GeovisPanel } from './geovis-panel'
 
 type SourceFormProps = {
   value: CustomTileSource
@@ -750,6 +751,9 @@ export function SourcesDialog() {
               <TabsTrigger value="default" className="flex-1">
                 默认图源
               </TabsTrigger>
+              <TabsTrigger value="geovis" className="flex-1">
+                {t('common.geovisAuthorization', { defaultValue: '星图授权' })}
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="custom">
               <CustomPanel
@@ -773,6 +777,9 @@ export function SourcesDialog() {
                 onMutate={persistSettings}
                 pending={mutation.isPending}
               />
+            </TabsContent>
+            <TabsContent value="geovis">
+              <GeovisPanel />
             </TabsContent>
           </Tabs>
         ) : null}

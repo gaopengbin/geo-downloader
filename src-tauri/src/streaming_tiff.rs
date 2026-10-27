@@ -210,14 +210,14 @@ pub fn merge_and_export_streaming_with_budget(
         };
 
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
-        let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs
+        let decoded: Vec<Option<(usize, image::RgbaImage)>> = tile_xs
             .par_iter()
             .map(|&tile_x| {
                 let source = tile_files.get(&(tile_x, tile_y))?;
                 let bytes = source.bytes().ok()?;
                 let img = image::load_from_memory(&bytes).ok()?;
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
-                Some((px, img.to_rgb8()))
+                Some((px, img.to_rgba8()))
             })
             .collect();
 
@@ -228,16 +228,17 @@ pub fn merge_and_export_streaming_with_budget(
                 let raw = rgb.as_raw();
 
                 for row in 0..tile_h {
-                    let src_start = row * rgb.width() as usize * 3;
+                    let src_start = row * rgb.width() as usize * 4;
                     for col in 0..tile_w {
-                        let si = src_start + col * 3;
+                        let si = src_start + col * 4;
                         let di = row * width_u * channels_u + (px + col) * channels_u;
                         if si + 2 < raw.len() && di + channels_u - 1 < strip.len() {
                             strip[di] = raw[si];
                             strip[di + 1] = raw[si + 1];
                             strip[di + 2] = raw[si + 2];
                             if has_mask {
-                                strip[di + 3] = 255;
+                                strip[di + 3] = raw[si + 3];
+                                if raw[si + 3] == 0 { strip[di..di+3].fill(0); }
                             }
                         }
                     }
@@ -283,8 +284,7 @@ pub fn merge_and_export_streaming_with_budget(
                     let di = row_offset + x * channels_u;
                     if di + channels_u - 1 >= strip.len() { continue; }
                     if inside[x] {
-                        // 环内：保留影像，标记不透明
-                        strip[di + 3] = 255;
+                        // Keep source coverage alpha inside the polygon, including real NoData.
                     } else {
                         // 环外：整像素清零（RGB+alpha），与内存版 mask_image_by_polygons 一致。
                         // 仅清 alpha 会残留整张外接矩形 RGB → 群友报告的「外接矩形/黑边里有数据」。

@@ -24,6 +24,7 @@ import { useAppStore, type AppMode } from '@/store/app-store'
 import { useMapStatusStore } from '@/store/map-status-store'
 import { useVectorLayersStore } from '@/store/vector-layers-store'
 import { useWaybackStore } from '@/store/wayback-store'
+import { isHistoricalSource, sourceMatchesHistoryContext } from '@/features/sources/historical-source-info'
 import { getSettings } from '@/features/settings/settings-api'
 import { probeTile } from '@/features/download/download-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
@@ -452,7 +453,7 @@ function drawGraticuleLayer(
   return interval
 }
 
-export function MapCanvas() {
+export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } = {}) {
   const { t } = useTranslation()
   const translationRef = useRef(t)
   useEffect(() => {
@@ -509,6 +510,9 @@ export function MapCanvas() {
   const vectorLayers = useVectorLayersStore((s) => s.layers)
   const vectorRevision = useVectorLayersStore((s) => s.revision)
   const waybackPreviewId = useWaybackStore((s) => s.previewVersionId)
+  const historyProvider = useWaybackStore((s) => s.provider)
+  const earthPreview = useWaybackStore((s) => s.earthPreview)
+  const esriHistoryMode = mode === 'wayback' && historyProvider === 'esri'
   const setWaybackPreviewId = useWaybackStore((s) => s.setPreviewVersionId)
 
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
@@ -525,7 +529,7 @@ export function MapCanvas() {
   const waybackVersionsQuery = useQuery({
     queryKey: ['wayback-versions', proxyUrl ?? ''],
     queryFn: () => getWaybackVersions(proxyUrl),
-    enabled: mode === 'wayback',
+    enabled: esriHistoryMode,
     staleTime: 5 * 60 * 1000,
     select: (data) => data,
   })
@@ -547,6 +551,13 @@ export function MapCanvas() {
       [restoredView?.center.lat ?? 35.8617, restoredView?.center.lng ?? 104.1954],
       restoredView?.zoom ?? 4,
     )
+    const publishHistoryView = () => {
+      const centre = map.getCenter()
+      const longitude = ((centre.lng + 180) % 360 + 360) % 360 - 180
+      useWaybackStore.getState().setEarthView({ longitude, latitude: Math.max(-85, Math.min(85, centre.lat)), zoom: map.getZoom() })
+    }
+    map.on('moveend zoomend', publishHistoryView)
+    publishHistoryView()
     // 占位底图，等图源列表加载后会切换
     const fallback = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: OSM_STANDARD_ATTRIBUTION,
@@ -734,6 +745,7 @@ export function MapCanvas() {
 
     mapRef.current = map
     drawnRef.current = drawn
+    onMapReady?.(map)
 
     const persistCurrentView = () => {
       const center = map.getCenter()
@@ -852,7 +864,7 @@ export function MapCanvas() {
   }, [ascendingWaybackVersions, waybackPreviewId])
 
   useEffect(() => {
-    if (mode !== 'wayback' || !proxyUrl || !waybackProbeVersionId) {
+    if (!esriHistoryMode || !proxyUrl || !waybackProbeVersionId) {
       setWaybackProxyBaseUrl(null)
       return
     }
@@ -881,16 +893,17 @@ export function MapCanvas() {
     return () => {
       cancelled = true
     }
-  }, [mode, proxyUrl, waybackProbeVersionId])
+  }, [esriHistoryMode, proxyUrl, waybackProbeVersionId])
 
   // 当前 mode 期望的底图 key：'src:<key>' 或 'wb:<id>'
   const desiredBaseKey = useMemo<string | null>(() => {
-    if (mode === 'wayback') {
+    if (esriHistoryMode) {
       return waybackPreviewId ? `wb:${waybackPreviewId}` : null
     }
+    if (mode === 'wayback' && historyProvider === 'earth') return earthPreview?.source.id ? `src:${earthPreview.source.id}` : '__fallback'
     const k = selectedSourceByMode[mode]
     return k ? `src:${k}` : null
-  }, [mode, selectedSourceByMode, waybackPreviewId])
+  }, [mode, esriHistoryMode, historyProvider, earthPreview, selectedSourceByMode, waybackPreviewId])
 
   // 切换到天地图时立即探测授权状态，避免等到创建下载任务后才发现 Key 不可用。
   useEffect(() => {
@@ -950,7 +963,11 @@ export function MapCanvas() {
       const cfg = sources[k]
       const expectedUrl = (cfg as { url?: string } | undefined)?.url
       const layerUrl = (layer as L.TileLayer & { _url?: string })._url
-      if (!cfg || layerUrl !== expectedUrl) {
+      const historical = isHistoricalSource(k)
+      const expectedMaxZoom = historical ? 22 : cfg?.max_zoom ?? 22
+      const expectedNativeZoom = historical ? cfg?.max_zoom : undefined
+      if (!cfg || layerUrl !== expectedUrl || layer.options.maxZoom !== expectedMaxZoom
+        || layer.options.maxNativeZoom !== expectedNativeZoom) {
         if (map.hasLayer(layer)) map.removeLayer(layer)
         cache.delete(k)
       }
@@ -981,7 +998,8 @@ export function MapCanvas() {
               displayName: c.name ?? key,
               urlTemplate: c.url,
               attribution: c.attribution ?? '',
-              maxZoom: c.max_zoom ?? 22,
+              maxZoom: isHistoricalSource(key) ? 22 : c.max_zoom ?? 22,
+              maxNativeZoom: isHistoricalSource(key) ? c.max_zoom : undefined,
               subdomains: c.subdomains ?? 'abc',
             })
         cache.set(key, layer)
@@ -1073,7 +1091,7 @@ export function MapCanvas() {
     if (overlayMem.cia) ciaLayer.addTo(map)
     if (overlayMem.cva) cvaLayer.addTo(map)
 
-    if (mode === 'wayback') {
+    if (esriHistoryMode) {
       // ---------- Wayback：自定义嵌套 control（按 年/月 分组） ----------
       const desc = [...ascendingWaybackVersions].reverse() // 最新优先
       // group: year → month → versions
@@ -1243,7 +1261,9 @@ export function MapCanvas() {
       // ---------- Normal mode: custom click-pinned LayersControl ----------
       const sources = sourcesQuery.data ?? {}
       const cache = baseLayersRef.current
-      const keys = Object.keys(sources).sort((a, b) =>
+      const keys = Object.keys(sources).filter((id) => sourceMatchesHistoryContext(id,
+        mode === 'wayback' && historyProvider !== 'esri' ? historyProvider : undefined))
+        .filter((id) => historyProvider !== 'earth' || mode !== 'wayback' || id === earthPreview?.source.id).sort((a, b) =>
         ((sources[a] as { name?: string }).name || '').localeCompare(
           (sources[b] as { name?: string }).name || '',
         ),
@@ -1342,6 +1362,9 @@ export function MapCanvas() {
     }
   }, [
     mode,
+    esriHistoryMode,
+    historyProvider,
+    earthPreview?.id,
     sourcesQuery.data,
     ascendingWaybackVersions,
     tdtToken,
@@ -1359,6 +1382,14 @@ export function MapCanvas() {
       r.checked = r.value === waybackPreviewId
     }
   }, [waybackPreviewId])
+
+  useEffect(() => {
+    if (mode !== 'wayback' || historyProvider === 'esri') return
+    const container = customControlRef.current?.getContainer()
+    container?.querySelectorAll<HTMLInputElement>('input[name="base-layer-wayback"]').forEach((radio) => {
+      radio.checked = radio.value === selectedSourceByMode.wayback
+    })
+  }, [mode, historyProvider, selectedSourceByMode])
 
   // 同步当前期望底图 key → 切换地图上的 base layer
   useEffect(() => {
@@ -1434,6 +1465,8 @@ export function MapCanvas() {
       target = waybackLayersRef.current.get(desiredBaseKey.slice(3))
     } else if (desiredBaseKey.startsWith('src:')) {
       target = baseLayersRef.current.get(desiredBaseKey.slice(4))
+    } else if (desiredBaseKey === '__fallback') {
+      target = baseLayersRef.current.get('__fallback')
     }
     if (!target) return
     if (currentBaseLayerKeyRef.current === desiredBaseKey) return
@@ -1506,6 +1539,11 @@ export function MapCanvas() {
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0" />
+      {mode === 'wayback' && historyProvider === 'earth' && !earthPreview && (
+        <div role="status" data-earth-preview-pending className="pointer-events-none absolute left-16 right-16 top-3 z-[500] mx-auto max-w-lg rounded-md border bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-sm">
+          {t('wayback.earth.previewPending')}
+        </div>
+      )}
       {measureControlContainer &&
         createPortal(
           <>
@@ -1549,7 +1587,7 @@ export function MapCanvas() {
           </>,
           measureControlContainer,
         )}
-      {waybackFromCache && mode === 'wayback' && (
+      {waybackFromCache && esriHistoryMode && (
         <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2">
           <div className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-3 py-1 text-xs text-yellow-700 shadow-sm backdrop-blur dark:text-yellow-400">
             {t('map.offlineVersions')}

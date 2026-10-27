@@ -8,8 +8,13 @@ import {
 import { TelemetryConsentDialog } from './telemetry-consent-dialog'
 import { useTelemetryStore } from './telemetry-store'
 import { startDownloadTelemetry } from './download-monitor'
+import { runtimePolicy } from '@/lib/runtime-policy'
 
 export function TelemetryBootstrap() {
+  return runtimePolicy.telemetry ? <EnabledTelemetryBootstrap /> : null
+}
+
+function EnabledTelemetryBootstrap() {
   const consent = useTelemetryStore((state) => state.consent)
   const setConsent = useTelemetryStore((state) => state.setConsent)
   const [dismissed, setDismissed] = useState(false)

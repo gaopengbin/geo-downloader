@@ -83,13 +83,13 @@ pub fn merge_and_export_streaming_png(
 
         // rayon 并行解码本行所有瓦片
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
-        let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs.par_iter()
+        let decoded: Vec<Option<(usize, image::RgbaImage)>> = tile_xs.par_iter()
             .map(|&tile_x| {
                 let source = tile_files.get(&(tile_x, tile_y))?;
                 let bytes = source.bytes().ok()?;
                 let img = image::load_from_memory(&bytes).ok()?;
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
-                Some((px, img.to_rgb8()))
+                Some((px, img.to_rgba8()))
             })
             .collect();
 
@@ -101,16 +101,17 @@ pub fn merge_and_export_streaming_png(
                 let raw = rgb.as_raw();
 
                 for row in 0..tile_h {
-                    let src_start = row * rgb.width() as usize * 3;
+                    let src_start = row * rgb.width() as usize * 4;
                     for col in 0..tile_w {
-                        let si = src_start + col * 3;
+                        let si = src_start + col * 4;
                         let di = row * width as usize * ch + (px + col) * ch;
                         if si + 2 < raw.len() && di + ch - 1 < strip.len() {
                             strip[di] = raw[si];
                             strip[di + 1] = raw[si + 1];
                             strip[di + 2] = raw[si + 2];
                             if has_mask {
-                                strip[di + 3] = 255;
+                                strip[di + 3] = raw[si + 3];
+                                if raw[si + 3] == 0 { strip[di..di+3].fill(0); }
                             }
                         }
                     }
@@ -158,7 +159,7 @@ pub fn merge_and_export_streaming_png(
                     let di = row_offset + x * ch;
                     if di + ch - 1 >= strip.len() { continue; }
                     if inside[x] {
-                        strip[di + 3] = 255;
+                        // Keep the provider's source alpha; a crop cannot fill missing imagery.
                     } else {
                         // 环外整像素清零；仅清 alpha 会残留整张外接矩形 RGB
                         // → 群友报告的「外接矩形/黑边里有数据」。

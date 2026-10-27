@@ -7,6 +7,9 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+pub(crate) static CACHE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub mod store;
 pub mod pool;
 pub mod active_downloads;

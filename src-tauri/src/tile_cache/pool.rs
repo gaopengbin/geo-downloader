@@ -553,7 +553,7 @@ mod tests {
     use crate::tile_cache::{get_config, set_config, CacheConfig};
     use tempfile::tempdir;
 
-    static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+    use crate::tile_cache::CACHE_TEST_LOCK;
 
     struct ConfigRestore(CacheConfig);
 

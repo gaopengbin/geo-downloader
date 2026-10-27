@@ -3,6 +3,7 @@ import { isTauriRuntime } from '@/lib/tauri'
 import { useTelemetryStore } from './telemetry-store'
 import { sanitizeDownloadDiagnostics } from './download-diagnostics'
 import type { DownloadLifecycleEvent } from './download-lifecycle'
+import { runtimePolicy } from '@/lib/runtime-policy'
 
 interface TelemetryEventMap {
   download_task_state: DownloadLifecycleEvent
@@ -165,6 +166,7 @@ function createEventId() {
 }
 
 function getTelemetryEndpoint() {
+  if (!runtimePolicy.telemetry) return null
   const raw = import.meta.env.VITE_TELEMETRY_ENDPOINT?.trim()
   if (!raw) return null
 

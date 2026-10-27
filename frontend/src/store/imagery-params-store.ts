@@ -4,7 +4,7 @@ import { persist } from 'zustand/middleware'
 import { createSafeJSONStorage } from '@/store/persist-storage'
 import type { OutputFormat } from '@/types/api'
 
-export type ImageryMode = 'imagery' | 'dem' | 'mvt'
+export type ImageryMode = 'imagery' | 'dem' | 'mvt' | 'wayback'
 
 export interface ImageryParamsSnapshot {
   source: string

@@ -8,6 +8,10 @@ pub mod config;
 pub mod tile;
 #[path = "../../../src-tauri/src/merger.rs"]
 pub mod merger;
+#[path = "../../../src-tauri/src/overlay.rs"]
+pub mod overlay;
+#[path = "../../../src-tauri/src/tile_crop.rs"]
+pub mod tile_crop;
 #[path = "../../../src-tauri/src/exporter.rs"]
 pub mod exporter;
 #[path = "../../../src-tauri/src/streaming_tiff.rs"]
@@ -20,12 +24,20 @@ pub mod pyramid;
 pub mod tile_pack;
 #[path = "../../../src-tauri/src/downloader.rs"]
 pub mod downloader;
+#[path = "../../../src-tauri/src/tianditu_tokens.rs"]
+pub mod tianditu_tokens;
 #[path = "../../../src-tauri/src/tile_policy.rs"]
 pub mod tile_policy;
 #[path = "../../../src-tauri/src/tile_payload.rs"]
 pub mod tile_payload;
 #[path = "../../../src-tauri/src/source_analyzer.rs"]
 pub mod source_analyzer;
+#[path = "../../../src-tauri/src/historical_sources.rs"]
+pub mod historical_sources;
+#[path = "../../../src-tauri/src/earth_history/mod.rs"]
+pub mod earth_history;
+#[path = "../../../src-tauri/src/geovis.rs"]
+pub mod geovis;
 #[path = "../../../src-tauri/src/tile_cache/mod.rs"]
 pub mod tile_cache;
 #[path = "../../../src-tauri/src/cache_access.rs"]
@@ -45,10 +57,13 @@ mod imagery_job;
 // module headless without reading the desktop application's configuration.
 mod settings {
     pub struct SettingsManager;
-    pub struct Settings { pub export_buffer_mb: u32 }
+    #[derive(serde::Deserialize)]
+    #[serde(default)]
+    pub struct AppSettings { pub export_buffer_mb: u32, pub tianditu_token: Option<String>, pub tianditu_backup_tokens: Vec<String> }
+    impl Default for AppSettings { fn default()->Self { Self { export_buffer_mb:64,tianditu_token:None,tianditu_backup_tokens:Vec::new() } } }
     impl SettingsManager {
         pub fn new() -> Result<Self, String> { Ok(Self) }
-        pub fn get(&self) -> Result<Settings, String> { Ok(Settings { export_buffer_mb: 64 }) }
+        pub fn get(&self) -> Result<AppSettings, String> { Err("Desktop settings are not read by the headless core".into()) }
     }
 }
 pub mod vector;

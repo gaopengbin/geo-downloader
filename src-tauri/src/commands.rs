@@ -301,6 +301,24 @@ fn validate_offline_sources(request: &DownloadRequest, source: &TileSource) -> R
 
 fn validate_offline_sources_in(request: &DownloadRequest, source: &TileSource, sources: &HashMap<String, TileSource>) -> Result<(), String> {
     crate::tile_policy::ensure_offline_allowed(&source.url)?;
+    if source.id.starts_with("earth_keyhole_") {
+        let b=&request.bounds;let mut zooms=vec![request.zoom];zooms.extend(request.zoom_levels.iter().flatten().copied());if let Some(z)=request.zoom_max{zooms.push(z);}
+        crate::earth_history::keyhole::validate_request(&source.id,[b.west,b.south,b.east,b.north],&zooms)?;
+        if matches!(ExportFormat::from_str(&request.format),ExportFormat::Jpeg){return Err("EARTH_UNSUPPORTED: use GeoTIFF or PNG to preserve coverage".into());}
+    }
+    if let Some(id) = source.id.strip_prefix("earth_history_") {
+        let plan = crate::earth_history::planner::Plan::load(id)?;
+        let b = &request.bounds;
+        if b.west < plan.bounds[0]-1e-8 || b.south < plan.bounds[1]-1e-8 || b.east > plan.bounds[2]+1e-8 || b.north > plan.bounds[3]+1e-8 {
+            return Err("EARTH_PLAN: region changed; query dates for the new region first".into());
+        }
+        if request.zoom > plan.output_zoom || request.zoom_max.is_some_and(|z|z>plan.output_zoom)
+            || request.zoom_levels.iter().flatten().any(|&z|z>plan.output_zoom) { return Err("EARTH_PLAN: detail exceeds the frozen plan".into()); }
+        if matches!(ExportFormat::from_str(&request.format),ExportFormat::Jpeg) { return Err("EARTH_UNSUPPORTED: use GeoTIFF or PNG to preserve the coverage mask".into()); }
+    }
+    crate::historical_sources::validate_zoom(&source.url, request.zoom)?;
+    if let Some(zoom) = request.zoom_max { crate::historical_sources::validate_zoom(&source.url, zoom)?; }
+    for zoom in request.zoom_levels.iter().flatten() { crate::historical_sources::validate_zoom(&source.url, *zoom)?; }
     for id in request.overlay_sources.iter().flatten() {
         if let Some(overlay) = sources.get(id) {
             crate::tile_policy::ensure_offline_allowed(&overlay.url)?;
@@ -479,7 +497,45 @@ pub fn get_tile_sources(tianditu_token: Option<String>) -> HashMap<String, TileS
         }
     }
     
+    sources.extend(crate::geovis::available_sources());
+    sources.extend(crate::earth_history::planner::active_sources());
+    sources.extend(crate::earth_history::keyhole::active_sources());
     sources
+}
+
+#[cfg(test)]
+mod geovis_live_acceptance_tests {
+    /// Exercises the same catalogue command used by the main workspace, without UI input.
+    #[test]
+    #[ignore = "requires locally stored, user-authorized Geovis credentials and a completed access probe"]
+    fn main_source_list_includes_authorized_history_versions() {
+        let token = crate::geovis::get_token()
+            .expect("credential store must be readable")
+            .expect("Geovis credential must be configured");
+        let sources = super::get_tile_sources(None);
+        let mut verified = Vec::new();
+        for id in ["geovis_2021", "geovis_2022", "geovis_2025"] {
+            let source = sources.get(id).expect("authorized source missing from main catalogue");
+            assert_eq!(source.id, id);
+            assert!(crate::geovis::is_geovis_url(&source.url));
+            assert!(!source.url.contains("token="));
+            verified.push(source);
+        }
+        assert!(!sources.contains_key("geovis_city_history"));
+        let evidence = serde_json::to_string_pretty(&serde_json::json!({
+            "checkedAt": chrono::Utc::now().to_rfc3339(),
+            "command": "get_tile_sources",
+            "uiInputUsed": false,
+            "sources": verified,
+            "cityHistoryRasterRegistered": false
+        })).expect("source evidence must serialize");
+        assert!(!evidence.contains(&token), "public source records must exclude credentials");
+        let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap()
+            .join("artifacts/research/geovis-authorized-20261026/main-source-list.json");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(output, evidence).unwrap();
+    }
 }
 
 /// 获取内置图源原始默认配置（用于前端重置）
@@ -738,8 +794,9 @@ pub async fn create_download_task(
     
     // 获取图源配置（包含覆盖 + 自定义图源）
     let sources = get_tile_sources(request.tianditu_token.clone());
-    let source = sources.get(&request.source)
-        .ok_or_else(|| format!("未知图源: {}", request.source))?.clone();
+    let source = sources.get(&request.source).cloned().or_else(|| {
+        if crate::earth_history::is_source(&request.source) { crate::earth_history::source(&request.source).ok() } else { None }
+    }).ok_or_else(|| format!("未知图源或历史计划不可用: {}", request.source))?;
     validate_offline_sources(&request, &source)?;
     
     // 估算瓦片数：优先按离散级别集合求和，否则按 zoom..=zoom_max 区段求和
@@ -1527,6 +1584,8 @@ async fn execute_zoom_level(
                     .map(|ring| ring.iter().map(|p| merger::PolygonPoint { lat: p.lat, lng: p.lng }).collect())
                     .collect()
             })
+        } else if crate::earth_history::is_source(&source.id) {
+            Some(Vec::new()) // RGBA with the provider's coverage mask, without an extra polygon clip.
         } else {
             None
         };
@@ -1555,7 +1614,7 @@ async fn execute_zoom_level(
         }).await.map_err(|e| format!("流式导出失败: {}", e))??;
     } else {
         // ===== 常规路径：内存拼接 + 导出（仅 JPEG）=====
-        // 内存预算守卫：常规路径会全量加载画布，需检查预算
+        // 常规路径会全量加载画布；超出预算只记录预警，继续拼接导出。
         let has_crop = request.crop_to_shape && request.polygon.is_some();
         let format_class = FormatClass::RasterImage;
         let budget_mb = SettingsManager::new()
@@ -1624,6 +1683,11 @@ async fn execute_zoom_level(
         }).await.map_err(|e| format!("导出失败: {}", e))??;
     }
     
+    if crate::earth_history::is_source(&source.id) {
+        let grid=tile::get_merged_bounds(x_min,y_min,x_max,y_max,current_zoom);
+        crate::earth_history::write_manifest_for_grid(Path::new(&save_path), &source.id,&grid,cols*config::TILE_SIZE,rows*config::TILE_SIZE,current_zoom)?;
+    }
+
     // 金字塔构建（仅 BigTIFF + 用户勾选时）
     let mut file_size = file_size;
     let mut pyramid_built = false;
@@ -1763,8 +1827,8 @@ async fn execute_download_task(
     task_id: &str,
     cancel_token: &tokio_util::sync::CancellationToken,
     pause_control: &PauseControl,
-    request: DownloadRequest,
-    source: TileSource,
+    mut request: DownloadRequest,
+    mut source: TileSource,
     save_path: String,
     work_dir: Option<PathBuf>,
     tile_count: u32,
@@ -1786,6 +1850,25 @@ async fn execute_download_task(
         }));
     if uses_tianditu { tm.attach_token_diagnostics(task_id, tianditu_tokens.clone()); }
     let start_time = std::time::Instant::now();
+    validate_offline_sources(&request, &source)?;
+    if let Some(id)=source.id.strip_prefix("earth_keyhole_") {
+        let context=crate::earth_history::keyhole::Context::load(id)?;
+        if context.tiles.is_none() {
+            let b=&request.bounds;
+            let client=crate::earth_history::transport::Transport::new(request.proxy.as_deref(),128,128*1024*1024)?.client();
+            task_log(app,tm,task_id,"INFO","准备历史影像索引与日期快照...");
+            let frozen=tokio::select! {
+                _=cancel_token.cancelled()=>return Err("任务已取消".into()),
+                result=crate::earth_history::keyhole::plan_with_progress(&source.id,[b.west,b.south,b.east,b.north],request.zoom,client,Some(pause_control),|done,total|tm.update_preparation(task_id,done,total))=>result?,
+            };
+            source=frozen.source();request.source=source.id.clone();
+            let mut persisted=crate::task::load_task_file(task_id).ok_or("历史任务记录不可用")?;
+            persisted.request=request.clone();crate::task::save_task_file(&persisted)?;
+            tm.set_task_source(task_id,source.id.clone());
+            task_log(app,tm,task_id,"INFO","历史影像计划已冻结，开始读取影像块");
+        }
+    }
+
     let z_min = request.zoom;
     let z_max = request.zoom_max.unwrap_or(z_min).max(z_min);
     // 优先使用离散级别集合（任意级别多选），否则退化为 z_min..=z_max 连续区段
@@ -1856,7 +1939,8 @@ async fn execute_download_task(
         ));
     }
 
-    let mut progress_offset = 0.0;
+    let preparation_span=if source.id.starts_with("earth_keyhole_"){10.0}else{0.0};
+    let mut progress_offset = preparation_span;
     let mut completed_offset = 0u32;
     let mut failed_offset = 0u32;
     let mut total_file_size = 0u64;
@@ -1877,7 +1961,7 @@ async fn execute_download_task(
         let progress_span = if idx == zooms.len() - 1 {
             (100.0_f64 - progress_offset).max(0.0)
         } else {
-            (level_count as f64 / total_for_progress as f64) * 100.0
+            (level_count as f64 / total_for_progress as f64) * (100.0-preparation_span)
         };
         // MBTiles/GPKG 多 zoom 写入同一个文件，不需要为每个 zoom 单独建文件
         let req_format = ExportFormat::from_str(&request.format);
@@ -2103,10 +2187,17 @@ pub async fn probe_tile(
         .get(&source_key)
         .ok_or_else(|| format!("未知图源: {}", source_key))?
         .clone();
+    crate::historical_sources::validate_zoom(&source.url, zoom)?;
 
     // 构造 tile 坐标
     let (tx, ty) = tile::latlng_to_tile(lat, lng, zoom);
     let tile_coord = tile::TileCoord { x: tx, y: ty, z: zoom };
+
+    if source_key.starts_with("geovis_") {
+        let bytes = crate::geovis::fetch_tile(&source_key, zoom, tx, ty).await?;
+        return Ok(ProbeResult { has_data: true, status_code: 200, content_length: bytes.len(),
+            message: "星图真实影像瓦片验证通过".into() });
+    }
 
     // 复用 TileDownloader 的 URL 构造与请求头
     let downloader = TileDownloader::new_preview(source, proxy.as_deref())?;
@@ -2189,6 +2280,14 @@ pub async fn probe_tile(
 
     let bytes = resp.bytes().await.map_err(|e| format!("读取失败: {}", e))?;
     let content_length = bytes.len();
+
+    if crate::historical_sources::is_weld_url(&url) {
+        let valid_image = crate::tile_payload::validate(&bytes, None).is_ok();
+        let has_data = valid_image && !crate::historical_sources::is_no_data_tile(&url, &bytes);
+        return Ok(ProbeResult { has_data, status_code, content_length,
+            message: if has_data { "NASA WELD imagery verified / 年度合成影像有效" }
+                else { "NASA WELD has no imagery here / 该区域在此合成年份无有效影像，请切换年份或区域" }.into() });
+    }
 
     // 启发式判断：卫星/影像 tile 通常 > 5KB，空白/占位 tile 通常 < 1KB
     let has_data = content_length > 1000;
@@ -2337,6 +2436,8 @@ pub async fn resume_task(
     let sources = get_tile_sources(request.tianditu_token.clone());
     let source = if let Some(src) = sources.get(&request.source) {
         src.clone()
+    } else if crate::earth_history::is_source(&request.source) {
+        crate::earth_history::source(&request.source)?
     } else if let Some(version_id) = request.source.strip_prefix("wayback_") {
         let date = source_name
             .rsplit(' ')
@@ -2575,11 +2676,14 @@ pub async fn export_partial_task(
     let sources = get_tile_sources(request.tianditu_token.clone());
     let source = if let Some(source) = sources.get(&request.source) {
         source.clone()
+    } else if crate::earth_history::is_source(&request.source) {
+        crate::earth_history::source(&request.source)?
     } else if let Some(version_id) = request.source.strip_prefix("wayback_") {
         crate::wayback::make_tile_source(version_id, "")
     } else {
         return Err(format!("未知图源: {}", request.source));
     };
+    if let Some(id)=request.source.strip_prefix("earth_keyhole_") { if crate::earth_history::keyhole::Context::load(id)?.tiles.is_none(){return Err("历史影像索引尚未准备完成，请先继续任务".into());} }
     validate_offline_sources(&request, &source)?;
 
     // 2) 校验格式（仅支持流式格式）
@@ -2717,6 +2821,8 @@ pub async fn export_partial_task(
                         })
                         .collect()
                 })
+            } else if crate::earth_history::is_source(&req_clone.source) {
+                Some(Vec::new())
             } else {
                 None
             };
@@ -2727,6 +2833,8 @@ pub async fn export_partial_task(
             let zoom_is_dem = is_dem;
             let zoom_format = format;
             let generate_sidecars = req_clone.generate_sidecars;
+            let earth_source_id = req_clone.source.clone();
+            let output_zoom = *zoom;
 
             let result = tokio::task::spawn_blocking(move || -> Result<u64, String> {
                 let polygons = polygons_owned.as_deref();
@@ -2746,6 +2854,9 @@ pub async fn export_partial_task(
                         &merged_bounds, &save_p, polygons,
                     )
                 }?;
+                if crate::earth_history::is_source(&earth_source_id) {
+                    crate::earth_history::write_manifest_for_grid(&save_p,&earth_source_id,&merged_bounds,cols*config::TILE_SIZE,rows*config::TILE_SIZE,output_zoom)?;
+                }
                 if generate_sidecars && (zoom_is_dem || zoom_format == ExportFormat::GeoTiff) {
                     write_sidecars_for_grid(
                         &save_p,

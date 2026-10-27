@@ -213,6 +213,7 @@ export interface TileProbeResult {
 
 export type TaskStatus =
   | 'pending'
+  | 'preparing'
   | 'downloading'
   | 'paused'
   /** Issue #31：成功率过低，等待用户决策（补漏重试 / 强制导出） */
@@ -230,6 +231,8 @@ export type TaskStatus =
 export interface TaskInfo {
   id: string
   name: string
+  revision?: number
+  preparation?: { completed: number; total: number }
   source?: string
   source_name?: string
   zoom?: number

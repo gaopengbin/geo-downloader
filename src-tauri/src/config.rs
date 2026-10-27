@@ -363,6 +363,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
         },
     );
 
+    sources.extend(crate::historical_sources::sources());
     sources
 }
 

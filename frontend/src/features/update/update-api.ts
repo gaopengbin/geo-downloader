@@ -1,5 +1,6 @@
 import { invokeCommand, isTauriRuntime } from '@/lib/tauri'
 import { useUpdateStore } from './update-store'
+import { runtimePolicy } from '@/lib/runtime-policy'
 
 interface GithubAsset {
   name: string
@@ -142,6 +143,7 @@ async function getCurrentVersion(): Promise<string> {
 }
 
 export async function checkForUpdates(silent: boolean) {
+  if (silent && !runtimePolicy.automaticUpdateChecks) return
   if (!isTauriRuntime()) return
 
   const store = useUpdateStore.getState()

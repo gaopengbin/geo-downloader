@@ -13,6 +13,7 @@ import {
 } from './telemetry-client'
 import { TelemetryConsentDialog } from './telemetry-consent-dialog'
 import { useTelemetryStore } from './telemetry-store'
+import { runtimePolicy } from '@/lib/runtime-policy'
 
 export function TelemetrySettingsSection() {
   const { t } = useTranslation()
@@ -27,6 +28,14 @@ export function TelemetrySettingsSection() {
   const disableTelemetry = () => {
     clearTelemetryQueue()
     setConsent('disabled')
+  }
+
+  if (!runtimePolicy.telemetry) {
+    return (
+      <PanelSection icon={BarChart3} title={t('telemetry.title')} dataAgentTarget="settings-telemetry">
+        <p className="text-sm leading-6 text-muted-foreground">{t('telemetry.internalRun')}</p>
+      </PanelSection>
+    )
   }
 
   return (
