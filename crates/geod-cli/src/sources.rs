@@ -149,6 +149,7 @@ fn builtins() -> std::collections::HashMap<String, config::TileSource> {
             .filter(|(id, _)| !id.starts_with("mvt_") && !id.starts_with("dem_"))
             .collect();
     sources.insert("nasa_gibs_blue_marble".into(), config::TileSource {
+        headers: Default::default(),
         id: "nasa_gibs_blue_marble".into(),
         name: "NASA GIBS Blue Marble".into(),
         url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_ShadedRelief_Bathymetry/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg".into(),
@@ -160,6 +161,7 @@ fn builtins() -> std::collections::HashMap<String, config::TileSource> {
 fn resolve(store: &SourceStore, id: &str) -> Result<config::TileSource, String> {
     let source = if let Some(custom) = store.custom_sources.iter().find(|s| s.id == id) {
         config::TileSource {
+            headers: Default::default(),
             id: custom.id.clone(),
             name: custom.name.clone(),
             url: effective_url(custom),
@@ -346,6 +348,7 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
                 .collect();
             rows.extend(store.custom_sources.iter().map(|s| {
                 let tile = config::TileSource {
+                    headers: Default::default(),
                     id: s.id.clone(),
                     name: s.name.clone(),
                     url: effective_url(s),

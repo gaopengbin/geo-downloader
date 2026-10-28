@@ -248,6 +248,7 @@ pub fn make_tile_source(version_id: &str, date: &str) -> TileSource {
     let url = format!("{}/{}/{{z}}/{{y}}/{{x}}", WAYBACK_TILE_BASE_URL, version_id);
 
     TileSource {
+        headers: Default::default(),
         id: format!("wayback_{}", version_id),
         name: format!("Esri 历史影像 {}", date),
         url,

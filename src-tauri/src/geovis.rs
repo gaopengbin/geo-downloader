@@ -96,6 +96,7 @@ pub fn source(id: &str) -> Option<TileSource> {
         _ => return None,
     };
     Some(TileSource {
+        headers: Default::default(),
         id: id.into(),
         name: name.into(),
         url: format!("{ORIGIN}/pj/base/v1/{path}/{{z}}/{{x}}/{{y}}?format=webp&tmsIds=w"),

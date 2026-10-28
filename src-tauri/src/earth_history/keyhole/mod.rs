@@ -132,6 +132,7 @@ impl Context {
     }
     pub fn source(&self) -> crate::config::TileSource {
         crate::config::TileSource {
+            headers: Default::default(),
             id: format!("{PREFIX}{}", self.id),
             name: format!("Google Earth 历史影像 {}", self.requested_date),
             url: format!("keyhole-history://{}/{{z}}/{{x}}/{{y}}", self.id),

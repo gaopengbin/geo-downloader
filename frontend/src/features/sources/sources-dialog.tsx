@@ -56,14 +56,29 @@ import {
 } from './sources-api'
 import type { AppSettings, CustomTileSource, SourceUrlAnalysis, TileSource } from '@/types/api'
 import { GeovisPanel } from './geovis-panel'
+import { RequestHeadersEditor } from './request-headers-editor'
 
 type SourceFormProps = {
   value: CustomTileSource
   onChange: (next: CustomTileSource) => void
   disableId?: boolean
+  onHeadersError: (error: string | null) => void
+  headersError: string | null
 }
 
-function SourceForm({ value, onChange, disableId }: SourceFormProps) {
+function SourceForm({ value, onChange, disableId, onHeadersError, headersError }: SourceFormProps) {
+  const [testing, setTesting] = useState(false)
+  async function testSource() {
+    setTesting(true)
+    try {
+      const settings = await getSettings()
+      const result = await analyzeTileSourceUrl(value.url,
+        settings.proxy_enabled ? settings.proxy_url : null, value.headers)
+      if (result.test_ok) toast.success(result.message)
+      else toast.error(result.message)
+    } catch (error) { toast.error(error instanceof Error ? error.message : String(error)) }
+    finally { setTesting(false) }
+  }
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <div className="space-y-1.5 sm:col-span-2">
@@ -124,6 +139,14 @@ function SourceForm({ value, onChange, disableId }: SourceFormProps) {
           }
         />
       </div>
+      <div className="space-y-2 sm:col-span-2">
+        <RequestHeadersEditor value={value.headers} onError={onHeadersError}
+          onChange={(headers) => onChange({ ...value, headers })} disabled={testing} />
+        <Button type="button" variant="outline" size="sm" disabled={testing || !!headersError || !value.url.trim()}
+          onClick={() => void testSource()}>
+          {testing && <Loader2 className="mr-1 size-4 animate-spin" />}测试图源（含请求头）
+        </Button>
+      </div>
       {!disableId && (
         <div className="space-y-1.5 sm:col-span-2">
           <Label className="text-muted-foreground">ID</Label>
@@ -164,6 +187,9 @@ function CustomPanel({
   const [smartUrl, setSmartUrl] = useState('')
   const [analyzing, setAnalyzing] = useState(false)
   const [analysis, setAnalysis] = useState<SourceUrlAnalysis | null>(null)
+  const [headersError, setHeadersError] = useState<string | null>(null)
+  const [smartHeaders, setSmartHeaders] = useState<Record<string, string>>({})
+  const [smartHeadersError, setSmartHeadersError] = useState<string | null>(null)
   const isNew = useMemo(
     () => !!editing && !list.some((s) => s.id === editing.id),
     [editing, list],
@@ -171,6 +197,7 @@ function CustomPanel({
 
   function handleSave() {
     if (!editing) return
+    if (headersError) { toast.error(headersError); return }
     const err = validateSource(editing)
     if (err) {
       toast.error(err)
@@ -187,6 +214,7 @@ function CustomPanel({
   }
 
   async function handleSmartAnalyze() {
+    if (smartHeadersError) { toast.error(smartHeadersError); return }
     if (!smartUrl.trim()) {
       toast.error('请先粘贴一条瓦片 URL')
       return
@@ -197,6 +225,7 @@ function CustomPanel({
       const result = await analyzeTileSourceUrl(
         smartUrl.trim(),
         settings.proxy_enabled && settings.proxy_url ? settings.proxy_url : null,
+        smartHeaders,
       )
       setAnalysis(result)
       setEditing({
@@ -205,7 +234,9 @@ function CustomPanel({
         url: result.url_template,
         subdomains: result.subdomains,
         max_zoom: result.suggested_max_zoom,
+        headers: { ...smartHeaders },
       })
+      setSmartOpen(false)
       if (result.test_ok) {
         toast.success('图源解析和样例测试均已通过')
       } else {
@@ -269,7 +300,7 @@ function CustomPanel({
                 className="min-w-0 font-mono text-xs"
                 disabled={analyzing}
               />
-              <Button onClick={() => void handleSmartAnalyze()} disabled={analyzing}>
+              <Button onClick={() => void handleSmartAnalyze()} disabled={analyzing || !!smartHeadersError}>
                 {analyzing ? (
                   <Loader2 className="mr-1 size-4 animate-spin" />
                 ) : (
@@ -279,6 +310,8 @@ function CustomPanel({
               </Button>
             </div>
           </div>
+          <RequestHeadersEditor value={smartHeaders} onChange={setSmartHeaders}
+            onError={setSmartHeadersError} disabled={analyzing} />
           {analysis && (
             <div
               className={`flex gap-2 rounded-md border p-2.5 text-xs ${
@@ -361,6 +394,7 @@ function CustomPanel({
                         setDeletingId(null)
                         setEditing({ ...s })
                       }}
+                      aria-label={`编辑图源 ${s.name}`}
                       disabled={pending}
                     >
                       <Pencil className="size-4" />
@@ -372,6 +406,7 @@ function CustomPanel({
                         setEditing(null)
                         setDeletingId(s.id)
                       }}
+                      aria-label={`删除图源 ${s.name}`}
                       disabled={pending}
                     >
                       <Trash2 className="size-4 text-destructive" />
@@ -400,7 +435,7 @@ function CustomPanel({
               <X className="size-4" />
             </Button>
           </div>
-          <SourceForm value={editing} onChange={setEditing} disableId={isNew} />
+          <SourceForm key={editing.id} value={editing} onChange={setEditing} disableId={isNew} onHeadersError={setHeadersError} headersError={headersError} />
           <div className="flex justify-end gap-2">
             <Button
               variant="ghost"
@@ -412,7 +447,7 @@ function CustomPanel({
             >
               取消
             </Button>
-            <Button onClick={handleSave} disabled={pending}>
+            <Button onClick={handleSave} disabled={pending || !!headersError}>
               <Save className="mr-1 size-4" />
               保存
             </Button>
@@ -450,6 +485,7 @@ function OverridesPanel({
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<CustomTileSource | null>(null)
+  const [headersError, setHeadersError] = useState<string | null>(null)
 
   function startEdit(builtin: TileSource) {
     const id = builtin.id ?? builtin.key
@@ -461,6 +497,7 @@ function OverridesPanel({
 
   function handleSave() {
     if (!draft) return
+    if (headersError) { toast.error(headersError); return }
     const err = validateSource(draft)
     if (err) {
       toast.error(err)
@@ -482,7 +519,7 @@ function OverridesPanel({
   return (
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
-        覆盖内置图源的 URL / 子域名 / 最大缩放级别。重置后恢复程序内置默认值。
+        覆盖内置图源的 URL / 请求头 / 子域名 / 最大缩放级别。重置后恢复程序内置默认值。
       </p>
       <ul className="space-y-2">
         {builtinList.map((b) => {
@@ -508,6 +545,7 @@ function OverridesPanel({
                     size="sm"
                     variant="ghost"
                     onClick={() => startEdit(b)}
+                    aria-label={`编辑图源 ${b.name}`}
                     disabled={pending}
                   >
                     <Pencil className="size-4" />
@@ -526,7 +564,7 @@ function OverridesPanel({
               </div>
               {isEditing && draft && (
                 <div className="space-y-3 border-t bg-muted/40 p-4">
-                  <SourceForm value={draft} onChange={setDraft} />
+                  <SourceForm key={draft.id} value={draft} onChange={setDraft} onHeadersError={setHeadersError} headersError={headersError} />
                   <div className="flex justify-end gap-2">
                     <Button
                       variant="ghost"
@@ -538,7 +576,7 @@ function OverridesPanel({
                     >
                       取消
                     </Button>
-                    <Button onClick={handleSave} disabled={pending}>
+                    <Button onClick={handleSave} disabled={pending || !!headersError}>
                       <Save className="mr-1 size-4" />
                       保存
                     </Button>
@@ -741,7 +779,7 @@ export function SourcesDialog() {
           </div>
         ) : draft && builtinsQuery.data && mergedQuery.data ? (
           <Tabs defaultValue="custom" className="space-y-4">
-            <TabsList className="w-full">
+            <TabsList className="grid h-auto w-full grid-cols-2 sm:grid-cols-4">
               <TabsTrigger value="custom" className="flex-1">
                 自定义图源
               </TabsTrigger>

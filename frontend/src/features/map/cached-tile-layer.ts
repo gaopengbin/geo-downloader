@@ -25,6 +25,8 @@ export interface CachedTileLayerOptions extends L.TileLayerOptions {
   format?: 'png' | 'jpg' | 'webp' | 'pbf'
   /** 仅启用读，不写回（用于离线预览历史导出） */
   readOnly?: boolean
+  /** Native request is required for arbitrary HTTP headers. */
+  requestHeaders?: Record<string, string>
 }
 
 const TAURI = isTauriRuntime()
@@ -38,6 +40,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     this._cacheDisplayName = options.displayName ?? options.sourceKey
     this._cacheFormat = options.format
     this._cacheReadOnly = options.readOnly === true
+    this._requiresHeaders = Object.keys(options.requestHeaders ?? {}).length > 0
     this.on('tileunload', (event: L.TileEvent) => {
       const tile = event.tile as HTMLImageElement & { earthAbort?: AbortController; earthRequest?: string; earthBlob?: string }
       tile.earthAbort?.abort()
@@ -78,6 +81,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     }
     const onLoadFromNetwork = () => {
       done(undefined, tile)
+      if (this._requiresHeaders) return
       if (!this._cacheReadOnly && TAURI && !this._cacheSourceKey.startsWith('geovis_') && !this._cacheSourceKey.startsWith('earth_history_') && !this._cacheSourceKey.startsWith('earth_keyhole_')) {
         // 异步回写，不阻塞渲染
         this._writeBackTile(tile, coords).catch(() => {
@@ -86,7 +90,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
       }
     }
 
-    if (TAURI && this._cacheSourceKey.startsWith('earth_keyhole_')) {
+    if (this._requiresHeaders || (TAURI && this._cacheSourceKey.startsWith('earth_keyhole_'))) {
       this._loadFromNetwork(tile, coords, onLoadFromNetwork, onError)
     } else if (TAURI) {
       // 先尝试缓存：直接走 gdcache 自定义协议（避免 base64 中转）
@@ -114,6 +118,24 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     onLoad: () => void,
     onError: () => void,
   ) {
+    if (this._requiresHeaders) {
+      if (!TAURI) { onError(); return }
+      const image = tile as HTMLImageElement & { headersUnloaded?: boolean }
+      image.headersUnloaded = false
+      const unload = (event: L.TileEvent) => {
+        if (event.tile !== image) return
+        image.headersUnloaded = true
+        this.off('tileunload', unload)
+      }
+      this.on('tileunload', unload)
+      tile.onload = onLoad
+      tile.onerror = onError
+      void invokeCommand<string>('source_preview_tile', {
+        sourceKey: this._cacheSourceKey, z: this._getZoomForUrl(), x: coords.x, y: coords.y,
+      }).then((dataUrl) => { if (!image.headersUnloaded) tile.src = dataUrl })
+        .catch(() => { if (!image.headersUnloaded) onError() })
+      return
+    }
     if (this._cacheSourceKey.startsWith('earth_keyhole_')) {
       if (!TAURI) { onError(); return }
       const image = tile as HTMLImageElement & { earthAbort?: AbortController; earthRequest?: string; earthBlob?: string }

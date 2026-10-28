@@ -150,6 +150,7 @@ impl TileDownloader {
     }
 
     fn build(source: TileSource, proxy: Option<&str>, preview_only: bool) -> Result<Self, String> {
+        source.headers.validated()?;
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(config::TIMEOUT_SECS))
             .connect_timeout(Duration::from_secs(5))
@@ -190,6 +191,15 @@ impl TileDownloader {
             }
         }
 
+        if let Some(policy) = source.headers.redirect_policy(preview_only) {
+            builder = builder.referer(false);
+            // Public MCP and provider-specific transports keep their stricter policies.
+            if std::env::var_os("GEOD_PUBLIC_MCP").is_none()
+                && !crate::geovis::is_geovis_url(&source.url)
+                && source.url.starts_with("http") {
+                builder = builder.redirect(policy);
+            }
+        }
         let client = builder.build().map_err(|e| e.to_string())?;
 
         Ok(Self {
@@ -282,6 +292,8 @@ impl TileDownloader {
             headers.insert(reqwest::header::REFERER, referer.parse().unwrap());
         }
 
+        // Already validated by build(); explicit per-source values replace defaults.
+        headers.extend(self.source.headers.validated().expect("validated source headers"));
         headers
     }
 
@@ -293,6 +305,36 @@ impl TileDownloader {
     /// 获取 HTTP 客户端引用
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// Interactive raster preview with the same headers and redirect rules as downloads.
+    pub async fn preview_tile(&self, tile: &TileCoord) -> Result<Vec<u8>, String> {
+        Ok(self.preview_tile_payload(tile).await?.bytes)
+    }
+
+    pub async fn preview_tile_payload(&self, tile: &TileCoord) -> Result<StoredTile, String> {
+        let url = self.get_tile_url(tile);
+        let response = self.client.get(&url).headers(self.get_headers()).send().await
+            .map_err(|_| "图源请求失败，请检查地址、代理和请求头".to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("图源请求失败：HTTP {}", response.status().as_u16()));
+        }
+        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let bytes = bounded_tile_body(response, MAX_TILE_RESPONSE_BYTES).await?;
+        tile_payload::validate(&bytes, content_type.as_deref())?;
+        let content_type = image::guess_format(&bytes).map(|format| format.to_mime_type().to_string())
+            .unwrap_or_else(|_| "application/vnd.mapbox-vector-tile".into());
+        // Normalize gzipped vector tiles for the local protocol and MapLibre fetch.
+        let bytes = if bytes.starts_with(&[0x1f, 0x8b]) {
+            use std::io::Read;
+            let mut decoded = Vec::new();
+            flate2::read::GzDecoder::new(bytes.as_slice()).take((MAX_TILE_RESPONSE_BYTES + 1) as u64)
+                .read_to_end(&mut decoded).map_err(|_| "INVALID_TILE: 无法解压矢量瓦片".to_string())?;
+            if decoded.len() > MAX_TILE_RESPONSE_BYTES { return Err("TILE_TOO_LARGE: 瓦片过大".into()); }
+            decoded
+        } else { bytes };
+        Ok(StoredTile { bytes, content_type })
     }
 
     /// 推断瓦片格式（从 URL 或字节魔数）
@@ -319,7 +361,7 @@ impl TileDownloader {
 
     /// 构造缓存图源元信息
     fn build_cache_source(&self) -> (SourceKey, SourceInfo) {
-        let key = SourceKey::new(&self.source.id);
+        let key = SourceKey::new(self.source.cache_key());
         let info = SourceInfo {
             display_name: self.source.name.clone(),
             url_template: self.source.url.clone(),
@@ -1113,6 +1155,29 @@ fn report_progress_now(total:u32,finished:u32,since_last:Duration)->bool {total<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn custom_headers_reach_downloads_and_block_cross_origin_redirects() {
+        let server = crate::source_headers::tests::auth_server();
+        let mut source = crate::source_headers::tests::auth_source(&server);
+        let directory = tempfile::tempdir().unwrap();
+        let tile = TileCoord { z:1,x:1,y:1 };
+        for (route, success) in [("tile", true), ("same",true), ("cross",false)] {
+            source.url = format!("{}/{route}/{{z}}/{{x}}/{{y}}.png",server.url);
+            let downloader = TileDownloader::new(source.clone(),None).unwrap();
+            let file = directory.path().join(format!("{route}.png"));
+            let result = TileDownloader::download_one_tile(downloader.client(),&downloader.get_tile_url(&tile),
+                &downloader.get_headers(),&file,0,None,&RateLimitGate::default(),None).await;
+            assert_eq!(result.is_ok(),success);
+            if success { assert!(image::open(file).is_ok()); }
+        }
+        source.headers = Default::default(); source.url = format!("{}/tile/{{z}}/{{x}}/{{y}}.png",server.url);
+        let downloader = TileDownloader::new(source,None).unwrap();
+        let file = directory.path().join("denied.png");
+        let error = TileDownloader::download_one_tile(downloader.client(),&downloader.get_tile_url(&tile),
+            &downloader.get_headers(),&file,0,None,&RateLimitGate::default(),None).await.unwrap_err();
+        assert!(error.contains("401")); assert!(!file.exists());
+        assert_eq!(server.stolen.load(Ordering::SeqCst),0);
+    }
     #[test]
     fn small_downloads_report_each_tile_while_large_downloads_are_throttled(){
         assert!(report_progress_now(4,1,Duration::ZERO));
@@ -1529,6 +1594,7 @@ mod tests {
 
     fn custom_source(url: &str) -> TileSource {
         TileSource {
+            headers: Default::default(),
             id: "custom_test".to_string(),
             name: "Test".to_string(),
             url: url.to_string(),

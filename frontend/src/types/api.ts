@@ -106,6 +106,7 @@ export interface CustomTileSource {
   max_zoom?: number
   /** 远程服务瓦片行号方案（默认 XYZ） */
   scheme?: 'xyz' | 'tms'
+  headers?: Record<string, string>
 }
 
 export interface SourceUrlAnalysis {

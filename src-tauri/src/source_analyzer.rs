@@ -32,6 +32,11 @@ struct ParsedTileUrl {
 }
 
 pub async fn analyze(raw_url: &str, proxy: Option<&str>) -> Result<SourceUrlAnalysis, String> {
+    analyze_with_headers(raw_url, proxy, &Default::default()).await
+}
+
+pub async fn analyze_with_headers(raw_url: &str, proxy: Option<&str>, headers: &crate::source_headers::SourceHeaders) -> Result<SourceUrlAnalysis, String> {
+    let custom_headers = headers.validated()?;
     let parsed = parse_tile_url(raw_url)?;
     let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(8))
@@ -45,6 +50,7 @@ pub async fn analyze(raw_url: &str, proxy: Option<&str>) -> Result<SourceUrlAnal
         );
     }
 
+    if let Some(policy) = headers.redirect_policy(true) { builder = builder.redirect(policy).referer(false); }
     let client = builder
         .build()
         .map_err(|error| format!("创建测试请求失败: {error}"))?;
@@ -57,6 +63,7 @@ pub async fn analyze(raw_url: &str, proxy: Option<&str>) -> Result<SourceUrlAnal
         )
         .header(ACCEPT, "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
         .header(REFERER, referer)
+        .headers(custom_headers)
         .send()
         .await;
 
@@ -146,18 +153,21 @@ fn parse_tile_url(raw_url: &str) -> Result<ParsedTileUrl, String> {
         .replace("{X}", "{x}")
         .replace("{Y}", "{y}")
         .replace("{Z}", "{z}")
-        .replace("{S}", "{s}");
+        .replace("{S}", "{s}")
+        .replace("{Q}", "{q}");
     if input.is_empty() {
         return Err("请先粘贴一条瓦片 URL".to_string());
     }
 
-    if has_xyz_placeholders(&input) {
+    if has_xyz_placeholders(&input) || input.contains("{q}") {
         let subdomains = template_subdomains(&input);
         let sample_subdomain = subdomains.split(',').next().unwrap_or("");
         let sample_url = input
             .replace("{z}", "1")
             .replace("{x}", "1")
             .replace("{y}", "1")
+            .replace("{q}", "3")
+            .replace("{-y}", "0")
             .replace("{s}", sample_subdomain);
         let parsed = reqwest::Url::parse(&sample_url)
             .map_err(|error| format!("URL 格式不正确: {error}"))?;

@@ -18,6 +18,7 @@ fn source(
     max_zoom: u8,
 ) -> TileSource {
     TileSource {
+        headers: Default::default(),
         id: "geod-cli-xyz".into(),
         name: name.into(),
         url: url.into(),

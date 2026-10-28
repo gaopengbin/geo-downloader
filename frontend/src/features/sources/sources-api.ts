@@ -15,8 +15,8 @@ export function getBuiltinSourcesRaw(tiandituToken: Nullable<string> = null) {
   return invokeCommand<Record<string, TileSource>>('get_builtin_sources', { tiandituToken })
 }
 
-export function analyzeTileSourceUrl(rawUrl: string, proxy: Nullable<string> = null) {
-  return invokeCommand<SourceUrlAnalysis>('analyze_tile_source_url', { rawUrl, proxy })
+export function analyzeTileSourceUrl(rawUrl: string, proxy: Nullable<string> = null, headers: Record<string, string> = {}) {
+  return invokeCommand<SourceUrlAnalysis>('analyze_tile_source_url', { rawUrl, proxy, headers })
 }
 
 /** 生成自定义图源 ID（前缀 custom_） */
@@ -41,6 +41,7 @@ export function blankCustomSource(): CustomTileSource {
 /** 把 TileSource (合并视图) 转换为可编辑的覆盖项 */
 export function builtinToOverrideDraft(s: TileSource): CustomTileSource {
   return {
+    headers: { ...s.headers },
     id: s.id ?? s.key ?? '',
     name: s.name,
     url: (s.url ?? s.url_template ?? '') as string,

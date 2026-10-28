@@ -91,6 +91,7 @@ impl Plan {
             .replace('<', "&lt;")
             .replace('>', "&gt;");
         crate::config::TileSource {
+            headers: Default::default(),
             id: format!("earth_history_{}", self.id),
             name: format!("Google Earth 历史影像 {}", self.requested_date),
             url: format!("earth-history://{}/{{z}}/{{x}}/{{y}}", self.id),

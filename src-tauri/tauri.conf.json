@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' https: http: data: blob: gdcache: http://gdcache.localhost https://gdcache.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; connect-src 'self' https: http: keyhole:; worker-src 'self' blob: https:",
+      "csp": "default-src 'self'; img-src 'self' https: http: data: blob: gdcache: http://gdcache.localhost https://gdcache.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; connect-src 'self' https: http: keyhole: gdsource:; worker-src 'self' blob: https:",
       "assetProtocol": {
         "enable": true,
         "scope": [

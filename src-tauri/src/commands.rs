@@ -466,12 +466,30 @@ fn custom_to_tile_source(cs: &crate::settings::CustomTileSource, attribution: &s
         cs.url.clone()
     };
     TileSource {
+        headers: cs.headers.clone(),
         id: cs.id.clone(),
         name: cs.name.clone(),
         url,
         subdomains,
         max_zoom: cs.max_zoom,
         attribution: attribution.to_string(),
+    }
+}
+
+/// 获取瓦片图源列表（内置 + 覆盖 + 自定义）
+#[cfg(test)]
+mod source_headers_tests {
+    #[test]
+    fn custom_and_override_headers_reach_tile_source() {
+        let source: crate::settings::CustomTileSource = serde_json::from_str(
+            r#"{"id":"custom_test","name":"test","url":"https://example.test/{z}/{x}/{y}.png","scheme":"tms","headers":{"authorization":"Bearer test-only"}}"#).unwrap();
+        for attribution in ["自定义图源", "Built-in attribution"] {
+            let converted = super::custom_to_tile_source(&source,attribution);
+            assert_eq!(converted.headers["authorization"],"Bearer test-only");
+            assert!(converted.url.contains("{-y}"));
+            assert_eq!(converted.attribution,attribution);
+            assert!(!format!("{converted:?}").contains("test-only"));
+        }
     }
 }
 
@@ -549,8 +567,28 @@ pub fn get_builtin_sources(tianditu_token: Option<String>) -> HashMap<String, Ti
 pub async fn analyze_tile_source_url(
     raw_url: String,
     proxy: Option<String>,
+    headers: Option<crate::source_headers::SourceHeaders>,
 ) -> Result<crate::source_analyzer::SourceUrlAnalysis, String> {
-    crate::source_analyzer::analyze(&raw_url, proxy.as_deref()).await
+    crate::source_analyzer::analyze_with_headers(&raw_url, proxy.as_deref(), &headers.unwrap_or_default()).await
+}
+
+/// Resolve credentials and URL from the saved source; the WebView sends only its ID.
+#[tauri::command]
+pub async fn source_preview_tile(source_key: String, z: u8, x: u32, y: u32) -> Result<String, String> {
+    let tile = source_preview_payload(source_key, z, x, y).await?;
+    Ok(format!("data:{};base64,{}", tile.content_type, base64::engine::general_purpose::STANDARD.encode(tile.bytes)))
+}
+
+pub async fn source_preview_payload(source_key: String, z: u8, x: u32, y: u32) -> Result<StoredTile, String> {
+    let settings = SettingsManager::new()?.get()?;
+    let source = get_tile_sources(settings.tianditu_token.clone()).remove(&source_key)
+        .ok_or_else(|| "图源不存在，请重新选择".to_string())?;
+    if z > 22 || x as u64 >= (1_u64 << z) || y as u64 >= (1_u64 << z) {
+        return Err("瓦片坐标无效".into());
+    }
+    let proxy = settings.proxy_enabled.then_some(settings.proxy_url.as_str());
+    let downloader = TileDownloader::new_preview(source, proxy)?;
+    downloader.preview_tile_payload(&crate::tile::TileCoord { z, x, y }).await
 }
 
 /// 获取系统内存信息

@@ -471,6 +471,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   // MVT 专用：MapLibre GL 作为 Leaflet 图层涪加（@maplibre/maplibre-gl-leaflet）
   const mvtLayerRef = useRef<L.Layer | null>(null)
   const mvtKeyRef = useRef<string | null>(null)
+  const mvtConfigRef = useRef('')
   const currentBaseLayerKeyRef = useRef<string | null>(null)
   const lastTiandituProbeKeyRef = useRef<string | null>(null)
   const customControlRef = useRef<L.Control | null>(null)
@@ -967,6 +968,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       const expectedMaxZoom = historical ? 22 : cfg?.max_zoom ?? 22
       const expectedNativeZoom = historical ? cfg?.max_zoom : undefined
       if (!cfg || layerUrl !== expectedUrl || layer.options.maxZoom !== expectedMaxZoom
+        || JSON.stringify((layer.options as { requestHeaders?: Record<string, string> }).requestHeaders ?? {}) !== JSON.stringify(cfg.headers ?? {})
         || layer.options.maxNativeZoom !== expectedNativeZoom) {
         if (map.hasLayer(layer)) map.removeLayer(layer)
         cache.delete(k)
@@ -988,13 +990,14 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
           isOsmStandardTileUrl(c.url)
         // OSM Standard 仅用于交互预览，交给 WebView 的 HTTP 缓存处理，
         // 避免写入 GeoD 的长期离线瓦片缓存。
-        const layer = isOsmStandard
+        const layer = isOsmStandard && !Object.keys(c.headers ?? {}).length
           ? L.tileLayer(c.url, {
               attribution: OSM_STANDARD_ATTRIBUTION,
               maxZoom: c.max_zoom ?? 19,
             })
           : createCachedTileLayer(c.url, {
               sourceKey: key,
+              requestHeaders: c.headers,
               displayName: c.name ?? key,
               urlTemplate: c.url,
               attribution: c.attribution ?? '',
@@ -1416,22 +1419,29 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       }
       mvtLayerRef.current = null
       mvtKeyRef.current = null
+      mvtConfigRef.current = ''
     }
 
     // MVT 分支：根据 src:<key> 找到 MVT URL 后通过 maplibreGL 图层挂载
     if (desiredBaseKey.startsWith('src:') && sourcesQuery.data) {
       const key = desiredBaseKey.slice(4)
       const cfg = sourcesQuery.data[key] as
-        | { url?: string; max_zoom?: number; name?: string }
+        | { url?: string; max_zoom?: number; name?: string; headers?: Record<string, string> }
         | undefined
       if (cfg?.url && isMvtUrl(cfg.url)) {
-        if (mvtKeyRef.current === desiredBaseKey) return
+        const configSignature = JSON.stringify([cfg.url, cfg.max_zoom, cfg.headers ?? {}])
+        if (mvtKeyRef.current === desiredBaseKey && mvtConfigRef.current === configSignature) return
         let cancelled = false
         const center = map.getCenter()
-        discoverMvtLayers(cfg.url, center.lng, center.lat)
+        const hasHeaders = Object.keys(cfg.headers ?? {}).length > 0
+        const localPrefix = navigator.userAgent.toLowerCase().includes('windows')
+          ? 'http://gdsource.localhost' : 'gdsource://localhost'
+        const previewUrl = hasHeaders
+          ? `${localPrefix}/${encodeURIComponent(key)}/{z}/{x}/{y}.pbf` : cfg.url
+        discoverMvtLayers(previewUrl, center.lng, center.lat)
           .then((result) => {
             if (cancelled) return
-            const effectiveUrl = result.canonicalTileUrl ?? cfg.url!
+            const effectiveUrl = result.canonicalTileUrl ?? previewUrl
             const style = buildMvtStyle({
               urlTemplate: effectiveUrl,
               layers: result.layers,
@@ -1447,6 +1457,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
             layer.addTo(map)
             mvtLayerRef.current = layer
             mvtKeyRef.current = desiredBaseKey
+            mvtConfigRef.current = configSignature
             currentBaseLayerKeyRef.current = desiredBaseKey
           })
           .catch((err) => {
@@ -1469,7 +1480,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       target = baseLayersRef.current.get('__fallback')
     }
     if (!target) return
-    if (currentBaseLayerKeyRef.current === desiredBaseKey) return
+    if (currentBaseLayerKeyRef.current === desiredBaseKey && map.hasLayer(target)) return
     removePrevRaster()
     target.addTo(map)
     target.bringToBack?.()

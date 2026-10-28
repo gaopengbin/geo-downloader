@@ -30,6 +30,7 @@ pub mod tile_policy;
 pub mod tile_payload;
 pub mod cache_migration;
 pub mod source_analyzer;
+pub mod source_headers;
 pub mod assistant;
 pub mod region_bookmarks;
 pub mod geotiff_sidecar;
@@ -58,6 +59,24 @@ use tauri::{
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("gdsource", |_ctx, request, responder| {
+            let uri = request.uri().to_string();
+            tauri::async_runtime::spawn(async move {
+                let tile = match tile_cache::parse_gdcache_uri(&uri) {
+                    Some((source, z, x, y)) => commands::source_preview_payload(source, z, x, y).await,
+                    None => Err("无效瓦片请求".into()),
+                };
+                let (status, content_type, bytes) = match tile {
+                    Ok(tile) => (200, tile.content_type, tile.bytes),
+                    Err(_) => (502, "text/plain".into(), b"Tile request failed".to_vec()),
+                };
+                responder.respond(tauri::http::Response::builder().status(status)
+                    .header("Content-Type", content_type)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Cache-Control", "no-store")
+                    .body(bytes).expect("source tile response"));
+            });
+        })
         .register_asynchronous_uri_scheme_protocol("keyhole", |_ctx,request,responder| {
             let uri=request.uri().to_string();
             tauri::async_runtime::spawn(async move {
@@ -176,6 +195,7 @@ pub fn run() {
             // 设置
             commands::get_settings,
             commands::save_settings,
+            commands::source_preview_tile,
             assistant::assistant_status,
             assistant::assistant_secret_status,
             assistant::assistant_set_api_key,

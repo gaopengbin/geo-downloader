@@ -22,6 +22,8 @@ pub struct CustomTileSource {
     /// Tile coordinate scheme used by the remote service.
     #[serde(default = "default_tile_scheme")]
     pub scheme: String,
+    #[serde(default, skip_serializing_if = "crate::source_headers::SourceHeaders::is_empty")]
+    pub headers: crate::source_headers::SourceHeaders,
 }
 
 fn default_max_zoom() -> u8 { 18 }
@@ -230,6 +232,9 @@ impl SettingsManager {
 
     /// 保存设置
     pub fn save(&self, settings: &AppSettings) -> Result<(), String> {
+        for source in settings.custom_sources.iter().chain(&settings.source_overrides) {
+            source.headers.validated()?;
+        }
         let content = serde_json::to_string_pretty(settings)
             .map_err(|e| format!("序列化失败: {}", e))?;
         
@@ -306,6 +311,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(source.scheme, "xyz");
+        assert!(source.headers.is_empty());
+    }
+
+    #[test]
+    fn source_headers_survive_save_reload_and_clear() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = super::SettingsManager::from_file_path(directory.path().join("settings.json"));
+        let mut settings = AppSettings::default();
+        let source: super::CustomTileSource = serde_json::from_str(
+            r#"{"id":"custom_test","name":"test","url":"https://example.test/{z}/{x}/{y}.png","headers":{"authorization":"Bearer test-only","cookie":"session=test-only"}}"#).unwrap();
+        settings.custom_sources.push(source.clone());
+        settings.source_overrides.push(source);
+        manager.save(&settings).unwrap();
+        let mut restored = manager.get().unwrap();
+        assert_eq!(restored.custom_sources[0].headers["authorization"], "Bearer test-only");
+        assert_eq!(restored.source_overrides[0].headers["cookie"], "session=test-only");
+        restored.custom_sources[0].headers = Default::default();
+        restored.source_overrides[0].headers = Default::default();
+        manager.save(&restored).unwrap();
+        let cleared = manager.get().unwrap();
+        assert!(cleared.custom_sources[0].headers.is_empty());
+        assert!(cleared.source_overrides[0].headers.is_empty());
+        restored.custom_sources[0].headers.0.insert("Cookie".into(), "test-only\r\nX: invalid".into());
+        assert!(manager.save(&restored).is_err());
+        assert!(manager.get().unwrap().custom_sources[0].headers.is_empty());
     }
 
     #[test]

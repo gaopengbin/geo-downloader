@@ -49,6 +49,22 @@ pub struct TileSource {
     pub subdomains: Vec<String>,
     pub max_zoom: u8,
     pub attribution: String,
+    #[serde(default, skip_serializing_if = "crate::source_headers::SourceHeaders::is_empty")]
+    pub headers: crate::source_headers::SourceHeaders,
+}
+
+impl TileSource {
+    pub fn cache_key(&self) -> String {
+        if self.headers.is_empty() { return self.id.clone(); }
+        use sha2::{Digest, Sha256};
+        let mut digest = Sha256::new();
+        digest.update(self.url.as_bytes());
+        for (name, value) in self.headers.iter() {
+            digest.update([0]); digest.update(name.to_ascii_lowercase().as_bytes());
+            digest.update([0]); digest.update(value.as_bytes());
+        }
+        format!("{}_headers_{:x}", self.id, digest.finalize())
+    }
 }
 
 /// 天地图默认 Token
@@ -62,6 +78,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "google_satellite".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "google_satellite".to_string(),
             name: "Google 卫星".to_string(),
             url: "https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}".to_string(),
@@ -77,6 +94,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "google_map".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "google_map".to_string(),
             name: "Google 地图".to_string(),
             url: "https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}".to_string(),
@@ -92,6 +110,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "google_hybrid".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "google_hybrid".to_string(),
             name: "Google 混合".to_string(),
             url: "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}".to_string(),
@@ -107,6 +126,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "osm".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "osm".to_string(),
             name: "OpenStreetMap".to_string(),
             url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png".to_string(),
@@ -119,6 +139,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "arcgis_satellite".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "arcgis_satellite".to_string(),
             name: "ArcGIS 卫星".to_string(),
             url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}".to_string(),
@@ -131,6 +152,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "carto_light".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "carto_light".to_string(),
             name: "Carto Light".to_string(),
             url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png".to_string(),
@@ -146,6 +168,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "carto_dark".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "carto_dark".to_string(),
             name: "Carto Dark".to_string(),
             url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png".to_string(),
@@ -161,6 +184,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "arcgis_topo".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "arcgis_topo".to_string(),
             name: "ArcGIS 地形".to_string(),
             url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}".to_string(),
@@ -173,6 +197,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "arcgis_street".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "arcgis_street".to_string(),
             name: "ArcGIS 街道".to_string(),
             url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}".to_string(),
@@ -185,6 +210,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "opentopomap".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "opentopomap".to_string(),
             name: "OpenTopoMap".to_string(),
             url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png".to_string(),
@@ -200,6 +226,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "gaode_map".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "gaode_map".to_string(),
             name: "高德 地图".to_string(),
             url: "https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}".to_string(),
@@ -215,6 +242,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "gaode_satellite".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "gaode_satellite".to_string(),
             name: "高德 卫星".to_string(),
             url: "https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}".to_string(),
@@ -230,6 +258,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_satellite".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "tianditu_satellite".to_string(),
             name: "天地图 卫星".to_string(),
             url: format!(
@@ -248,6 +277,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_vector".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "tianditu_vector".to_string(),
             name: "天地图 矢量".to_string(),
             url: format!(
@@ -270,6 +300,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_satellite_label".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "tianditu_satellite_label".to_string(),
             name: "天地图 影像注记".to_string(),
             url: format!(
@@ -288,6 +319,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_vector_label".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "tianditu_vector_label".to_string(),
             name: "天地图 矢量注记".to_string(),
             url: format!(
@@ -306,6 +338,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_terrain_label".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "tianditu_terrain_label".to_string(),
             name: "天地图 地形注记".to_string(),
             url: format!(
@@ -325,6 +358,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "dem_terrarium".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "dem_terrarium".to_string(),
             name: "DEM 高程 (Terrarium)".to_string(),
             url: "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png".to_string(),
@@ -340,6 +374,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "mvt_openfreemap".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "mvt_openfreemap".to_string(),
             name: "OpenFreeMap (MVT 全球)".to_string(),
             url: "https://tiles.openfreemap.org/planet/20260429_001001_pt/{z}/{x}/{y}.pbf"
@@ -354,6 +389,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "mvt_versatiles_osm".to_string(),
         TileSource {
+            headers: Default::default(),
             id: "mvt_versatiles_osm".to_string(),
             name: "VersaTiles OSM (MVT 全球)".to_string(),
             url: "https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}".to_string(),

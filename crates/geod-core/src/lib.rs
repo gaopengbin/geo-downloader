@@ -32,6 +32,8 @@ pub mod tile_policy;
 pub mod tile_payload;
 #[path = "../../../src-tauri/src/source_analyzer.rs"]
 pub mod source_analyzer;
+#[path = "../../../src-tauri/src/source_headers.rs"]
+pub mod source_headers;
 #[path = "../../../src-tauri/src/historical_sources.rs"]
 pub mod historical_sources;
 #[path = "../../../src-tauri/src/earth_history/mod.rs"]
