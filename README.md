@@ -187,6 +187,7 @@ geo-downloader/
 
 - 使用问题、功能建议、案例分享 → [Discussions](https://github.com/gaopengbin/geo-downloader/discussions)
 - Bug 报告 → [Issues](https://github.com/gaopengbin/geo-downloader/issues)
+- 技术交流社区 → [LINUX DO](https://linux.do/)
 - 微信公众号 / 交流群
 
 <p align="center">
