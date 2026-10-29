@@ -5,9 +5,53 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to validate or build (for example v3.6.22)
+        required: true
+        type: string
+      validate_only:
+        description: Validate metadata and notes without rebuilding or modifying a release
+        default: true
+        type: boolean
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.preflight.outputs.version }}
+      tag: ${{ steps.preflight.outputs.tag }}
+      source_sha: ${{ steps.preflight.outputs.source_sha }}
+      notes_path: ${{ steps.preflight.outputs.notes_path }}
+      prerelease: ${{ steps.preflight.outputs.prerelease }}
+    steps:
+      - name: Checkout validation tools
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: control
+      - name: Checkout release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          path: source
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test release validation
+        run: python -m unittest discover -s control/scripts -p test_validate_release.py
+      - name: Validate tag, native versions and release notes
+        id: preflight
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: python control/scripts/validate_release.py --root source
+
   build:
+    needs: validate
+    if: github.event_name != 'workflow_dispatch' || !inputs.validate_only
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +76,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -101,20 +147,13 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP" 2>&1
 
-      - name: Get version
-        id: version
-        shell: bash
-        run: |
-          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\(.*\)".*/\1/')
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
       # Windows: 收集 .exe
       - name: Collect Windows artifacts
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $exeFile = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
-          $newName = "GeoDownloader_${{ steps.version.outputs.VERSION }}_windows_x64-setup.exe"
+          $newName = "GeoDownloader_${{ needs.validate.outputs.version }}_windows_x64-setup.exe"
           Copy-Item $exeFile.FullName -Destination $newName
           echo "ARTIFACT=$newName" >> $env:GITHUB_OUTPUT
         id: collect-win
@@ -126,7 +165,7 @@ jobs:
         run: |
           ARCH=$([[ "${{ matrix.target }}" == *aarch64* ]] && echo "arm64" || echo "x64")
           DMG=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name "*.dmg" | head -1)
-          NEW_NAME="GeoDownloader_${{ steps.version.outputs.VERSION }}_macos_${ARCH}.dmg"
+          NEW_NAME="GeoDownloader_${{ needs.validate.outputs.version }}_macos_${ARCH}.dmg"
           cp "$DMG" "$NEW_NAME"
           echo "ARTIFACT=$NEW_NAME" >> $GITHUB_OUTPUT
         id: collect-mac
@@ -138,8 +177,8 @@ jobs:
         run: |
           DEB=$(find src-tauri/target/${{ matrix.target }}/release/bundle/deb -name "*.deb" | head -1)
           APPIMAGE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/appimage -name "*.AppImage" | head -1)
-          DEB_NAME="GeoDownloader_${{ steps.version.outputs.VERSION }}_linux_amd64.deb"
-          APPIMAGE_NAME="GeoDownloader_${{ steps.version.outputs.VERSION }}_linux_amd64.AppImage"
+          DEB_NAME="GeoDownloader_${{ needs.validate.outputs.version }}_linux_amd64.deb"
+          APPIMAGE_NAME="GeoDownloader_${{ needs.validate.outputs.version }}_linux_amd64.AppImage"
           cp "$DEB" "$DEB_NAME"
           cp "$APPIMAGE" "$APPIMAGE_NAME"
           echo "DEB=$DEB_NAME" >> $GITHUB_OUTPUT
@@ -154,7 +193,7 @@ jobs:
           retention-days: 3
 
   release:
-    needs: build
+    needs: [validate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -162,18 +201,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*: *"\(.*\)".*/\1/')
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          # 含 - 后缀（如 -beta.1 / -rc.1 / -alpha.1）识别为预发布版
-          if [[ "$VERSION" == *"-"* ]]; then
-            echo "PRERELEASE=true" >> $GITHUB_OUTPUT
-          else
-            echo "PRERELEASE=false" >> $GITHUB_OUTPUT
-          fi
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -187,11 +216,13 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          name: 'GeoDownloader v${{ steps.version.outputs.VERSION }}'
-          body_path: 'docs/release-notes/release-notes-v${{ steps.version.outputs.VERSION }}.md'
+          name: 'GeoDownloader v${{ needs.validate.outputs.version }}'
+          tag_name: ${{ needs.validate.outputs.tag }}
+          target_commitish: ${{ needs.validate.outputs.source_sha }}
+          body_path: ${{ needs.validate.outputs.notes_path }}
           # Publish after the public API and checksum-verified mirror are ready.
           draft: true
-          prerelease: ${{ steps.version.outputs.PRERELEASE == 'true' }}
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
