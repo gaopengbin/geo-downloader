@@ -281,12 +281,14 @@ impl TileDownloader {
         // 设置 Referer
         let referer = if is_osm_standard || is_geovis || is_nasa_gibs || is_eox || is_earth_history {
             None
-        } else if self.source.url.contains("tianditu") {
+        } else if crate::tianditu_tokens::is_tianditu_url(&self.source.url) {
             Some("https://map.tianditu.gov.cn/")
-        } else if self.source.url.contains("arcgis") || self.source.url.contains("maptiles.arcgis.com") {
+        } else if source_host_matches(&self.source.url,"arcgis.com") {
             Some("https://livingatlas.arcgis.com/")
-        } else {
+        } else if source_host_matches(&self.source.url,"google.com")||source_host_matches(&self.source.url,"google.cn") {
             Some("https://www.google.com/maps")
+        } else {
+            None
         };
         if let Some(referer) = referer {
             headers.insert(reqwest::header::REFERER, referer.parse().unwrap());
@@ -1074,6 +1076,39 @@ impl TileDownloader {
 
         Ok(tile_files)
     }
+}
+
+fn source_host_matches(template:&str,domain:&str)->bool{
+    reqwest::Url::parse(&template.replace("{s}","0")).ok().and_then(|u|u.host_str().map(|h|{
+        let h=h.trim_end_matches('.').to_ascii_lowercase();h==domain||h.ends_with(&format!(".{domain}"))
+    })).unwrap_or(false)
+}
+
+/// Check hard access failures before bulk work. Successful samples are saved
+/// in the exact layer directories used by the real job and reused on resume.
+pub async fn preflight_layer_access(
+    sources:&[TileSource],sample:TileCoord,directory:&Path,proxy:Option<&str>,
+    tokens:&Arc<TiandituTokens>,cancel:Option<&CancellationToken>,pause:Option<&PauseControl>,
+)->Result<(),String>{
+    for(index,source)in sources.iter().enumerate(){
+        if index>0&&sample.z>source.max_zoom{continue;}
+        tokens.set_stage(if index==0{"base_download"}else{"overlay_download"},tianditu_tokens::is_tianditu_url(&source.url));tokens.select_diagnostic_source(index);
+        let path=if index==0{directory.to_path_buf()}else{directory.join(format!("__overlay_{}",index-1))};
+        std::fs::create_dir_all(&path).map_err(|_|"TILE_STORAGE_FAILED: 无法创建图层缓存目录；请检查保存位置和访问权限。".to_owned())?;
+        let result=TileDownloader::new(source.clone(),proxy)?.with_tianditu_tokens(tokens.clone())
+            .download_tiles(vec![sample.clone()],1,&path,cancel,pause,|_|{}).await;
+        if let Err(error)=result{
+            if cancel.is_some_and(CancellationToken::is_cancelled){return Err(error);}
+            if tile_policy::is_terminal_download_error(&error){
+                let role=if index==0{"底图"}else{"注记"};
+                return Err(format!("{error}（下载前核验{role}「{}」失败；已有瓦片保留，修正该图层后可恢复原任务）",source.name));
+            }
+            // Missing coverage or transient failure of one sample does not
+            // prove that the entire area is unavailable.
+        }
+    }
+    if let Some(source)=sources.first(){tokens.set_stage("base_download",tianditu_tokens::is_tianditu_url(&source.url));tokens.select_diagnostic_source(0);}
+    Ok(())
 }
 
 /// 创建空白瓦片 (白色)

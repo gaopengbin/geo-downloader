@@ -6,7 +6,7 @@ import {
   trackTelemetry,
 } from './telemetry-client'
 import { TelemetryConsentDialog } from './telemetry-consent-dialog'
-import { useTelemetryStore } from './telemetry-store'
+import { useTelemetryStore,TELEMETRY_NOTICE_VERSION } from './telemetry-store'
 import { startDownloadTelemetry } from './download-monitor'
 import { runtimePolicy } from '@/lib/runtime-policy'
 
@@ -15,17 +15,22 @@ export function TelemetryBootstrap() {
 }
 
 function EnabledTelemetryBootstrap() {
+  const [hydrated,setHydrated]=useState(()=>useTelemetryStore.persist.hasHydrated())
   const consent = useTelemetryStore((state) => state.consent)
   const setConsent = useTelemetryStore((state) => state.setConsent)
+  const noticeAcknowledgedVersion=useTelemetryStore(state=>state.noticeAcknowledgedVersion)
+  const acknowledgeNotice=useTelemetryStore(state=>state.acknowledgeNotice)
   const [dismissed, setDismissed] = useState(false)
   const trackedStartupRef = useRef(false)
+  useEffect(()=>{setHydrated(useTelemetryStore.persist.hasHydrated());return useTelemetryStore.persist.onFinishHydration(()=>setHydrated(true))},[])
 
   useEffect(() => {
-    if (consent !== 'enabled') return
+    if (!hydrated || consent !== 'enabled') return
     return startDownloadTelemetry()
-  }, [consent])
+  }, [consent,hydrated])
 
   useEffect(() => {
+    if (!hydrated) return
     if (consent !== 'enabled') {
       clearTelemetryQueue()
       return
@@ -39,16 +44,17 @@ function EnabledTelemetryBootstrap() {
     const handleOnline = () => void flushTelemetry()
     window.addEventListener('online', handleOnline)
     return () => window.removeEventListener('online', handleOnline)
-  }, [consent])
+  }, [consent,hydrated])
 
   return (
     <TelemetryConsentDialog
-      open={consent === 'pending' && !dismissed}
+      mode="default-notice"
+      open={hydrated && consent === 'enabled' && noticeAcknowledgedVersion!==TELEMETRY_NOTICE_VERSION && !dismissed}
       onOpenChange={(open) => {
-        if (!open) setDismissed(true)
+        if (!open){acknowledgeNotice();setDismissed(true)}
       }}
       onAccept={() => {
-        setConsent('enabled')
+        acknowledgeNotice()
         setDismissed(true)
       }}
       onDecline={() => {

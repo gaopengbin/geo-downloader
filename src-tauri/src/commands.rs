@@ -1099,6 +1099,12 @@ async fn execute_zoom_level(
     }
     let main_download_end = crate::overlay::main_download_end(overlay_list.len());
 
+    if let Some(sample)=tiles.first(){
+        let mut layers=vec![source.clone()];layers.extend(overlay_list.iter().cloned());
+        task_log(app,tm,task_id,"INFO","下载前核验底图与注记访问；成功瓦片将直接复用。");
+        crate::downloader::preflight_layer_access(&layers,sample.clone(),&temp_dir,request.proxy.as_deref(),tianditu_tokens,Some(cancel_token),Some(pause_control)).await?;
+    }
+
     // 创建下载器
     tianditu_tokens.set_stage("base_download", crate::tianditu_tokens::is_tianditu_url(&source.url));
     tianditu_tokens.select_diagnostic_source(0);

@@ -298,7 +298,7 @@ export async function trackTelemetry<TName extends TelemetryEventName>(
 ) {
   const endpoint = getTelemetryEndpoint()
   const state = useTelemetryStore.getState()
-  if (!endpoint || state.consent !== 'enabled' || !state.installId) return
+  if (!useTelemetryStore.persist.hasHydrated() || !endpoint || state.consent !== 'enabled' || !state.installId) return
 
   const appVersion = await getAppVersion()
   const latestState = useTelemetryStore.getState()
@@ -340,7 +340,7 @@ export function flushTelemetry() {
       if (pending.length && bytes + size > 64 * 1024) break
       pending.push(event); bytes += size
     }
-    if (!endpoint || state.consent !== 'enabled' || pending.length === 0) return
+    if (!useTelemetryStore.persist.hasHydrated() || !endpoint || state.consent !== 'enabled' || pending.length === 0) return
 
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), 5000)
