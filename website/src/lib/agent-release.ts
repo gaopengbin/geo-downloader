@@ -1,5 +1,5 @@
 // Public signed Windows release and its immutable download mirrors.
-export const AGENT_PUBLIC_VERSION = "0.2.15";
-export const AGENT_CANDIDATE_VERSION = "0.2.15";
-export const AGENT_DOWNLOAD_URL = "https://download.laogao.xyz/agent-updates/windows-x86_64/0.2.15/GeoD%20Agent_0.2.15_x64-setup.exe";
-export const AGENT_GITHUB_DOWNLOAD_URL = "https://github.com/gaopengbin/geod-agent/releases/download/v0.2.15/GeoD.Agent_0.2.15_x64-setup.exe";
+export const AGENT_PUBLIC_VERSION = "0.2.16";
+export const AGENT_CANDIDATE_VERSION = "0.2.16";
+export const AGENT_DOWNLOAD_URL = "https://download.laogao.xyz/agent-updates/windows-x86_64/0.2.16/GeoD%20Agent_0.2.16_x64-setup.exe";
+export const AGENT_GITHUB_DOWNLOAD_URL = "https://github.com/gaopengbin/geod-agent/releases/download/v0.2.16/GeoD.Agent_0.2.16_x64-setup.exe";
