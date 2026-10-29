@@ -28,9 +28,9 @@ export interface GitHubRelease {
 }
 
 const fallbackRelease: GitHubRelease = {
-  tag_name: "v3.6.11",
-  name: "GeoDownloader v3.6.11",
-  html_url: `${RELEASES_URL}/tag/v3.6.11`,
+  tag_name: "v3.6.21",
+  name: "GeoDownloader v3.6.21",
+  html_url: `${RELEASES_URL}/tag/v3.6.21`,
   published_at: "2026-10-11T09:30:00Z",
   body: "",
   draft: false,
@@ -43,7 +43,7 @@ const fallbackRelease: GitHubRelease = {
     "GeoDownloader_3.6.11_linux_amd64.AppImage",
   ].map((name) => ({
     name,
-    browser_download_url: `${RELEASES_URL}/download/v3.6.11/${name}`,
+    browser_download_url: `${RELEASES_URL}/download/v3.6.21/${name}`,
     size: 0,
     download_count: 0,
   })),
