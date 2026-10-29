@@ -46,5 +46,5 @@ export const useWaybackStore = create<WaybackPreviewState>((set) => ({
     sourceByProvider: { ...state.sourceByProvider, [provider]: source },
   })),
   previewVersionId: null,
-  setPreviewVersionId: (id) => set({ previewVersionId: id }),
+  setPreviewVersionId: (id) => set((state) => state.previewVersionId === id ? state : { previewVersionId: id }),
 }))

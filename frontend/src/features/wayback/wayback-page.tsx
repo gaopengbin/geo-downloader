@@ -205,22 +205,27 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
     staleTime: 5 * 60_000,
   })
 
-  // 默认选第一个版本
+  // Initialize once, preserving a version already selected by the timeline.
   useEffect(() => {
     const list = versionsQuery.data?.versions
     if (list && list.length > 0 && !versionId) {
-      setVersionId(list[0].id)
+      const initial = list.find((version) => version.id === previewVersionId)?.id ?? list[0].id
+      setVersionId(initial)
+      if (wbMode !== 'incremental') setPreviewVersionId(initial)
     }
-  }, [versionsQuery.data, versionId])
+  }, [versionsQuery.data, versionId, previewVersionId, wbMode, setPreviewVersionId])
 
-  // 同步 Wayback 预览图层（仅在单/批模式下展示当前选中版本）
-  useEffect(() => {
-    if (wbMode === 'incremental') {
-      setPreviewVersionId(null)
-      return
-    }
-    setPreviewVersionId(versionId || null)
-  }, [versionId, wbMode, setPreviewVersionId])
+  // User actions publish both values together. An effect writing local state
+  // back to the store races the timeline -> sidebar effect and causes #185.
+  function changeVersion(id: string) {
+    setVersionId(id)
+    if (wbMode !== 'incremental') setPreviewVersionId(id)
+  }
+
+  function changeMode(mode: WbMode) {
+    setWbMode(mode)
+    setPreviewVersionId(mode === 'incremental' ? null : versionId || null)
+  }
 
   // 时间轴 → 侧栏：当外部（时间轴）改变 previewVersionId 时同步 select
   useEffect(() => {
@@ -677,11 +682,11 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
       >
         {/* 版本下拉 */}
         <div className="space-y-1.5">
-          <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+          <Label htmlFor="esri-wayback-date" className="text-xs uppercase tracking-wider text-muted-foreground">
             {t('wayback.imageryDate')}
           </Label>
-          <Select value={versionId} onValueChange={setVersionId}>
-            <SelectTrigger>
+          <Select value={versionId} onValueChange={changeVersion}>
+            <SelectTrigger id="esri-wayback-date">
               <SelectValue placeholder={versionsQuery.isLoading ? t('common.loading') : t('wayback.selectDate')} />
             </SelectTrigger>
             <SelectContent>
@@ -923,7 +928,7 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
 
         <Separator />
 
-        <Tabs value={wbMode} onValueChange={(v) => setWbMode(v as WbMode)}>
+        <Tabs value={wbMode} onValueChange={(v) => changeMode(v as WbMode)}>
           <TabsList className="grid h-8 w-full grid-cols-3" data-tour="wayback-mode-tabs">
             <TabsTrigger value="single" className="text-xs">{t('wayback.mode.single')}</TabsTrigger>
             <TabsTrigger value="batch" className="text-xs">{t('wayback.mode.batch')}</TabsTrigger>
