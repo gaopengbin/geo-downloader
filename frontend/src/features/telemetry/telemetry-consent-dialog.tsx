@@ -16,6 +16,7 @@ interface TelemetryConsentDialogProps {
   onOpenChange: (open: boolean) => void
   onAccept: () => void
   onDecline: () => void
+  mode?:'default-notice'|'settings'
 }
 
 export function TelemetryConsentDialog({
@@ -23,6 +24,7 @@ export function TelemetryConsentDialog({
   onOpenChange,
   onAccept,
   onDecline,
+  mode='settings',
 }: TelemetryConsentDialogProps) {
   const { t } = useTranslation()
   return (
@@ -32,9 +34,9 @@ export function TelemetryConsentDialog({
           <div className="mb-1 flex size-9 items-center justify-center rounded-md bg-primary/10 text-primary">
             <Activity className="size-5" />
           </div>
-          <DialogTitle>{t('telemetry.consentTitle')}</DialogTitle>
+          <DialogTitle>{t(mode==='default-notice'?'telemetry.defaultTitle':'telemetry.consentTitle')}</DialogTitle>
           <DialogDescription>
-            {t('telemetry.consentDescription')}
+            {t(mode==='default-notice'?'telemetry.defaultDescription':'telemetry.consentDescription')}
           </DialogDescription>
         </DialogHeader>
 
@@ -44,12 +46,12 @@ export function TelemetryConsentDialog({
               <ShieldCheck className="size-4 text-emerald-600" />
               {t('telemetry.scope')}
             </div>
-            <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
+            {mode==='default-notice'?<p className="text-xs leading-5 text-muted-foreground">{t('telemetry.defaultScope')}</p>:<ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
               <li>{t('telemetry.install')}</li>
               <li>{t('telemetry.usage')}</li>
               <li>{t('telemetry.features')}</li>
               <li>{t('telemetry.buckets')}</li>
-            </ul>
+            </ul>}
           </section>
 
           <section className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3">
@@ -59,7 +61,7 @@ export function TelemetryConsentDialog({
           </section>
 
           <a
-            href="https://geodownloader.pages.dev/disclaimer.html#anonymous-telemetry"
+            href="https://geod.laogao.xyz/disclaimer#anonymous-telemetry"
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -71,10 +73,10 @@ export function TelemetryConsentDialog({
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onDecline}>
-            {t('telemetry.decline')}
+            {t('telemetry.disable')}
           </Button>
           <Button type="button" onClick={onAccept}>
-            {t('telemetry.accept')}
+            {t(mode==='default-notice'?'telemetry.acknowledge':'telemetry.accept')}
           </Button>
         </DialogFooter>
       </DialogContent>

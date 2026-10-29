@@ -1,10 +1,11 @@
 import { taskDownloadDiagnostics, type DownloadDiagnostics } from './download-diagnostics.ts'
+import {taskAcquisitionFields,type AcquisitionDiagnostic}from './acquisition-diagnostic.ts'
 
 export type DownloadState = 'started' | 'completed' | 'completed_with_gaps' | 'failed' | 'cancelled'
 export type DownloadDuration = 'unknown' | 'under_10s' | '10-60s' | '1-5m' | '5-30m' | '30m+'
 export type DownloadReason = 'none' | 'cancelled' | 'network' | 'auth' | 'disk' | 'permission' | 'missing_tiles' | 'unknown'
-export interface DownloadLifecycleEvent extends Partial<DownloadDiagnostics> { attempt_id: string; state: DownloadState; duration: DownloadDuration; reason: DownloadReason }
-interface TaskObservation { id: string; status: string; error?: string; message?: string; download_diagnostics?: unknown }
+export interface DownloadLifecycleEvent extends Partial<DownloadDiagnostics> { attempt_id: string; state: DownloadState; duration: DownloadDuration; reason: DownloadReason;diagnostic?:AcquisitionDiagnostic|null }
+interface TaskObservation { id: string; status: string; error?: string; message?: string; download_diagnostics?: unknown;created_at?:string }
 interface Attempt { attemptId: string; status: string; startedAt: number | null }
 export type DownloadTrackerState = [string, Attempt][]
 const terminal = new Set(['completed','completed_with_gaps','failed','cancelled'])
@@ -40,8 +41,10 @@ export class DownloadLifecycleTracker {
   private initialized = false
   private uuid: () => string
   private now: () => number
-  constructor(uuid: () => string, now: () => number, state?: DownloadTrackerState) {
+  private since?:number
+  constructor(uuid: () => string, now: () => number, state?: DownloadTrackerState,since?:number) {
     this.uuid = uuid; this.now = now
+    this.since=since
     if (state) { this.attempts = new Map(state); this.initialized = true }
   }
   snapshot(): DownloadTrackerState { return [...this.attempts.entries()] }
@@ -51,17 +54,19 @@ export class DownloadLifecycleTracker {
       if (!terminal.has(task.status) && !active.has(task.status)) continue
       let attempt = this.attempts.get(task.id)
       if (!attempt) {
-        attempt = { attemptId: this.uuid(), status: task.status, startedAt: this.initialized ? this.now() : null }
+        const created=Date.parse(task.created_at??''),current=this.now()
+        const postConsent=this.since!==undefined&&Number.isFinite(created)&&created>=this.since&&created<=current+300000
+        attempt = { attemptId: this.uuid(), status: task.status, startedAt:postConsent?created:this.initialized ? current : null }
         this.attempts.set(task.id, attempt)
-        if (!this.initialized && terminal.has(task.status)) continue
-        output.push({ attempt_id: attempt.attemptId, state: 'started', duration: 'unknown', reason: 'none', ...taskDownloadDiagnostics(task.download_diagnostics, 'started') })
+        if (!this.initialized && terminal.has(task.status)&&!postConsent) continue
+        output.push({ attempt_id: attempt.attemptId, state: 'started', duration: 'unknown', reason: 'none', ...taskDownloadDiagnostics(task.download_diagnostics, 'started'),...taskAcquisitionFields(task.download_diagnostics) })
         if (!terminal.has(task.status)) continue
       } else {
         if (attempt.status === task.status) continue
         if (terminal.has(attempt.status) && active.has(task.status)) {
           attempt = { attemptId: this.uuid(), status: task.status, startedAt: this.now() }
           this.attempts.set(task.id, attempt)
-          output.push({ attempt_id: attempt.attemptId, state: 'started', duration: 'unknown', reason: 'none', ...taskDownloadDiagnostics(task.download_diagnostics, 'started') })
+          output.push({ attempt_id: attempt.attemptId, state: 'started', duration: 'unknown', reason: 'none', ...taskDownloadDiagnostics(task.download_diagnostics, 'started'),...taskAcquisitionFields(task.download_diagnostics) })
           continue
         }
         // Exporting partial results after an already-failed attempt isn't a new download.
@@ -71,7 +76,7 @@ export class DownloadLifecycleTracker {
       if (terminal.has(task.status)) output.push({ attempt_id: attempt.attemptId,
         state: task.status as DownloadState, duration: durationBucket(attempt.startedAt === null ? null : this.now() - attempt.startedAt),
         reason: reasonBucket(task.status, task.error ?? task.message),
-        ...taskDownloadDiagnostics(task.download_diagnostics, task.status, task.error ?? task.message, reasonBucket(task.status, task.error ?? task.message)) })
+        ...taskDownloadDiagnostics(task.download_diagnostics, task.status, task.error ?? task.message, reasonBucket(task.status, task.error ?? task.message)),...taskAcquisitionFields(task.download_diagnostics) })
     }
     this.initialized = true
     // Bound local bookkeeping without treating deleted records as cancellations.

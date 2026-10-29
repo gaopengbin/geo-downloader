@@ -1099,8 +1099,15 @@ async fn execute_zoom_level(
     }
     let main_download_end = crate::overlay::main_download_end(overlay_list.len());
 
+    if let Some(sample)=tiles.first(){
+        let mut layers=vec![source.clone()];layers.extend(overlay_list.iter().cloned());
+        task_log(app,tm,task_id,"INFO","下载前核验底图与注记访问；成功瓦片将直接复用。");
+        crate::downloader::preflight_layer_access(&layers,sample.clone(),&temp_dir,request.proxy.as_deref(),tianditu_tokens,Some(cancel_token),Some(pause_control)).await?;
+    }
+
     // 创建下载器
     tianditu_tokens.set_stage("base_download", crate::tianditu_tokens::is_tianditu_url(&source.url));
+    tianditu_tokens.select_diagnostic_source(0);
     let downloader = TileDownloader::new(source.clone(), request.proxy.as_deref())?
         .with_tianditu_tokens(tianditu_tokens.clone());
     
@@ -1279,6 +1286,7 @@ async fn execute_zoom_level(
             }
             let ov_temp_dir = temp_dir.join(format!("__overlay_{}", idx));
             tianditu_tokens.set_stage("overlay_download", crate::tianditu_tokens::is_tianditu_url(&ov_src.url));
+            tianditu_tokens.select_diagnostic_source(idx+1);
             std::fs::create_dir_all(&ov_temp_dir).map_err(|e| format!("创建叠加图层临时目录失败: {}", e))?;
             let ov_dl = TileDownloader::new(ov_src.clone(), request.proxy.as_deref())?
                 .with_tianditu_tokens(tianditu_tokens.clone());
@@ -1886,7 +1894,10 @@ async fn execute_download_task(
         request.tianditu_token.as_deref(), Arc::new(move |message| {
             if uses_tianditu { task_log(&app_tokens, &tm_tokens, &tid_tokens, "INFO", message); }
         }));
-    if uses_tianditu { tm.attach_token_diagnostics(task_id, tianditu_tokens.clone()); }
+    let mut diagnostic_sources=vec![source.clone()];
+    if let Some(ids)=request.overlay_sources.as_ref(){for id in ids{if let Some(source)=token_sources.get(id.trim()){diagnostic_sources.push(source.clone());}}}
+    tianditu_tokens.configure_diagnostic_sources(&diagnostic_sources);
+    tm.attach_token_diagnostics(task_id, tianditu_tokens.clone());
     let start_time = std::time::Instant::now();
     validate_offline_sources(&request, &source)?;
     if let Some(id)=source.id.strip_prefix("earth_keyhole_") {
@@ -1963,6 +1974,7 @@ async fn execute_download_task(
         .unwrap_or_else(|| std::env::temp_dir().join(format!("tif-dl-{}", task_id)));
     std::fs::create_dir_all(&base_temp_dir)
         .map_err(|e| format!("创建任务工作目录失败: {}", e))?;
+    tianditu_tokens.set_storage_diagnostics(crate::acquisition_storage::snapshot(std::path::Path::new(&save_path),&base_temp_dir,u64::from(total_tiles),diagnostic_sources.len().saturating_sub(1)));
 
     // Issue #31：读取自动导出阈值，clamp 到 [0.0, 1.0]
     // 0.0（默认）= 有 1 张成功就导出，1.0 = 必须全成功才导出

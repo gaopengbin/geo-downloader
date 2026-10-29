@@ -2,6 +2,7 @@ import type { AppMode, SidebarTab } from '@/store/app-store'
 import { isTauriRuntime } from '@/lib/tauri'
 import { useTelemetryStore } from './telemetry-store'
 import { sanitizeDownloadDiagnostics } from './download-diagnostics'
+import {sanitizeAcquisitionDiagnostic,type AcquisitionDiagnostic}from './acquisition-diagnostic'
 import type { DownloadLifecycleEvent } from './download-lifecycle'
 import { runtimePolicy } from '@/lib/runtime-policy'
 
@@ -118,7 +119,7 @@ interface QueuedTelemetryEvent {
   session_id: string
   app_version: string
   platform: 'windows' | 'macos' | 'linux' | 'web' | 'unknown'
-  properties: Record<string, boolean | number | string>
+  properties: Record<string, boolean | number | string | null | AcquisitionDiagnostic>
 }
 
 const QUEUE_STORAGE_KEY = 'geo-downloader:telemetry-queue'
@@ -204,7 +205,7 @@ async function getAppVersion() {
 function sanitizeProperties<TName extends TelemetryEventName>(
   event: TName,
   properties: TelemetryEventMap[TName],
-): Record<string, boolean | number | string> {
+): Record<string, boolean | number | string | null | AcquisitionDiagnostic> {
   switch (event) {
     case 'app_started':
       return {}
@@ -240,7 +241,7 @@ function sanitizeProperties<TName extends TelemetryEventName>(
     }
     case 'download_task_state': {
       const value = properties as DownloadLifecycleEvent
-      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason, ...sanitizeDownloadDiagnostics(value) }
+      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason, ...sanitizeDownloadDiagnostics(value),...(value.diagnostic!==undefined?{diagnostic:sanitizeAcquisitionDiagnostic(value.diagnostic)}:{}) }
     }
     case 'bookmark_action':
     case 'task_action':
@@ -297,7 +298,7 @@ export async function trackTelemetry<TName extends TelemetryEventName>(
 ) {
   const endpoint = getTelemetryEndpoint()
   const state = useTelemetryStore.getState()
-  if (!endpoint || state.consent !== 'enabled' || !state.installId) return
+  if (!useTelemetryStore.persist.hasHydrated() || !endpoint || state.consent !== 'enabled' || !state.installId) return
 
   const appVersion = await getAppVersion()
   const latestState = useTelemetryStore.getState()
@@ -331,8 +332,15 @@ export function flushTelemetry() {
   flushPromise = (async () => {
     const endpoint = getTelemetryEndpoint()
     const state = useTelemetryStore.getState()
-    const pending = readQueue()
-    if (!endpoint || state.consent !== 'enabled' || pending.length === 0) return
+    // Keep diagnostic-rich batches below the receiver's 128 KiB body limit.
+    const pending: QueuedTelemetryEvent[] = []
+    let bytes = 64
+    for (const event of readQueue()) {
+      const size = new TextEncoder().encode(JSON.stringify(event)).length + 1
+      if (pending.length && bytes + size > 64 * 1024) break
+      pending.push(event); bytes += size
+    }
+    if (!useTelemetryStore.persist.hasHydrated() || !endpoint || state.consent !== 'enabled' || pending.length === 0) return
 
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), 5000)
@@ -354,6 +362,9 @@ export function flushTelemetry() {
     }
   })().finally(() => {
     flushPromise = null
+    if (readQueue().length && useTelemetryStore.getState().consent === 'enabled' && flushTimer === null) {
+      flushTimer = window.setTimeout(() => { flushTimer = null; void flushTelemetry() }, 30000)
+    }
   })
 
   return flushPromise

@@ -2,18 +2,21 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 import { createSafeJSONStorage } from '@/store/persist-storage'
+import {resolveTelemetryPreference,TELEMETRY_NOTICE_VERSION}from './telemetry-preferences'
+export {TELEMETRY_NOTICE_VERSION}from './telemetry-preferences'
 
 export type TelemetryConsent = 'pending' | 'enabled' | 'disabled'
 
-export const TELEMETRY_NOTICE_VERSION = 3
 
 interface TelemetryState {
   consent: TelemetryConsent
   consentedAt: string | null
   noticeVersion: number | null
+  noticeAcknowledgedVersion:number|null
   installId: string | null
   setConsent: (consent: TelemetryConsent) => void
   resetInstallId: () => void
+  acknowledgeNotice:()=>void
 }
 
 function createAnonymousId() {
@@ -29,15 +32,14 @@ function createAnonymousId() {
 export const useTelemetryStore = create<TelemetryState>()(
   persist(
     (set) => ({
-      consent: 'pending',
-      consentedAt: null,
-      noticeVersion: null,
-      installId: null,
+      ...resolveTelemetryPreference(undefined,new Date().toISOString(),createAnonymousId),
+      acknowledgeNotice:()=>set({noticeAcknowledgedVersion:TELEMETRY_NOTICE_VERSION}),
       setConsent: (consent) =>
         set((state) => ({
           consent,
           consentedAt: new Date().toISOString(),
           noticeVersion: TELEMETRY_NOTICE_VERSION,
+          noticeAcknowledgedVersion:TELEMETRY_NOTICE_VERSION,
           installId:
             consent === 'enabled'
               ? (state.installId ?? createAnonymousId())
@@ -58,18 +60,12 @@ export const useTelemetryStore = create<TelemetryState>()(
         consent: state.consent,
         consentedAt: state.consentedAt,
         noticeVersion: state.noticeVersion,
+        noticeAcknowledgedVersion:state.noticeAcknowledgedVersion,
         installId: state.installId,
       }),
       merge: (persisted, current) => {
         const saved = persisted as Partial<TelemetryState> | undefined
-        if (saved?.noticeVersion !== TELEMETRY_NOTICE_VERSION) return current
-        return {
-          ...current,
-          consent: saved.consent ?? 'pending',
-          consentedAt: saved.consentedAt ?? null,
-          noticeVersion: saved.noticeVersion,
-          installId: saved.installId ?? null,
-        }
+        return {...current,...resolveTelemetryPreference(saved,new Date().toISOString(),createAnonymousId)}
       },
     },
   ),

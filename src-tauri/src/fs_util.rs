@@ -51,7 +51,8 @@ pub fn nearest_existing_parent(path: &Path) -> Option<PathBuf> {
 pub fn available_space_for_path(path: &Path) -> Result<u64, String> {
     let existing = nearest_existing_parent(path)
         .ok_or_else(|| format!("找不到可用的磁盘路径: {}", path.display()))?;
-    available_space_for_existing_path(&existing)
+    let directory=if existing.is_file(){existing.parent().unwrap_or(&existing)}else{&existing};
+    available_space_for_existing_path(directory)
 }
 
 pub fn ensure_minimum_free_space(path: &Path) -> Result<(), String> {

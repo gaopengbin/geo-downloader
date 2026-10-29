@@ -1,0 +1,29 @@
+{
+  "name": "geod-acquisition-diagnostic",
+  "version": "1.0.0",
+  "license": "MIT",
+  "sourceRepository": "https://github.com/gaopengbin/geod-agent",
+  "sourceRevision": "b550dbe127541fd3042d199ff35f47b50dda6f74",
+  "files": [
+    {
+      "source": "crates/geod-core/src/acquisition_diagnostic.rs",
+      "target": "src-tauri/src/acquisition_diagnostic.rs",
+      "sha256": "770988fcd545e0adb92596565d1bb0d17b06e7903f3c64765021d2bf1b5d5315"
+    },
+    {
+      "source": "services/geod-agent-model-gateway/download-diagnostic.mjs",
+      "target": "services/telemetry/download-diagnostic.mjs",
+      "sha256": "8af6e367ed30fee6869cd5a2e1bf6d2b5126dbafd3fbcb338aef35a5c8a7c51b"
+    },
+    {
+      "source": "services/geod-agent-model-gateway/test/download-diagnostic.test.mjs",
+      "target": "services/telemetry/test/download-diagnostic.test.mjs",
+      "sha256": "538c315e0d60584cb224f8eb5895913a71620dcdc1b46d3614374fd75a76b232"
+    },
+    {
+      "source": "services/geod-agent-model-gateway/download-diagnostic.mjs",
+      "target": "frontend/src/features/telemetry/download-diagnostic.mjs",
+      "sha256": "8af6e367ed30fee6869cd5a2e1bf6d2b5126dbafd3fbcb338aef35a5c8a7c51b"
+    }
+  ]
+}

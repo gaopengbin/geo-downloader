@@ -1,12 +1,16 @@
 # Anonymous Telemetry
 
-GeoD telemetry is opt-in and disabled until the user explicitly chooses
-`同意并开启`.
+GeoD 3.6.22 and Agent 0.2.16 use disclosed default-on minimal diagnostics and
+basic activity reporting. Acknowledging the notice is not an enable operation.
+Users can turn reporting off; an existing explicit opt-out is retained.
 
 ## Client behavior
 
 - Consent state: `pending`, `enabled`, or `disabled`.
-- A random installation ID is generated only after consent.
+- A random anonymous installation ID is generated for enabled GeoD clients.
+- Reporting waits for saved preferences to hydrate, so an opt-out cannot leak a startup event.
+- Legacy `pending` and absent choices migrate to enabled; the disclosure is acknowledged separately.
+- Agent native preferences are authoritative. A missing browser preference must not write `false` on startup.
 - Disabling telemetry clears queued events immediately.
 - The installation ID can be reset from Settings.
 - The event queue is capped at 50 events and never blocks application behavior.
@@ -87,7 +91,7 @@ database or application logs. The dashboard exposes installs, DAU, MAU,
 version distribution, and event counts rather than raw event browsing.
 # 3.6.17 下载诊断补充
 
-在现有用户同意的匿名下载使用统计内，`download_task_state` 可附带版本为 1 的完整诊断块。字段仅含固定图源类别（天地图、其他、未知）、阶段、最终错误类别和 HTTP 状态，以及当前配置 Token 数、实际请求使用的不同 Token 数、切换次数、切换后首次成功取片次数、设置更新次数、最后一次凭证被拒绝的状态和是否全部不可用。
+在启用的匿名下载使用统计内，`download_task_state` 可附带版本为 1 的完整诊断块。字段仅含固定图源类别（天地图、其他、未知）、阶段、最终错误类别和 HTTP 状态，以及当前配置 Token 数、实际请求使用的不同 Token 数、切换次数、切换后首次成功取片次数、设置更新次数、最后一次凭证被拒绝的状态和是否全部不可用。
 
 不同 Token 数仅在本机计算；不传 Token 本身、哈希、指纹、URL、图源自定义名称、路径、坐标、原始报错或响应体。计数为 0–65535 的整数。客户端逐字段构造，采集端拒绝额外字段、不完整诊断块、未知类别和越界计数。旧四字段事件仍然接受，历史缺失诊断不能推测为零。
 
