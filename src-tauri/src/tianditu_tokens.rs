@@ -82,6 +82,8 @@ pub struct TokenDiagnostics {
     pub settings_updates: u32,
     pub last_rejection_status: u16,
     pub tokens_exhausted: bool,
+    #[serde(default)]
+    pub acquisition: crate::acquisition_diagnostic::AcquisitionDiagnostic,
 }
 
 struct State {
@@ -96,6 +98,8 @@ struct State {
     awaiting_recovery: bool,
     phase: String,
     provider: String,
+    acquisition:crate::acquisition_diagnostic::AcquisitionDiagnostic,
+    active_source:Option<usize>,
 }
 
 // Do not derive Debug: this value contains a credential.
@@ -121,6 +125,7 @@ impl TiandituTokens {
                 used_tokens: HashSet::new(), switches: 0, recovered: 0,
                 updates: 0, last_status: 0, awaiting_recovery: false,
                 phase: "prepare".into(), provider: "unknown".into(),
+                acquisition:Default::default(),active_source:None,
             }),
             logger,
         }
@@ -156,7 +161,28 @@ impl TiandituTokens {
         let mut state = self.state.lock().unwrap();
         state.phase = phase.to_owned();
         state.provider = if tianditu { "tianditu" } else { "other" }.into();
+        state.acquisition.phase=phase.into();
     }
+
+    pub fn configure_diagnostic_sources(&self,sources:&[crate::config::TileSource]){
+        let mut state=self.state.lock().unwrap();state.acquisition.sources.clear();
+        for(i,source)in sources.iter().enumerate(){
+            if i<8{state.acquisition.sources.push(crate::acquisition_diagnostic::describe_source(if i==0{"base"}else{"overlay"},&source.url,!source.headers.is_empty()||is_tianditu_url(&source.url)));}
+            else{state.acquisition.additional_sources=state.acquisition.additional_sources.saturating_add(1);}
+        }
+        state.active_source=(!state.acquisition.sources.is_empty()).then_some(0);
+    }
+    pub fn select_diagnostic_source(&self,index:usize){let mut state=self.state.lock().unwrap();state.active_source=(index<state.acquisition.sources.len()).then_some(index);}
+    pub fn observe_http(&self,host:&str,status:u16){let mut state=self.state.lock().unwrap();if let Some(i)=state.active_source{state.acquisition.response(i,host,status);}}
+    pub fn set_storage_diagnostics(&self,storage:Vec<crate::acquisition_diagnostic::StorageDiagnostic>){let mut state=self.state.lock().unwrap();state.acquisition.storage=storage;state.acquisition.storage_checked_at=Some(chrono::Utc::now().to_rfc3339());}
+    pub fn record_failure(&self,message:&str){
+        let mut state=self.state.lock().unwrap();
+        let code=["TILE_ACCESS_DENIED","TILE_TOKENS_EXHAUSTED","TILE_RATE_LIMITED","TILE_STORAGE_FAILED","TILE_REDIRECT_DENIED","INVALID_TILE","TILE_TOO_LARGE","OSM_OFFLINE_FORBIDDEN","CARTO_OFFLINE_FORBIDDEN"].into_iter().find(|code|message.contains(code)).unwrap_or(if message.contains("空间不足"){"DISK_INSUFFICIENT"}else{"UNKNOWN"});
+        let index=if ["base_download","overlay_download"].contains(&state.acquisition.phase.as_str())&&code!="TILE_STORAGE_FAILED"{state.active_source}else{None};
+        let status=crate::acquisition_diagnostic::http_status(message).or_else(||if code=="TILE_TOKENS_EXHAUSTED"&&state.last_status>0{Some(state.last_status)}else{None});
+        state.acquisition.fail(code,index,status);if code=="TILE_STORAGE_FAILED"{state.acquisition.phase="cache".into();}
+    }
+    pub fn record_completed(&self){let mut state=self.state.lock().unwrap();state.acquisition.phase="completed".into();state.acquisition.error_code=None;state.acquisition.error_http_status=None;state.acquisition.failed_source=None;}
 
     pub fn record_request(&self, used: &Selection) {
         let mut state = self.state.lock().unwrap();
@@ -173,14 +199,16 @@ impl TiandituTokens {
 
     pub fn diagnostics(&self) -> TokenDiagnostics {
         let state = self.state.lock().unwrap();
+        let relevant=state.acquisition.sources.is_empty()||state.provider=="tianditu"||!state.used_tokens.is_empty()||state.acquisition.sources.iter().any(|s|s.provider=="tianditu");
         TokenDiagnostics {
             diagnostic_version: 1, provider: state.provider.clone(), phase: state.phase.clone(),
             token_source: if state.tokens.len() == 1 && state.tokens[0] == crate::config::TIANDITU_DEFAULT_TOKEN { "builtin" } else { "user" }.into(),
-            configured_tokens: state.tokens.len().min(65535) as u32,
-            used_tokens: state.used_tokens.len().min(65535) as u32,
-            token_switches: state.switches.min(65535), recovered_switches: state.recovered.min(65535),
-            settings_updates: state.updates.min(65535), last_rejection_status: state.last_status,
-            tokens_exhausted: state.active >= state.tokens.len(),
+            configured_tokens: if relevant{state.tokens.len().min(65535) as u32}else{0},
+            used_tokens: if relevant{state.used_tokens.len().min(65535) as u32}else{0},
+            token_switches: if relevant{state.switches.min(65535)}else{0}, recovered_switches: if relevant{state.recovered.min(65535)}else{0},
+            settings_updates: if relevant{state.updates.min(65535)}else{0}, last_rejection_status: if relevant{state.last_status}else{0},
+            tokens_exhausted: relevant&&state.active >= state.tokens.len(),
+            acquisition:state.acquisition.clone(),
         }
     }
 

@@ -1002,7 +1002,7 @@ const enUS = {
     install: 'A randomly generated anonymous installation ID, app version, and operating system type.',
     usage: 'App launches, feature modes, task actions and completion, failure or cancellation, duration ranges and error categories.',
     features: 'Region selection methods, import outcomes, bookmarks, measurements, and guided tour events.',
-    buckets: 'Counts are grouped into ranges; map content and business data are never uploaded.',
+    buckets: 'Download diagnostics include source service domains and template fingerprints, base/annotation roles, HTTP status, failure stage, volume labels and required/free storage figures. Map content is never uploaded.',
     excluded: 'GeoD does not collect download URLs, file paths, file names, searches, map coordinates, selected regions, tokens, API keys, or downloaded data. Analytics never affects downloads and can be disabled or reset at any time.',
     details: 'View full details',
     decline: 'Not now',

@@ -37,6 +37,7 @@ pub enum TaskStatus {
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
     pub id: String,
+    pub created_at:String,
     pub name: String,
     pub source: String,
     pub source_name: String,
@@ -134,6 +135,14 @@ impl TaskManager {
             snapshot
         };
         let sink = self.event_sink.lock().unwrap().clone();
+        if matches!(snapshot.status,TaskStatus::Completed|TaskStatus::CompletedWithGaps|TaskStatus::Failed|TaskStatus::Cancelled){
+            if let Some(value)=snapshot.download_diagnostics.as_ref(){
+                if id.len()<=96&&id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'){
+                    let folder=self.log_dir.join("diagnostics");
+                    if std::fs::create_dir_all(&folder).is_ok(){if let Ok(bytes)=serde_json::to_vec_pretty(&value.acquisition){let _=crate::fs_util::atomic_write(&folder.join(format!("{id}.json")),&bytes);}}
+                }
+            }
+        }
         if let Some(sink) = sink { sink(snapshot); }
     }
     pub fn update_preparation(&self, id: &str, completed: u32, total: u32) {
@@ -168,6 +177,7 @@ impl TaskManager {
         let cancel_token = CancellationToken::new();
         let pause_control = PauseControl::new();
         let info = TaskInfo {
+            created_at:chrono::Utc::now().to_rfc3339(),
             id: id.clone(),
             name,
             source,
@@ -260,6 +270,7 @@ impl TaskManager {
                 return;
             }
             entry.info.status = TaskStatus::Completed;
+            if let Some(pool)=entry.token_pool.as_ref(){pool.record_completed();}
             entry.freeze_diagnostics();
             entry.info.progress = 100.0;
             entry.info.file_size = file_size;
@@ -329,6 +340,7 @@ impl TaskManager {
                 return;
             }
             entry.info.status = TaskStatus::Failed;
+            if let Some(pool)=entry.token_pool.as_ref(){pool.record_failure(&error);}
             entry.freeze_diagnostics();
             entry.info.error = Some(error);
         }

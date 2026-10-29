@@ -14,7 +14,8 @@ export function startDownloadTelemetry() {
     if (Array.isArray(saved) && saved.every(row => Array.isArray(row) && typeof row[0] === 'string' && row[1] &&
       typeof row[1].attemptId === 'string' && typeof row[1].status === 'string' && (row[1].startedAt === null || typeof row[1].startedAt === 'number'))) state = saved as DownloadTrackerState
   } catch { /* An unavailable local cache does not affect downloads. */ }
-  const tracker = new DownloadLifecycleTracker(() => crypto.randomUUID(), () => Date.now(), state)
+  const since=Date.parse(useTelemetryStore.getState().consentedAt??'')
+  const tracker = new DownloadLifecycleTracker(() => crypto.randomUUID(), () => Date.now(), state,Number.isFinite(since)?since:undefined)
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
   async function poll() {

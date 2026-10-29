@@ -230,6 +230,7 @@ export type TaskStatus =
   | 'cancelled'
 
 export interface TaskInfo {
+  created_at?:string
   id: string
   name: string
   revision?: number

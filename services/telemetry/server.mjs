@@ -2,6 +2,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { openTelemetryDatabase, TIME_ZONE } from './database.mjs'
+import {validateDownloadDiagnostic}from './download-diagnostic.mjs'
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/
@@ -114,13 +115,15 @@ function validateProperties(eventName, properties) {
     const counters = ['configured_tokens','used_tokens','token_switches','recovered_switches','settings_updates']
     const extra = ['diagnostic_version',...Object.keys(enums),...counters,'http_status','last_rejection_status','tokens_exhausted']
     const hasDiagnostics = properties.diagnostic_version !== undefined
-    if (!exactKeys(properties, hasDiagnostics ? [...base,...extra].sort() : base) || !UUID_PATTERN.test(properties.attempt_id) ||
+    const detailed=Object.hasOwn(properties,'diagnostic')
+    if (!exactKeys(properties, [...base,...(hasDiagnostics?extra:[]),...(detailed?['diagnostic']:[])].sort()) || !UUID_PATTERN.test(properties.attempt_id) ||
         !['started','completed','completed_with_gaps','failed','cancelled'].includes(properties.state) ||
         !['unknown','under_10s','10-60s','1-5m','5-30m','30m+'].includes(properties.duration) ||
         !['none','cancelled','network','auth','disk','permission','missing_tiles','unknown'].includes(properties.reason)) {
       throw invalid('download_task_state properties are invalid')
     }
     const safe = { attempt_id: properties.attempt_id, state: properties.state, duration: properties.duration, reason: properties.reason }
+    if(detailed){try{safe.diagnostic=validateDownloadDiagnostic(properties.diagnostic)}catch{throw invalid('download acquisition diagnostic is invalid')}}
     if (hasDiagnostics) {
       if (properties.diagnostic_version !== 1 || typeof properties.tokens_exhausted !== 'boolean' ||
           !Object.entries(enums).every(([key, allowed]) => allowed.includes(properties[key])) ||
@@ -391,7 +394,7 @@ function createRateLimiter(limit) {
 }
 
 function queryRows(database, sql, parameters = []) {
-  return database.prepare(sql).all(...parameters)
+  return database.prepare(sql.replace(/\bFROM\s+events\b/gi,'FROM reporting_events')).all(...parameters)
 }
 
 function propertyDistribution(database, eventName, propertyName) {
@@ -409,6 +412,8 @@ function propertyDistribution(database, eventName, propertyName) {
 function createDatabase(config) {
   const storage = openTelemetryDatabase(config)
   const database = storage.database
+  database.exec(`CREATE TABLE IF NOT EXISTS telemetry_internal_installations(install_id TEXT PRIMARY KEY,reason TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE VIEW IF NOT EXISTS reporting_events AS SELECT e.* FROM events e WHERE NOT EXISTS(SELECT 1 FROM telemetry_internal_installations i WHERE i.install_id=e.install_id);`)
   return {
     ...storage,
     stats() {

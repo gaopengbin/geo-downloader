@@ -213,9 +213,9 @@ impl TileDownloader {
     }
 
     pub fn with_tianditu_tokens(mut self, tokens: Arc<TiandituTokens>) -> Self {
-        if tianditu_tokens::is_tianditu_url(&self.source.url) {
-            self.tianditu_tokens = Some(tokens);
-        }
+        // The same task-scoped collector observes every provider. Credential
+        // selection below remains restricted to the Tianditu host allowlist.
+        self.tianditu_tokens = Some(tokens);
         self
     }
 
@@ -405,6 +405,7 @@ impl TileDownloader {
                 Err(error) => Err(error),
             };
         }
+        let observer = tokens;
         let tokens = tokens.filter(|_| tianditu_tokens::is_tianditu_url(url));
         let mut last_error: String;
         if let Some(parent) = file_path.parent() {
@@ -425,6 +426,7 @@ impl TileDownloader {
                 match request.headers(headers.clone()).send().await {
                     Ok(resp) => {
                         let status = resp.status();
+                        if let Some(observer)=observer{observer.observe_http(resp.url().host_str().unwrap_or_default(),status.as_u16());}
                         if status.is_success() {
                             let content_type = resp.headers().get(reqwest::header::CONTENT_TYPE)
                                 .and_then(|v| v.to_str().ok()).map(str::to_owned);

@@ -5,7 +5,7 @@ import { createSafeJSONStorage } from '@/store/persist-storage'
 
 export type TelemetryConsent = 'pending' | 'enabled' | 'disabled'
 
-export const TELEMETRY_NOTICE_VERSION = 3
+export const TELEMETRY_NOTICE_VERSION = 4
 
 interface TelemetryState {
   consent: TelemetryConsent
@@ -62,7 +62,7 @@ export const useTelemetryStore = create<TelemetryState>()(
       }),
       merge: (persisted, current) => {
         const saved = persisted as Partial<TelemetryState> | undefined
-        if (saved?.noticeVersion !== TELEMETRY_NOTICE_VERSION) return current
+        if (saved?.noticeVersion !== TELEMETRY_NOTICE_VERSION) return saved?.consent==='disabled'?{...current,consent:'disabled',noticeVersion:TELEMETRY_NOTICE_VERSION}:current
         return {
           ...current,
           consent: saved.consent ?? 'pending',
