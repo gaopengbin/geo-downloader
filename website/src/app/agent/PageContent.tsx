@@ -9,6 +9,7 @@ import Header from "../_components/Header";
 import Footer from "../_components/Footer";
 import CTALink from "../_components/CTALink";
 import { AGENT_DOWNLOAD_URL, AGENT_GITHUB_DOWNLOAD_URL } from "@/lib/agent-release";
+import AgentDownloadLink from "./AgentDownloadLink";
 import AgentGallery from "./AgentGallery";
 import { DataFeatures, InputFeatures, TaskFeatures, ExtensionFeatures, DeliveryFeatures, ScenarioFeatures, RoadmapFeatures } from "./AgentFeatures";
 import "../home.css";
@@ -21,7 +22,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/agent" },
   openGraph: {
     title: "GeoD Agent｜用对话完成地理数据任务",
-    description: "对话、地图与成果，在一个工作区中。Windows 正式版 0.2.4 现已发布。",
+    description: "对话、地图与成果，在一个工作区中。Windows 正式版 0.2.15 现已发布。",
     url: "/agent",
     images: [{ url: "/geod-site/agent/demo-poster-20261008-v6.jpg", width: 1920, height: 1080, alt: "GeoD Agent 对话与地图工作区" }],
   },
@@ -68,13 +69,13 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
           <h1 id="agent-title">说出需求，<br />把地理数据带回工作区。</h1>
           <p className={styles.lead}>影像、DEM、历史影像、矢量与三维数据，从一次对话开始。<br className={styles.desktopBreak} />核对计划，在自己的电脑上完成下载、处理与成果核验。</p>
           <div className={styles.actions}>
-            <CTALink href={AGENT_DOWNLOAD_URL}>官网下载 Windows 正式版 <ArrowRight size={17} aria-hidden="true" /></CTALink>
-            <CTALink href={AGENT_GITHUB_DOWNLOAD_URL} variant="secondary" className={styles.secondaryAction}>GitHub 下载 <ArrowUpRight size={16} aria-hidden="true" /></CTALink>
+            <AgentDownloadLink href={AGENT_DOWNLOAD_URL}>官网下载 Windows 正式版 <ArrowRight size={17} aria-hidden="true" /></AgentDownloadLink>
+            <AgentDownloadLink href={AGENT_GITHUB_DOWNLOAD_URL} variant="secondary" className={styles.secondaryAction}>GitHub 下载 <ArrowUpRight size={16} aria-hidden="true" /></AgentDownloadLink>
             <CTALink href="#demo" variant="secondary" className={styles.secondaryAction}>观看演示</CTALink>
             <a className={styles.textLink} href="https://github.com/gaopengbin/geod-agent" target="_blank" rel="noopener noreferrer"><Github size={17} aria-hidden="true" />查看开源代码</a>
           </div>
-          <p className={styles.releaseNote}>当前可下载 0.2.4 正式版 · Windows x64<a href="#candidate">查看 0.2.4 本次改进 <ArrowRight size={13} aria-hidden="true" /></a></p>
-          <p className={styles.releaseNote}>安装包约 487 MB；官网下载较慢时，可切换 GitHub 线路。</p>
+          <p className={styles.releaseNote}>当前可下载 0.2.15 正式版 · Windows x64<a href="#candidate">查看 0.2.15 本次改进 <ArrowRight size={13} aria-hidden="true" /></a></p>
+          <p className={styles.releaseNote}>官网下载已接入国内 CDN；GitHub 为备用下载入口。</p>
           <div className={styles.promiseRow}>
             {["任务执行在本机", "图源与范围可核对", "成果文件可带走"].map((text) => <span key={text}><Check size={15} aria-hidden="true" />{text}</span>)}
           </div>
@@ -89,7 +90,7 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
 
         <section id="trial" className={styles.trial} aria-labelledby="trial-title">
           <div><span className={styles.eyebrow}>新用户体验礼</span><h2 id="trial-title">先领 20,000 Credits，试试你的第一个任务。</h2><p>首次使用 GeoD Agent 的用户，登录后自动获得托管模型体验额度。限前 100 个符合条件的账号，每个 GeoD 账号仅赠送一次，名额用完即止。</p></div>
-          <div className={styles.trialAction}><CTALink href={AGENT_DOWNLOAD_URL}>下载 Agent，领取体验额度 <ArrowRight size={16} aria-hidden="true" /></CTALink><a className={styles.textLink} href={AGENT_GITHUB_DOWNLOAD_URL}>GitHub 下载 <ArrowUpRight size={14} aria-hidden="true" /></a><small>已有余额记录的账号不参与新用户赠送。</small></div>
+          <div className={styles.trialAction}><AgentDownloadLink href={AGENT_DOWNLOAD_URL}>下载 Agent，领取体验额度 <ArrowRight size={16} aria-hidden="true" /></AgentDownloadLink><AgentDownloadLink variant="tertiary" className={styles.textLink} href={AGENT_GITHUB_DOWNLOAD_URL}>GitHub 下载 <ArrowUpRight size={14} aria-hidden="true" /></AgentDownloadLink><small>已有余额记录的账号不参与新用户赠送。</small></div>
         </section>
 
         <section id="demo" className={styles.demo} aria-labelledby="demo-title">
@@ -121,13 +122,13 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
 
 
         <section id="candidate" className={styles.candidate} aria-labelledby="candidate-title">
-          <div className={styles.candidateHeading}><div><span className={styles.eyebrow}>0.2.4 · 正式版</span><h2 id="candidate-title">重要选择，留给你。<br />繁琐步骤，交给工具。</h2></div><p>这一版精简模型输入，保留已确认参数与任务状态；改进对话、登录和托盘，缺少技能时引导安装。</p></div>
+          <div className={styles.candidateHeading}><div><span className={styles.eyebrow}>0.2.15 · 正式版</span><h2 id="candidate-title">重要选择，留给你。<br />繁琐步骤，交给工具。</h2></div><p>这一版按已确认条件复用坐标系与格式冲突，减少重复规划和问答；同时改善后台恢复、中文历史读取和本机下载诊断。</p></div>
           <div className={styles.highlightGrid}>
             <article><div className={styles.highlightText}><span className={styles.badge}>需求确认</span><h3>坐标系和历史时期，先选清楚。</h3><p>未明确的参数用选项卡询问。卡片留在会话中，可稍后打开；只改缩放等级时沿用已确认坐标系。</p></div><a className={styles.choiceScreenshot} href="/geod-site/agent/coordinate-choice.png" target="_blank" rel="noopener noreferrer" aria-label="查看完整的坐标系选择卡片"><img src="/geod-site/agent/coordinate-choice.png" width={620} height={760} alt="导出坐标系选择卡片，可选择 WGS84、Web 墨卡托、CGCS2000 或自定义坐标系" loading="lazy" /></a></article>
             <article><div className={styles.highlightText}><span className={styles.badge}>按需安装</span><h3>需要哪项 GIS 能力，就安装哪项。</h3><p>五项 GIS 技能可独立安装，共享已下载依赖。主安装包移除 Java 与本地 OCR；需要时再补充处理能力。</p></div><ul className={styles.skillList}>{gisSkills.map(([name, purpose]) => <li key={name}><Check size={18} aria-hidden="true" /><div><strong>{name}</strong><span>{purpose}</span></div></li>)}</ul><a className={styles.skillScreenshotLink} href="/geod-site/agent/gis-skills-light-20261008.png" target="_blank" rel="noopener noreferrer">查看技能界面截图 <ArrowUpRight size={15} aria-hidden="true" /></a></article>
           </div>
           <div className={styles.candidateFooter}><span><Check size={16} aria-hidden="true" />下载、拼接、裁剪分别显示状态</span><span><Check size={16} aria-hidden="true" />一键打开成果目录</span><span><Check size={16} aria-hidden="true" />大段坐标通过文件引用传递</span></div>
-          <p className={styles.finePrint}>界面来自真实组件验证；截图中的选择与安装状态用于展示交互。0.2.4 安装包和干净 Windows 验收仍待完成。</p>
+          <p className={styles.finePrint}>界面来自真实组件验证；截图中的选择与安装状态用于展示交互。验证范围见版本说明，全新 Windows 尚未覆盖。</p>
         </section>
 
         <DataFeatures />
@@ -158,11 +159,11 @@ export default function AgentPage({ locale = "zh" }: { locale?: Locale }) {
 
         <section id="updates" className={styles.updates} aria-labelledby="updates-title">
           <div className={styles.updateCopy}>
-            <span className={styles.badge}>Windows x64 · 0.2.4 正式版</span>
+            <span className={styles.badge}>Windows x64 · 0.2.15 正式版</span>
             <h2 id="updates-title">下一次数据任务，<br />从一次对话开始。</h2>
             <p>下载正式版，用 AI 对话完成地理数据任务。关注公众号或加入技术交流群，获取版本更新与使用教程。</p>
-            <p className={styles.finePrint}>0.2.4 已正式发布。功能与验证范围见版本说明；全新 Windows 和部分外部服务尚未覆盖。</p>
-            <div className={styles.actions}><CTALink href={AGENT_DOWNLOAD_URL}>官网下载 Windows 正式版 <ArrowRight size={16} aria-hidden="true" /></CTALink><CTALink href={AGENT_GITHUB_DOWNLOAD_URL} variant="secondary" className={styles.secondaryAction}>GitHub 下载 <ArrowUpRight size={16} aria-hidden="true" /></CTALink><Link className={styles.textLink} href="/mcp">已有 Agent？查看 MCP 接入 <ArrowRight size={16} aria-hidden="true" /></Link></div>
+            <p className={styles.finePrint}>0.2.15 已正式发布。功能与验证范围见版本说明；全新 Windows 和部分外部服务尚未覆盖。</p>
+            <div className={styles.actions}><AgentDownloadLink href={AGENT_DOWNLOAD_URL}>官网下载 Windows 正式版 <ArrowRight size={16} aria-hidden="true" /></AgentDownloadLink><AgentDownloadLink href={AGENT_GITHUB_DOWNLOAD_URL} variant="secondary" className={styles.secondaryAction}>GitHub 下载 <ArrowUpRight size={16} aria-hidden="true" /></AgentDownloadLink><Link className={styles.textLink} href="/mcp">已有 Agent？查看 MCP 接入 <ArrowRight size={16} aria-hidden="true" /></Link></div>
           </div>
           <div className={styles.qrGrid}>
             <figure><img src="https://laogao.xyz/packages/qr-assets/gzh.jpg" width={160} height={160} alt="GeoD 微信公众号二维码" loading="lazy" /><figcaption>关注公众号<span>版本进展与使用教程</span></figcaption></figure>
