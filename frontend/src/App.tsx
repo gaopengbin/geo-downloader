@@ -400,7 +400,8 @@ function App() {
         </div>
 
         {/* 右侧地图：Leaflet（默认）与 Cesium（3D Tiles 模式）同时挂载，按 mode CSS 切换显隐 */}
-        <main className="relative h-full flex-1" data-tour="map-canvas">
+        {/* 将地图浮层限制在工作区内，避免时间轴和预览提示越过全局弹窗的遮罩。 */}
+        <main className="relative isolate h-full flex-1" data-tour="map-canvas">
           <div
             className="absolute inset-0"
             style={{ display: mode === 'tiles3d' ? 'none' : 'block' }}
