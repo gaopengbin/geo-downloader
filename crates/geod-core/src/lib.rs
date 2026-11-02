@@ -24,6 +24,10 @@ pub mod pyramid;
 pub mod tile_pack;
 #[path = "../../../src-tauri/src/downloader.rs"]
 pub mod downloader;
+#[path = "../../../src-tauri/src/tile_requests.rs"]
+mod tile_requests;
+#[path = "../../../src-tauri/src/acquisition_diagnostic.rs"]
+pub mod acquisition_diagnostic;
 #[path = "../../../src-tauri/src/tianditu_tokens.rs"]
 pub mod tianditu_tokens;
 #[path = "../../../src-tauri/src/tile_policy.rs"]

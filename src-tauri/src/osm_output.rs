@@ -66,7 +66,7 @@ pub(crate) fn write_geojson(
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result
+    result.map_err(|error| format!("OSM_STORAGE_FAILED: {error}"))
 }
 
 pub(crate) fn settle_task(

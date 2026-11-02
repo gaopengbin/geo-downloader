@@ -154,7 +154,7 @@ impl TiandituTokens {
                 index: state.active,
                 generation: state.generation,
             })
-            .ok_or_else(|| Self::exhausted(state.tokens.len()))
+            .ok_or_else(|| Self::exhausted(state.tokens.len(), state.last_status))
     }
 
     pub fn set_stage(&self, phase: &str, tianditu: bool) {
@@ -212,8 +212,13 @@ impl TiandituTokens {
         }
     }
 
-    fn exhausted(count: usize) -> String {
-        format!("TILE_TOKENS_EXHAUSTED: 天地图的 {} 个 Token 均不可用或额度不足；任务数据已保留。请修改并保存 Token 后继续任务，或稍后重试。", count)
+    fn exhausted(count: usize, status: u16) -> String {
+        format!("TILE_TOKENS_EXHAUSTED: 天地图的 {count} 个 Token 均被拒绝访问（最后 HTTP {status}），不能据此判断额度耗尽；任务数据已保留。请检查 Key 认证、权限及服务状态后恢复任务。")
+    }
+
+    pub fn record_rate_limit(&self, used: &Selection) {
+        let mut state = self.state.lock().unwrap();
+        if used.generation == state.generation && used.index == state.active { state.last_status = 429; }
     }
 
     pub fn reject(&self, used: &Selection, reason: &str) -> Result<(), String> {
@@ -224,13 +229,19 @@ impl TiandituTokens {
             if used.generation != state.generation || used.index != state.active {
                 return Ok(());
             }
-            state.last_status = match reason { "HTTP 401" => 401, "HTTP 403" => 403, "HTTP 429" => 429, _ => 0 };
+            let status = crate::acquisition_diagnostic::http_status(reason).unwrap_or(0);
+            state.last_status = status;
+            // Defensive: rate limits must never invalidate a credential, even
+            // if another caller accidentally routes them through reject().
+            if !matches!(status, 401 | 403) {
+                return Err(format!("TILE_RATE_LIMITED: 天地图 HTTP {status}；请稍后恢复任务，当前 Token 已保留"));
+            }
             state.active += 1;
             if state.active >= state.tokens.len() {
-                let error = Self::exhausted(state.tokens.len());
+                let error = Self::exhausted(state.tokens.len(), status);
                 drop(state);
                 (self.logger)(&error);
-                return Err(error);
+                return Err(format!("{error}（{reason}）"));
             }
             state.switches = state.switches.saturating_add(1);
             state.awaiting_recovery = true;
@@ -287,6 +298,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rate_limit_never_exhausts_a_token_even_when_called_as_a_rejection() {
+        let pool = TiandituTokens::new(vec!["private-a".into(), "private-b".into()], Arc::new(|_| {}));
+        let selected = pool.current().unwrap();
+        for _ in 0..6 {
+            assert!(pool.reject(&selected, "HTTP 429").unwrap_err().starts_with("TILE_RATE_LIMITED:"));
+        }
+        assert_eq!(pool.current().unwrap().token, "private-a");
+        assert_eq!(pool.diagnostics().last_rejection_status, 429);
+        assert_eq!(pool.diagnostics().token_switches, 0);
+        assert!(!pool.diagnostics().tokens_exhausted);
+    }
+
+    #[test]
     fn ordered_unique_tokens_and_legacy_settings() {
         let settings: AppSettings = serde_json::from_str(r#"{"tianditu_token":" old "}"#).unwrap();
         assert_eq!(configured_tokens(&settings, Some("stale")), vec!["old"]);
@@ -320,10 +344,10 @@ mod tests {
         settings.tianditu_token = Some("fresh-primary".into());
         settings.tianditu_backup_tokens = vec!["fresh-backup".into()];
         settings_saved(&settings);
-        pool.reject(&stale, "HTTP 429").unwrap();
+        pool.reject(&stale, "HTTP 403").unwrap();
         assert_eq!(pool.current().unwrap().token, "fresh-primary");
         let fresh = pool.current().unwrap();
-        pool.reject(&fresh, "HTTP 429").unwrap();
+        pool.reject(&fresh, "HTTP 403").unwrap();
         settings_saved(&settings); // unrelated setting save retains the active backup
         assert_eq!(pool.current().unwrap().token, "fresh-backup");
         settings_saved(&AppSettings::default());
@@ -346,7 +370,7 @@ mod tests {
             .map(|_| {
                 let used = used.clone();
                 let pool = pool.clone();
-                std::thread::spawn(move || pool.reject(&used, "HTTP 429").unwrap())
+                std::thread::spawn(move || pool.reject(&used, "HTTP 403").unwrap())
             })
             .collect();
         for handle in handles {
@@ -358,15 +382,15 @@ mod tests {
         let used = pool.current().unwrap();
         pool.reject(&used, "HTTP 401").unwrap();
         for _ in 0..30 {
-            pool.reject(&used, "HTTP 429").unwrap();
+            pool.reject(&used, "HTTP 403").unwrap();
         }
         assert_eq!(pool.current().unwrap().token, "new-b");
         pool.replace(vec!["saved".into()]);
-        pool.reject(&used, "HTTP 429").unwrap();
+        pool.reject(&used, "HTTP 403").unwrap();
         assert_eq!(pool.current().unwrap().token, "saved");
         let used = pool.current().unwrap();
         assert!(pool
-            .reject(&used, "HTTP 429")
+            .reject(&used, "HTTP 403")
             .unwrap_err()
             .starts_with("TILE_TOKENS_EXHAUSTED:"));
         pool.replace(vec!["saved".into()]);
@@ -396,7 +420,7 @@ mod tests {
         assert_eq!(pool.diagnostics().recovered_switches, 1);
         pool.replace(vec!["private-b".into(), "private-c".into()]);
         pool.record_request(&pool.current().unwrap());
-        pool.reject(&a, "HTTP 429").unwrap();
+        pool.reject(&a, "HTTP 403").unwrap();
         let d = pool.diagnostics();
         assert_eq!((d.configured_tokens, d.used_tokens, d.token_switches, d.settings_updates), (2,2,1,1));
         assert_eq!(d.last_rejection_status, 401);

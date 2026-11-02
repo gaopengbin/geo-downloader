@@ -652,7 +652,7 @@ function DefaultSourcePanel({
   )
 }
 
-export function SourcesDialog({ triggerLabel, listenForActions = true }: { triggerLabel?: string; listenForActions?: boolean } = {}) {
+export function SourcesDialog({ triggerLabel, listenForActions = true, onOpen }: { triggerLabel?: string; listenForActions?: boolean; onOpen?: () => void } = {}) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const assistantOpen = useAssistantStore((state) => state.open)
@@ -724,6 +724,7 @@ export function SourcesDialog({ triggerLabel, listenForActions = true }: { trigg
       open={open}
       onOpenChange={(v) => {
         setOpen(v)
+        if (v) onOpen?.()
         if (!v) {
           setDraft(null)
           setSyncedFrom(undefined)

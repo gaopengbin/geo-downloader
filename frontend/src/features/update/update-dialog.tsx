@@ -14,7 +14,8 @@ import {
 } from '@/components/ui/dialog'
 import { invokeCommand, isTauriRuntime } from '@/lib/tauri'
 import { useUpdateStore } from './update-store'
-import { updateSpeed, type UpdateTransfer } from './update-transfer'
+import { updateSpeed, UpdateTelemetryTracker, type UpdateTransfer } from './update-transfer'
+import { trackTelemetry, flushTelemetry } from '@/features/telemetry/telemetry-client'
 
 async function openExternal(url: string) {
   if (isTauriRuntime()) {
@@ -76,6 +77,8 @@ export function UpdateDialog() {
       return
     }
 
+    const telemetry = new UpdateTelemetryTracker()
+    void trackTelemetry('update_transfer_state', telemetry.started())
     setDownloading(true)
     setProgress(0)
     setTransfer(null)
@@ -86,6 +89,12 @@ export function UpdateDialog() {
         setProgress(typeof e.payload === 'number' ? e.payload : 0)
       }))
       unlistenRef.current.push(await listen<UpdateTransfer>('update-download-status', (e) => {
+        const transition = telemetry.observe(e.payload)
+        if (transition) {
+          void trackTelemetry('update_transfer_state', transition).then(() => {
+            if (transition.state === 'installing') void flushTelemetry()
+          })
+        }
         setTransfer(e.payload)
         setProgress(e.payload.progress)
       }))
@@ -97,6 +106,7 @@ export function UpdateDialog() {
         expectedSize: info.expectedSize,
       })
     } catch (error) {
+      void trackTelemetry('update_transfer_state', telemetry.failed())
       const message = error instanceof Error ? error.message : String(error)
       toast.error(t('update.failed', { message: message.startsWith('UPDATE_SOURCES_FAILED:') ? t('update.sourcesFailed') : message }))
       setDownloading(false)

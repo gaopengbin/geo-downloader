@@ -24,7 +24,7 @@ export function reasonBucket(state: string, error?: string): DownloadReason {
   if (/\b(?:TILE_ACCESS_DENIED|TILE_TOKENS_EXHAUSTED):/.test(text)) return 'auth'
   if (/\b(?:OSM_OFFLINE_FORBIDDEN|CARTO_OFFLINE_FORBIDDEN|TILE_REDIRECT_DENIED):/.test(text)) return 'permission'
   if (/\b(?:TILE_RATE_LIMITED|INVALID_TILE|TILE_TOO_LARGE):/.test(text)) return 'network'
-  if (/\bTILE_STORAGE_FAILED:/.test(text)) {
+  if (/\b(?:TILE|OSM)_STORAGE_FAILED:/.test(text)) {
     return /permission denied|access (?:is )?denied|EACCES|EPERM|拒绝访问|权限|只读|read.only/i.test(text) ? 'permission' : 'disk'
   }
   if (/(?:HTTP(?:\/[\d.]+)?|status(?: code)?|状态码)[\s:：=]*(?:401|403)\b|unauthorized|认证失败|登录|(?:token|api[ _-]?key).*(?:invalid|expired|exhausted|失效|无效|耗尽|额度)|(?:令牌|密钥|额度|配额).*(?:不足|无效|失效|耗尽)/i.test(text)) return 'auth'

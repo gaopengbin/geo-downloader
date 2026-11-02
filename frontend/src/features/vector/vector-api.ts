@@ -20,7 +20,7 @@ export function createOsmDownloadTask(
   }).then((result) => {
     void trackTelemetry('download_task_created', {
       workflow: 'osm',
-      output_format: 'unknown',
+      output_format: 'geojson',
       zoom_count: telemetryCountBucket(0),
       selection: polygon?.length ? 'polygon' : 'bounds',
     })

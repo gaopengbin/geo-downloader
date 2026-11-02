@@ -3,10 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { openTelemetryDatabase, TIME_ZONE } from './database.mjs'
 import {validateDownloadDiagnostic}from './download-diagnostic.mjs'
+import { FEATURE_EVENT_NAMES, validateFeatureTelemetry } from './feature-events.mjs'
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/
 const EVENT_NAMES = new Set([
+  ...FEATURE_EVENT_NAMES,
   'app_started',
   'mode_changed',
   'sidebar_tab_changed',
@@ -37,7 +39,7 @@ const IMPORT_OUTCOMES = new Set(['success', 'no_area', 'error'])
 const BOOKMARK_ACTIONS = new Set(['created', 'restored', 'renamed', 'deleted'])
 const DOWNLOAD_WORKFLOWS = new Set(['raster', 'wayback', 'osm', 'tiles3d'])
 const OUTPUT_FORMATS = new Set([
-  'geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf', 'unknown',
+  'geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf', 'geojson', 'unknown',
 ])
 const TASK_ACTIONS = new Set([
   'pause_toggle', 'cancel', 'delete', 'resume', 'discard', 'export_partial',
@@ -102,6 +104,10 @@ function invalid(message) {
 function validateProperties(eventName, properties) {
   if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
     throw invalid('properties must be an object')
+  }
+
+  if (FEATURE_EVENT_NAMES.includes(eventName)) {
+    try { return validateFeatureTelemetry(eventName, properties) } catch { throw invalid('feature properties are invalid') }
   }
 
   if (eventName === 'download_task_state') {

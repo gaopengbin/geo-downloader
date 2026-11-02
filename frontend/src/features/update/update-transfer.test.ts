@@ -1,11 +1,26 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { installerIntegrity, updateSpeed } from './update-transfer.ts'
+import { installerIntegrity, updateSpeed, UpdateTelemetryTracker } from './update-transfer.ts'
 import { useUpdateStore } from './update-store.ts'
 
 test('mirror SHA256 and GitHub digests describe the same installer', () => {
   assert.deepEqual(installerIntegrity({ sha256: 'A'.repeat(64), size: 1024 }),
     installerIntegrity({ digest: `sha256:${'a'.repeat(64)}`, size: 1024 }))
+})
+
+test('update telemetry emits transitions once and never treats handoff as installation success', () => {
+  const tracker = new UpdateTelemetryTracker()
+  assert.deepEqual(tracker.started(), { state: 'started', source: 'unknown', reason: 'none', attempt: 0 })
+  const transfer = { source: 'mirror', phase: 'downloading', attempt: 1, progress: 5, downloaded: 5, total: 100, bytesPerSecond: 5, reason: null } as const
+  for (let progress = 1; progress < 80; progress++) assert.equal(tracker.observe({ ...transfer, progress }), null)
+  const switched = { ...transfer, phase: 'switching', reason: 'slow' } as const
+  assert.equal(tracker.observe(switched)?.reason, 'slow')
+  assert.equal(tracker.observe(switched), null)
+  assert.equal(tracker.observe({ ...transfer, phase: 'verifying', source: 'github', attempt: 2 })?.state, 'verifying')
+  assert.equal(tracker.observe({ ...transfer, phase: 'installing', source: 'github', attempt: 2 })?.state, 'installing')
+  assert.equal(tracker.failed().state, 'failed')
+  assert.equal(new UpdateTelemetryTracker().observe(switched)?.state, 'switching')
+  assert.doesNotMatch(JSON.stringify(tracker.failed()), /downloaded|bytesPerSecond|url|success/)
 })
 
 test('missing or malformed integrity never starts an unverified update', () => {

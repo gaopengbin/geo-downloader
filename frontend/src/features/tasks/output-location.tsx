@@ -4,16 +4,21 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { openFileLocation } from '@/features/history/history-api'
+import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 
 export function OutputLocation({ path, saved, strictFile = false }: { path: string; saved: boolean; strictFile?: boolean }) {
   const { t } = useTranslation()
+  const report = (action: 'open_folder' | 'copy_path', outcome: 'success' | 'failed') => {
+    void trackTelemetry('output_location_action', { action, outcome, strict_file: strictFile })
+  }
   const open = useMutation({
     mutationFn: () => openFileLocation(path, strictFile),
-    onError: (e) => toast.error(t('history.toast.openError', { message: String(e) })),
+    onSuccess: () => report('open_folder', 'success'),
+    onError: (e) => { report('open_folder', 'failed'); toast.error(t('history.toast.openError', { message: String(e) })) },
   })
   const copy = async () => {
-    try { await navigator.clipboard.writeText(path); toast.success(t('tasks.output.copied')) }
-    catch { toast.error(t('tasks.output.copyError')) }
+    try { await navigator.clipboard.writeText(path); report('copy_path', 'success'); toast.success(t('tasks.output.copied')) }
+    catch { report('copy_path', 'failed'); toast.error(t('tasks.output.copyError')) }
   }
   if (!path) return null
   return <div className="mt-2 min-w-0 space-y-2 rounded-md border bg-muted/20 p-2.5">

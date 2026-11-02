@@ -2259,33 +2259,46 @@ pub async fn probe_tile(
     // incorrectly trigger the user's "stop on empty probe" setting.
     let token_pool = crate::tianditu_tokens::is_tianditu_url(&url).then(||
         crate::tianditu_tokens::TiandituTokens::for_task(tianditu_token.as_deref(), Arc::new(|_| {})));
-    let (resp, probe_used_public_token) = loop {
+    let mut probe_attempt = 0;
+    let (resp, probe_used_public_token, _probe_permit) = loop {
+        let permit = crate::tile_requests::acquire(&url).await;
         let selected = token_pool.as_ref().map(|pool| pool.current()).transpose()?;
         let used_public_token = selected.as_ref().is_some_and(|selected| selected.token == config::TIANDITU_DEFAULT_TOKEN);
         let request_url = selected.as_ref().map(|selected| crate::tianditu_tokens::token_url(&url, &selected.token));
         let resp = client.get(request_url.as_deref().unwrap_or(&url)).headers(headers.clone())
             .send().await.map_err(|e| format!("请求失败: {}", e.without_url()))?;
         if let (Some(pool), Some(selected)) = (&token_pool, selected.as_ref()) {
-            if matches!(resp.status().as_u16(), 401 | 403 | 429) {
-                let delay = if resp.status().as_u16() == 429 {
-                    crate::downloader::retry_after(resp.headers(), 0)
-                } else { std::time::Duration::ZERO };
-                if delay <= std::time::Duration::from_secs(60)
-                    && pool.reject(selected, &format!("HTTP {}", resp.status().as_u16())).is_ok() {
+            if matches!(resp.status().as_u16(), 401 | 403) {
+                if pool.reject(selected, &format!("HTTP {}", resp.status().as_u16())).is_ok() {
                     drop(resp);
-                    tokio::time::sleep(delay).await;
+                    drop(permit);
+                    probe_attempt = 0;
                     continue;
                 }
             }
         }
-        break (resp, used_public_token);
+        if matches!(resp.status().as_u16(), 429 | 503) {
+            let delay = crate::downloader::retry_after(resp.headers(), probe_attempt);
+            if let Some(permit) = &permit { permit.limited(delay); }
+            if resp.status().as_u16() == 429 {
+                if let (Some(pool), Some(selected)) = (&token_pool, selected.as_ref()) { pool.record_rate_limit(selected); }
+            }
+            if delay <= std::time::Duration::from_secs(60) && probe_attempt < 2 {
+                drop(resp);
+                drop(permit);
+                tokio::time::sleep(delay).await;
+                probe_attempt += 1;
+                continue;
+            }
+        }
+        break (resp, used_public_token, permit);
     };
 
     let status_code = resp.status().as_u16();
 
     if !resp.status().is_success() {
-        let is_tianditu = source_key.starts_with("tianditu_")
-            || url.contains("tianditu.gov.cn");
+        let is_tianditu = crate::tianditu_tokens::is_tianditu_url(&url);
+        let detail = crate::downloader::service_error_detail(resp).await;
         let uses_public_token = probe_used_public_token;
         let token_kind = if uses_public_token {
             "当前使用 GeoD 内置的公开共享 Key，其额度和可用性不受保证"
@@ -2306,16 +2319,16 @@ pub async fn probe_tile(
                 token_kind
             ),
             (true, 429) => format!(
-                "天地图 HTTP 429：Token 请求额度不足或服务正在限流。{}；请稍后重试或更换自己的 Token",
+                "天地图 HTTP 429：服务限制请求，不能据此判断额度耗尽。{}；请稍后重试，当前 Token 已保留",
                 token_kind
             ),
             (false, 401) => "HTTP 401（Token 未通过认证）".to_string(),
             (false, 403) if proxy.as_deref().is_some_and(|value| !value.trim().is_empty()) => {
-                "HTTP 403（Token 或请求来源未获授权；当前请求经过代理，请检查代理出口 IP 是否在企业 Token 白名单中）"
+                "HTTP 403（服务拒绝访问；当前请求经过代理，请核对请求头、授权和服务状态）"
                     .to_string()
             }
             (false, 403) => {
-                "HTTP 403（Token 或请求来源未获授权；请检查企业 Token 的来源 IP/域名白名单）"
+                "HTTP 403（服务拒绝访问；请核对请求头、授权和服务状态）"
                     .to_string()
             }
             _ => format!("HTTP {}", status_code),
@@ -2324,12 +2337,15 @@ pub async fn probe_tile(
             has_data: false,
             status_code,
             content_length: 0,
-            message,
+            message: format!("{message}{detail}"),
         });
     }
 
     let bytes = resp.bytes().await.map_err(|e| format!("读取失败: {}", e))?;
     let content_length = bytes.len();
+    if crate::tile_payload::validate(&bytes, None).is_ok() {
+        if let Some(permit) = &_probe_permit { permit.succeeded(); }
+    }
 
     if crate::historical_sources::is_weld_url(&url) {
         let valid_image = crate::tile_payload::validate(&bytes, None).is_ok();

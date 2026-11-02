@@ -14,6 +14,8 @@ test('stable download codes classify access, quota, rate limits, source data and
     ['TILE_REDIRECT_DENIED: redirect rejected', 'permission'],
     ['TILE_STORAGE_FAILED: 写入缓存瓦片失败: 指定的网络名不再可用 (os error 64)', 'disk'],
     ['TILE_STORAGE_FAILED: Permission denied', 'permission'],
+    ['OSM_STORAGE_FAILED: 创建 OSM 临时文件失败: no space left on device', 'disk'],
+    ['OSM_STORAGE_FAILED: 提交 OSM 文件失败: Access is denied', 'permission'],
     ['TILE_STORAGE_FAILED: 拒绝访问 (os error 5)', 'permission'],
     ['写入合成瓦片失败: 磁盘空间不足', 'disk'],
     ['创建叠加图层临时目录失败: I/O error', 'disk'],

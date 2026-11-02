@@ -5,8 +5,9 @@ import { sanitizeDownloadDiagnostics } from './download-diagnostics'
 import {sanitizeAcquisitionDiagnostic,type AcquisitionDiagnostic}from './acquisition-diagnostic'
 import type { DownloadLifecycleEvent } from './download-lifecycle'
 import { runtimePolicy } from '@/lib/runtime-policy'
+import { validateFeatureTelemetry, type FeatureTelemetryEventMap } from './feature-events.mjs'
 
-interface TelemetryEventMap {
+interface TelemetryEventMap extends FeatureTelemetryEventMap {
   download_task_state: DownloadLifecycleEvent
   app_started: Record<string, never>
   mode_changed: { mode: AppMode }
@@ -98,6 +99,7 @@ type TelemetryOutputFormat =
   | 'mbtiles'
   | 'gpkg'
   | 'pbf'
+  | 'geojson'
   | 'unknown'
 export type TelemetryTour =
   | 'main'
@@ -155,7 +157,7 @@ export function telemetryImportFormat(filename: string): TelemetryImportFormat {
 export function telemetryOutputFormat(format: string): TelemetryOutputFormat {
   const normalized = format.trim().toLowerCase()
   const allowed: TelemetryOutputFormat[] = [
-    'geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf',
+    'geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf', 'geojson',
   ]
   return allowed.includes(normalized as TelemetryOutputFormat)
     ? (normalized as TelemetryOutputFormat)
@@ -207,6 +209,10 @@ function sanitizeProperties<TName extends TelemetryEventName>(
   properties: TelemetryEventMap[TName],
 ): Record<string, boolean | number | string | null | AcquisitionDiagnostic> {
   switch (event) {
+    case 'overlay_configuration':
+    case 'output_location_action':
+    case 'update_transfer_state':
+      return validateFeatureTelemetry(event, properties)
     case 'app_started':
       return {}
     case 'mode_changed': {
@@ -304,6 +310,8 @@ export async function trackTelemetry<TName extends TelemetryEventName>(
   const latestState = useTelemetryStore.getState()
   if (latestState.consent !== 'enabled' || !latestState.installId) return
 
+  let safeProperties: ReturnType<typeof sanitizeProperties>
+  try { safeProperties = sanitizeProperties(event, properties) } catch { return }
   const queued: QueuedTelemetryEvent = {
     event_id: createEventId(),
     event,
@@ -312,7 +320,7 @@ export async function trackTelemetry<TName extends TelemetryEventName>(
     session_id: sessionId,
     app_version: appVersion,
     platform: detectPlatform(),
-    properties: sanitizeProperties(event, properties),
+    properties: safeProperties,
   }
   writeQueue([...readQueue(), queued])
   scheduleFlush()

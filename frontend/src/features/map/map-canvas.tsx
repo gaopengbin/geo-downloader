@@ -1520,7 +1520,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
             <Button type="button" variant="outline" size="sm" onClick={() => void sourcesQuery.refetch()} disabled={sourcesQuery.isFetching}>{t('overlays.retry')}</Button>
           </div>
             : sourcesQuery.isLoading ? <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
-            : <OverlayPicker sources={sourcesQuery.data ?? {}} value={mapOverlayIds} baseId={mapBaseId}
+            : <OverlayPicker target="preview" sources={sourcesQuery.data ?? {}} value={mapOverlayIds} baseId={mapBaseId}
                 onChange={(ids) => setOverlaySources(mode, ids)}/>}
         </DialogContent>
       </Dialog>

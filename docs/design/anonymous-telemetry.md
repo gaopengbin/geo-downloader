@@ -34,6 +34,9 @@ Users can turn reporting off; an existing explicit opt-out is retained.
 - `assistant_panel_action`
 - `assistant_request`
 - `assistant_navigation`
+- `overlay_configuration`: preview/download target, add/remove/reorder/manage action, and a coarse layer-count bucket.
+- `output_location_action`: open-folder/copy-path action, success/failure, and whether strict single-file checking was requested.
+- `update_transfer_state`: started/switching/verifying/installing/failed transition, official source category, categorical switch reason, and bounded attempt count. Progress samples are not events. Installing indicates a verified package ready for handoff, not proof that installation or restart succeeded.
 
 The client does not accept arbitrary event names or properties. Do not add URLs,
 file paths, filenames, search text, coordinates, selection bounds, tokens,
@@ -84,6 +87,13 @@ referrer host names, UTM attribution, download platform/version, message-count
 buckets, participant-count buckets, and export modes are accepted. Chat content,
 avatars, generated images, URLs with query strings, coordinates, source URLs,
 local paths, IP addresses, and downloaded content are never stored.
+
+GeoD 3.6.25 adds the three feature events above with a shared exact-key allowlist
+on client and collector. Extra fields and raw values are rejected. GeoJSON is an
+explicit export-format category, and `OSM_STORAGE_FAILED` is classified as disk or
+permission failure without sending its message. A prior update switch reason is
+not reused as the final source's failure reason. Existing opt-out, bounded queue,
+and development-run suppression remain unchanged.
 
 It validates this schema, rejects unknown fields, rate-limits requests,
 deduplicates by `event_id`, and does not retain request IP addresses in the
