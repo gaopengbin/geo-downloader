@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 import type { ReleaseNoteGroup } from './update-api'
+import type { UpdateTransfer } from './update-transfer'
 
 export interface UpdateInfo {
   currentVersion: string
@@ -8,6 +9,8 @@ export interface UpdateInfo {
   noteGroups: ReleaseNoteGroup[]
   downloadUrl: string | null
   releaseUrl: string
+  expectedSha256: string
+  expectedSize: number
 }
 
 export type UpdateCheckStatus =
@@ -22,11 +25,13 @@ interface UpdateState {
   status: UpdateCheckStatus
   downloading: boolean
   progress: number
+  transfer: UpdateTransfer | null
   showDialog: (info: UpdateInfo) => void
   closeDialog: () => void
   setStatus: (status: UpdateCheckStatus) => void
   setDownloading: (downloading: boolean) => void
   setProgress: (progress: number) => void
+  setTransfer: (transfer: UpdateTransfer | null) => void
 }
 
 export const useUpdateStore = create<UpdateState>((set) => ({
@@ -35,9 +40,11 @@ export const useUpdateStore = create<UpdateState>((set) => ({
   status: { kind: 'idle' },
   downloading: false,
   progress: 0,
-  showDialog: (info) => set({ open: true, info, status: { kind: 'idle' }, downloading: false, progress: 0 }),
-  closeDialog: () => set({ open: false, downloading: false, progress: 0 }),
+  transfer: null,
+  showDialog: (info) => set({ open: true, info, status: { kind: 'idle' }, downloading: false, progress: 0, transfer: null }),
+  closeDialog: () => set({ open: false, downloading: false, progress: 0, transfer: null }),
   setStatus: (status) => set({ status }),
   setDownloading: (downloading) => set({ downloading }),
   setProgress: (progress) => set({ progress }),
+  setTransfer: (transfer) => set({ transfer }),
 }))

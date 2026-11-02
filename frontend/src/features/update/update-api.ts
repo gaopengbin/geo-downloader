@@ -1,10 +1,15 @@
 import { invokeCommand, isTauriRuntime } from '@/lib/tauri'
 import { useUpdateStore } from './update-store'
 import { runtimePolicy } from '@/lib/runtime-policy'
+import i18next from 'i18next'
+import { installerIntegrity } from './update-transfer'
 
 interface GithubAsset {
   name: string
   browser_download_url: string
+  size?: number
+  sha256?: string
+  digest?: string | null
 }
 
 interface GithubRelease {
@@ -164,12 +169,17 @@ export async function checkForUpdates(silent: boolean) {
       const setupAsset = (data.assets ?? []).find(
         (a) => a.name.endsWith('_setup.exe') || a.name.endsWith('-setup.exe'),
       )
+      if (!setupAsset) throw new Error(i18next.t('update.integrityMissing'))
+      let integrity: ReturnType<typeof installerIntegrity>
+      try { integrity = installerIntegrity(setupAsset) }
+      catch { throw new Error(i18next.t('update.integrityMissing')) }
       store.showDialog({
         currentVersion,
         latestVersion,
         noteGroups: extractKeyUpdates(data.body),
-        downloadUrl: setupAsset?.browser_download_url ?? null,
-        releaseUrl: data.html_url,
+        downloadUrl: setupAsset.browser_download_url,
+        releaseUrl: `https://github.com/gaopengbin/geo-downloader/releases/tag/${encodeURIComponent(data.tag_name)}`,
+        ...integrity,
       })
     } else if (!silent) {
       store.setStatus({ kind: 'latest', message: '已是最新版本' })

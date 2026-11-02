@@ -2,6 +2,7 @@
 pub mod config;
 pub mod tile;
 pub mod downloader;
+mod update_download;
 pub mod tianditu_tokens;
 pub mod acquisition_diagnostic;
 #[cfg(test)]mod acquisition_live_acceptance;

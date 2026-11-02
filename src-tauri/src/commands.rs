@@ -3507,53 +3507,35 @@ pub async fn download_and_install_update(
     app: AppHandle,
     url: String,
     version: String,
+    expected_sha256: String,
+    expected_size: u64,
 ) -> Result<(), String> {
-    let temp_dir = std::env::temp_dir();
-    let setup_filename = format!("GeoDownloader_{}_setup.exe", version);
-    let setup_path = temp_dir.join(&setup_filename);
-    
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&url)
-        .header("User-Agent", "GeoDownloader")
-        .send()
-        .await
-        .map_err(|e| format!("下载失败: {}", e))?;
-    
-    let total_size = response.content_length().unwrap_or(0);
-    let mut downloaded: u64 = 0;
-    
-    let mut file = std::fs::File::create(&setup_path)
-        .map_err(|e| format!("创建文件失败: {}", e))?;
-    
-    let mut stream = response.bytes_stream();
-    use futures_util::StreamExt;
-    use std::io::Write;
-    
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("下载失败: {}", e))?;
-        file.write_all(&chunk).map_err(|e| format!("写入失败: {}", e))?;
-        
-        downloaded += chunk.len() as u64;
-        if total_size > 0 {
-            let progress = ((downloaded as f64 / total_size as f64) * 100.0) as u32;
-            let _ = app.emit("update-download-progress", progress);
-        }
-    }
-    
-    drop(file);
-    let _ = app.emit("update-download-progress", 100u32);
-    
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
-    // 启动安装程序
+    if !cfg!(target_os = "windows") { return Err("当前平台暂不支持应用内安装".into()); }
+    let spec = crate::update_download::Spec::new(&url, &version, &expected_sha256, expected_size)?;
+    let _active = crate::update_download::lock_update()?;
+    let directory = std::env::temp_dir().join(format!("GeoDownloader-update-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).map_err(|_| "无法创建更新临时目录")?;
+    let setup_path = match crate::update_download::download(&spec, &directory, |transfer| {
+        let _ = app.emit("update-download-progress", transfer.progress);
+        let _ = app.emit("update-download-status", transfer);
+    }).await {
+        Ok(path) => path,
+        Err(error) => { let _ = std::fs::remove_dir(&directory); return Err(error); }
+    };
+    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+
+    // Only the completely received, hash-verified installer reaches this point.
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        std::process::Command::new(&setup_path)
+        if std::process::Command::new(&setup_path)
             .creation_flags(0x00000008) // DETACHED_PROCESS
             .spawn()
-            .map_err(|e| format!("启动安装程序失败: {}", e))?;
+            .is_err() {
+            let _ = std::fs::remove_file(&setup_path);
+            let _ = std::fs::remove_dir(&directory);
+            return Err("安装包已下载，但安装程序启动失败；可在应用内重试".into());
+        }
     }
     
     app.exit(0);
