@@ -43,6 +43,8 @@ jobs:
           python-version: '3.12'
       - name: Test release validation
         run: python -m unittest discover -s control/scripts -p test_validate_release.py
+      - name: Test update manifest canonical links
+        run: python -m unittest discover -s control/scripts -p test_update_manifest.py
       - name: Validate tag, native versions and release notes
         id: preflight
         env:
@@ -204,6 +206,12 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
 
+      - name: Checkout manifest validation tools
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: control
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -214,6 +222,7 @@ jobs:
         run: ls -la artifacts/
 
       - name: Create Release
+        id: create_release
         uses: softprops/action-gh-release@v1
         with:
           name: 'GeoDownloader v${{ needs.validate.outputs.version }}'
@@ -223,9 +232,27 @@ jobs:
           # Publish after the public API and checksum-verified mirror are ready.
           draft: true
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
-          files: artifacts/*
+          files: artifacts/GeoDownloader_*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build canonical mirror manifest for staging
+        if: needs.validate.outputs.prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.create_release.outputs.id }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" > release-metadata.json
+          python control/scripts/update_manifest.py --release release-metadata.json --output update.json --allow-draft-for-staging
+          python control/scripts/update_manifest.py --validate update.json
+
+      - name: Upload mirror staging manifest
+        if: needs.validate.outputs.prerelease != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-mirror-manifest
+          path: update.json
+          retention-days: 3
 
       # Mirror deployment uses locally downloaded artifacts and pinned-key SSH.
       # Production hosts must not download GitHub resources.

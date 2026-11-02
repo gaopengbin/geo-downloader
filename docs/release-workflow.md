@@ -7,6 +7,8 @@ The `Release` workflow validates the selected source before starting any platfor
 - Every build and the final release use the immutable commit checked by preflight, including manual dispatches.
 - Manual dispatch requires an existing tag and defaults to **validation only**. Keep that option enabled when checking the workflow against a previously published release; it does not rebuild installers or modify the release.
 - Builds continue to create a draft. Public activation still requires checksum verification and mirror preparation.
+- `release-mirror-manifest` contains the staging update feed built by `scripts/update_manifest.py`. The release page is derived from the stable tag; the draft API's temporary `untagged-*` `html_url` is never copied. Draft input requires explicit staging mode. Download and verify assets locally, publish the release, reread its public metadata and compare it with the staging feed before activating the domestic mirror. Never serve the staging feed before public release activation.
+- Run `python scripts/update_manifest.py --validate <update.json>` before mirror activation. Verification includes the canonical version page, all five installer names, SHA256 values, sizes and domestic URLs; a matching version alone is insufficient.
 
 Local check: `python scripts/validate_release.py --tag v<VERSION>`.
 
