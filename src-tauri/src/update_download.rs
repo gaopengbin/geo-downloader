@@ -85,7 +85,7 @@ impl Default for Policy {
 fn official_redirect(url: &Url) -> bool {
     url.scheme() == "https" && url.username().is_empty() && url.password().is_none()
         && url.port_or_known_default() == Some(443)
-        && url.host_str().is_some_and(|host| host == "laogao.xyz" || host == "github.com"
+        && url.host_str().is_some_and(|host| host == "laogao.xyz" || host == "download.laogao.xyz" || host == "github.com"
             || host.ends_with(".githubusercontent.com"))
 }
 
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn redirects_remain_https_and_on_official_delivery_hosts() {
-        for url in ["https://github.com/gaopengbin/geo-downloader", "https://release-assets.githubusercontent.com/file", "https://laogao.xyz/packages/file"] {
+        for url in ["https://github.com/gaopengbin/geo-downloader", "https://release-assets.githubusercontent.com/file", "https://laogao.xyz/packages/file", "https://download.laogao.xyz/agent-updates/windows-x86_64/3.6.24/installer.exe"] {
             assert!(official_redirect(&Url::parse(url).unwrap()));
         }
         for url in ["http://github.com/file", "https://github.com.evil.test/file", "https://127.0.0.1/file", "https://user:secret@github.com/file", "https://github.com:444/file"] {
