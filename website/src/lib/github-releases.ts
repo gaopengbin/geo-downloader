@@ -31,7 +31,7 @@ const fallbackRelease: GitHubRelease = {
   tag_name: "v3.6.25",
   name: "GeoDownloader v3.6.25",
   html_url: `${RELEASES_URL}/tag/v3.6.25`,
-  published_at: "2026-11-02T00:00:00Z",
+  published_at: "2026-11-02T10:30:23Z",
   body: "",
   draft: false,
   prerelease: false,
