@@ -17,6 +17,7 @@ export interface AppState {
   /** 各 mode 各自记忆的 overlay 显隐状态（如天地图标注 cia/cva） */
   overlayVisibilityByMode: Partial<Record<AppMode, Record<string, boolean>>>
   setOverlayVisibility: (mode: AppMode, key: string, visible: boolean) => void
+  setOverlaySources: (mode: AppMode, ids: string[]) => void
   /** 地图经纬度网格显示 */
   graticuleVisible: boolean
   setGraticuleVisible: (visible: boolean) => void
@@ -127,6 +128,9 @@ export const useAppStore = create<AppState>()(
             },
           }
         }),
+      setOverlaySources: (mode, ids) => set((s) => ({
+        overlayVisibilityByMode: { ...s.overlayVisibilityByMode, [mode]: Object.fromEntries(ids.map((id) => [id, true])) },
+      })),
       graticuleVisible: restoredAppState.graticuleVisible ?? false,
       setGraticuleVisible: (visible) => set({ graticuleVisible: visible }),
       graticuleInterval: restoredAppState.graticuleInterval ?? 1,

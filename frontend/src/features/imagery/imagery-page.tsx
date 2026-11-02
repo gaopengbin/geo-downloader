@@ -34,6 +34,8 @@ import {
 import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { OverlayPicker } from '@/features/sources/overlay-picker'
+import { validOverlayIds } from '@/features/sources/overlay-sources'
 import { historicalSourceInfo, historicalZoomLevels, sourceMatchesHistoryContext, type HistoricalProvider } from '@/features/sources/historical-source-info'
 import {
   focusImagerySourcePicker,
@@ -497,7 +499,8 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
   const compression = useWatch({ control, name: 'compression' })
   const buildPyramid = useWatch({ control, name: 'build_pyramid' })
   const generateSidecars = useWatch({ control, name: 'generate_sidecars' })
-  const overlaySources = (useWatch({ control, name: 'overlay_sources' }) ?? []) as string[]
+  const watchedOverlaySources = useWatch({ control, name: 'overlay_sources' })
+  const overlaySources = useMemo(() => watchedOverlaySources ?? [], [watchedOverlaySources])
   const concurrency = useWatch({ control, name: 'concurrency' })
 
   const [estimate, setEstimate] = useState<DownloadEstimate | null>(null)
@@ -613,7 +616,7 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
         generate_sidecars: values.format === 'geotiff' && values.generate_sidecars,
         overlay_sources:
           (values.overlay_sources && values.overlay_sources.length > 0 && !isMvtMode && !isDemMode && values.format !== 'pbf')
-            ? values.overlay_sources.filter((id) => id && id !== values.source)
+            ? validOverlayIds(values.overlay_sources, sourcesQuery.data ?? {}, values.source)
             : null,
       }
       return createDownloadTask(request, finalName, sourceMeta?.name ?? values.source)
@@ -1129,53 +1132,16 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
           </>
         )}
 
-        {!isMvtMode && !isDemMode && format !== 'pbf' && (() => {
-          const overlayCandidates = Object.entries(sourcesQuery.data ?? {})
-            .map(([k, v]) => ({ key: k, ...v }))
-            .filter((s) => {
-              const id = ((s.id as string) ?? s.key).toString()
-              const name = (s.name as string) ?? ''
-              return id !== source && (id.includes('label') || name.includes('注记') || name.includes('Label'))
-            })
-            .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-          if (overlayCandidates.length === 0) return null
-          const toggle = (id: string) => {
-            const next = overlaySources.includes(id)
-              ? overlaySources.filter((x) => x !== id)
-              : [...overlaySources, id]
-            setValue('overlay_sources', next, { shouldDirty: true })
-          }
-          return (
-            <div className="space-y-1.5">
-              <Label className="text-xs">
-                {t('download.output.overlays')}{' '}
-                <span className="text-muted-foreground">{t('download.output.overlaysHint')}</span>
-              </Label>
-              <div className="rounded border bg-background/50 p-2 space-y-1">
-                {overlayCandidates.map((s) => {
-                  const id = ((s.id as string) ?? s.key).toString()
-                  const checked = overlaySources.includes(id)
-                  return (
-                    <label key={id} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-accent/50 px-1 py-0.5 rounded">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggle(id)}
-                        className="size-3.5"
-                      />
-                      <span>{(s.name as string) ?? id}</span>
-                    </label>
-                  )
-                })}
-              </div>
-              {overlaySources.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  {t('download.output.overlaysSelected', { count: overlaySources.length })}
-                </p>
-              )}
-            </div>
-          )
-        })()}
+        {!isMvtMode && !isDemMode && format !== 'pbf' && (
+          <div className="space-y-2">
+            <Label className="text-xs">{t('download.output.overlays')}</Label>
+            <OverlayPicker sources={sourcesQuery.data ?? {}} value={overlaySources} baseId={source}
+              onChange={(ids) => setValue('overlay_sources', ids, { shouldDirty: true })}/>
+            {overlaySources.length > 0 && <p className="text-xs text-muted-foreground">
+              {t('download.output.overlaysSelected', { count: validOverlayIds(overlaySources, sourcesQuery.data ?? {}, source).length })}
+            </p>}
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <Label htmlFor="task_name" className="text-xs">

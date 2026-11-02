@@ -254,7 +254,7 @@ function CustomPanel({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted-foreground">
-          自定义图源会与内置图源一起出现在下载页的图源选择中。
+          自定义图源保存后可用于底图或叠加图层；叠加顺序在使用时配置。
         </p>
         <div className="flex shrink-0 items-center gap-1.5">
           <Button
@@ -652,20 +652,21 @@ function DefaultSourcePanel({
   )
 }
 
-export function SourcesDialog() {
+export function SourcesDialog({ triggerLabel, listenForActions = true }: { triggerLabel?: string; listenForActions?: boolean } = {}) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const assistantOpen = useAssistantStore((state) => state.open)
   const queryClient = useQueryClient()
 
   useEffect(() => {
+    if (!listenForActions) return
     const handleAssistantAction = (event: Event) => {
       const detail = (event as CustomEvent<{ action?: string }>).detail
       if (detail?.action === 'open-sources') setOpen(true)
     }
     window.addEventListener(ASSISTANT_ACTION_EVENT, handleAssistantAction)
     return () => window.removeEventListener(ASSISTANT_ACTION_EVENT, handleAssistantAction)
-  }, [])
+  }, [listenForActions])
 
   const settingsQuery = useQuery({
     queryKey: ['settings'],
@@ -730,9 +731,9 @@ export function SourcesDialog() {
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2">
+        <Button type="button" variant="outline" size="sm" className="gap-2">
           <Database className="size-4" />
-          {t('common.sourceManagement')}
+          {triggerLabel ?? t('common.sourceManagement')}
         </Button>
       </DialogTrigger>
       <DialogContent

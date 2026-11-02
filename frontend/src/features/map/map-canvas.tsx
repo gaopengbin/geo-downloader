@@ -7,7 +7,7 @@ import 'leaflet-draw'
 import '@maplibre/maplibre-gl-leaflet'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useQuery } from '@tanstack/react-query'
-import { Pentagon, Ruler, Trash2 } from 'lucide-react'
+import { Layers, Pentagon, Ruler, Trash2 } from 'lucide-react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -29,6 +29,10 @@ import { getSettings } from '@/features/settings/settings-api'
 import { probeTile } from '@/features/download/download-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { OverlayPicker } from '@/features/sources/overlay-picker'
+import { rememberedOverlayIds, validOverlayIds } from '@/features/sources/overlay-sources'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   buildWaybackTileUrl,
   getWaybackVersions,
@@ -476,7 +480,9 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   const lastTiandituProbeKeyRef = useRef<string | null>(null)
   const customControlRef = useRef<L.Control | null>(null)
   const customControlRadiosRef = useRef<HTMLInputElement[]>([])
-  const overlayLayersRef = useRef<L.TileLayer[]>([])
+  const overlayLayersRef = useRef(new Map<string, { signature: string; layer: L.TileLayer }>())
+  const [overlayControlContainer, setOverlayControlContainer] = useState<HTMLElement | null>(null)
+  const [overlayDialogOpen, setOverlayDialogOpen] = useState(false)
   const graticuleLayerRef = useRef<L.LayerGroup | null>(null)
   // 本地加载的矢量图层
   const vectorLayerMapRef = useRef<Map<string, L.GeoJSON>>(new Map())
@@ -496,18 +502,13 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   const selectedSourceByMode = useAppStore((s) => s.selectedSourceByMode)
   const setSelectedSourceForMode = useAppStore((s) => s.setSelectedSourceForMode)
   const overlayVisibilityByMode = useAppStore((s) => s.overlayVisibilityByMode)
-  const setOverlayVisibility = useAppStore((s) => s.setOverlayVisibility)
+  const setOverlaySources = useAppStore((s) => s.setOverlaySources)
   const graticuleVisible = useAppStore((s) => s.graticuleVisible)
   const setGraticuleVisible = useAppStore((s) => s.setGraticuleVisible)
   const graticuleInterval = useAppStore((s) => s.graticuleInterval)
   const setGraticuleInterval = useAppStore((s) => s.setGraticuleInterval)
   const graticuleAuto = useAppStore((s) => s.graticuleAuto)
   const setGraticuleAuto = useAppStore((s) => s.setGraticuleAuto)
-  // 用 ref 跟踪以避免每次写入都重建 control
-  const overlayMemRef = useRef(overlayVisibilityByMode)
-  useEffect(() => {
-    overlayMemRef.current = overlayVisibilityByMode
-  }, [overlayVisibilityByMode])
   const vectorLayers = useVectorLayersStore((s) => s.layers)
   const vectorRevision = useVectorLayersStore((s) => s.revision)
   const waybackPreviewId = useWaybackStore((s) => s.previewVersionId)
@@ -1045,54 +1046,56 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
     }
   }, [ascendingWaybackVersions, waybackProxyBaseUrl])
 
-  // 按 mode 重建 LayersControl + 同步天地图标注 overlay
+  const mapBaseId = desiredBaseKey?.startsWith('src:') ? desiredBaseKey.slice(4) : null
+  const mapOverlayIds = useMemo(() => rememberedOverlayIds(overlayVisibilityByMode[mode]), [overlayVisibilityByMode, mode])
+
+  // Separate overlay instances from base layers: switching a base must not
+  // remove an overlay, nor recreate unchanged overlays when toggling visibility.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-
-    // 移除旧 overlay 与控件
-    overlayLayersRef.current.forEach((l) => {
-      if (map.hasLayer(l)) map.removeLayer(l)
+    const sources = sourcesQuery.data ?? {}
+    const ids = validOverlayIds(mapOverlayIds, sources, mapBaseId)
+    const cache = overlayLayersRef.current
+    for (const [id, entry] of cache) {
+      const cfg = sources[id]
+      if (!ids.includes(id) || entry.signature !== JSON.stringify(cfg)) {
+        map.removeLayer(entry.layer)
+        cache.delete(id)
+      }
+    }
+    ids.forEach((id, index) => {
+      const cfg = sources[id]
+      let entry = cache.get(id)
+      if (!entry) {
+        const url = cfg.url ?? cfg.url_template!
+        const options = {
+          attribution: typeof cfg.attribution === 'string' ? cfg.attribution : '',
+          subdomains: cfg.subdomains ?? 'abc',
+          maxZoom: 22,
+          maxNativeZoom: cfg.max_zoom ?? 18,
+          minZoom: cfg.min_zoom ?? 0,
+        }
+        const layer = isOsmStandardTileUrl(url) && !Object.keys(cfg.headers ?? {}).length
+          ? L.tileLayer(url, { ...options, attribution: OSM_STANDARD_ATTRIBUTION })
+          : createCachedTileLayer(url, { ...options, sourceKey: id, displayName: cfg.name,
+              urlTemplate: url, requestHeaders: cfg.headers })
+        entry = { signature: JSON.stringify(cfg), layer }
+        cache.set(id, entry)
+      }
+      entry.layer.setZIndex(400 + index).addTo(map)
     })
-    overlayLayersRef.current = []
+  }, [sourcesQuery.data, mapOverlayIds, mapBaseId])
+
+  // Base-layer controls rebuild independently of overlay selection and ordering.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
     if (customControlRef.current) {
       customControlRef.current.remove()
       customControlRef.current = null
     }
     customControlRadiosRef.current = []
-
-    const tdt = tdtToken || '436ce7e50d27eede2f2929307e6b33c0'
-    const tdtSubdomains = ['0', '1', '2', '3', '4', '5', '6', '7']
-    const ciaLayer = createCachedTileLayer(
-      `https://t{s}.tianditu.gov.cn/cia_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cia&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tdt}`,
-      {
-        sourceKey: 'tdt_cia_w',
-        displayName: t('map.tiandituChineseLabels'),
-        urlTemplate:
-          'https://t{s}.tianditu.gov.cn/cia_w/wmts?...&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
-        subdomains: tdtSubdomains,
-        maxZoom: 18,
-        attribution: '天地图',
-      },
-    )
-    const cvaLayer = createCachedTileLayer(
-      `https://t{s}.tianditu.gov.cn/cva_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cva&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tdt}`,
-      {
-        sourceKey: 'tdt_cva_w',
-        displayName: t('map.tiandituEnglishLabels'),
-        urlTemplate:
-          'https://t{s}.tianditu.gov.cn/cva_w/wmts?...&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
-        subdomains: tdtSubdomains,
-        maxZoom: 18,
-        attribution: '天地图',
-      },
-    )
-    overlayLayersRef.current = [ciaLayer, cvaLayer]
-
-    // 按当前 mode 记忆决定 cia/cva 初始可见性（默认两者都不显示）
-    const overlayMem = overlayMemRef.current[mode] ?? {}
-    if (overlayMem.cia) ciaLayer.addTo(map)
-    if (overlayMem.cva) cvaLayer.addTo(map)
 
     if (esriHistoryMode) {
       // ---------- Wayback：自定义嵌套 control（按 年/月 分组） ----------
@@ -1225,31 +1228,8 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
           sep.style.borderTop = '1px solid #ddd'
           sep.style.margin = '6px 0'
 
-          // overlays（cia/cva）
-          const overlayDiv = L.DomUtil.create(
-            'div',
-            'leaflet-control-layers-overlays',
-            list,
-          )
-          const makeOverlay = (label: string, layer: L.TileLayer, key: string) => {
-            const lbl = document.createElement('label')
-            lbl.style.display = 'block'
-            lbl.style.cursor = 'pointer'
-            const cb = document.createElement('input')
-            cb.type = 'checkbox'
-            cb.style.marginRight = '6px'
-            cb.checked = map.hasLayer(layer)
-            cb.addEventListener('change', () => {
-              if (cb.checked) layer.addTo(map)
-              else map.removeLayer(layer)
-              setOverlayVisibility(mode as AppMode, key, cb.checked)
-            })
-            lbl.appendChild(cb)
-            lbl.appendChild(document.createTextNode(label))
-            overlayDiv.appendChild(lbl)
-          }
-          makeOverlay(t('map.tiandituImageryLabels'), ciaLayer, 'cia')
-          makeOverlay(t('map.tiandituVectorLabels'), cvaLayer, 'cva')
+          const overlayMount = L.DomUtil.create('div', 'leaflet-control-layers-overlays', list)
+          setOverlayControlContainer(overlayMount)
 
           return container
         },
@@ -1328,30 +1308,8 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
 
           const sep = L.DomUtil.create('div', 'leaflet-control-layers-separator', list)
           sep.setAttribute('aria-hidden', 'true')
-          const overlayDiv = L.DomUtil.create(
-            'div',
-            'leaflet-control-layers-overlays',
-            list,
-          )
-          const makeOverlay = (label: string, layer: L.TileLayer, key: string) => {
-            const lbl = document.createElement('label')
-            lbl.style.display = 'block'
-            lbl.style.cursor = 'pointer'
-            const cb = document.createElement('input')
-            cb.type = 'checkbox'
-            cb.style.marginRight = '6px'
-            cb.checked = map.hasLayer(layer)
-            cb.addEventListener('change', () => {
-              if (cb.checked) layer.addTo(map)
-              else map.removeLayer(layer)
-              setOverlayVisibility(mode as AppMode, key, cb.checked)
-            })
-            lbl.appendChild(cb)
-            lbl.appendChild(document.createTextNode(label))
-            overlayDiv.appendChild(lbl)
-          }
-          makeOverlay(t('map.tiandituImageryLabels'), ciaLayer, 'cia')
-          makeOverlay(t('map.tiandituVectorLabels'), cvaLayer, 'cva')
+          const overlayMount = L.DomUtil.create('div', 'leaflet-control-layers-overlays', list)
+          setOverlayControlContainer(overlayMount)
 
           return container
         },
@@ -1550,6 +1508,22 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0" />
+      {overlayControlContainer && createPortal(
+        <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start gap-1 text-xs"
+          onClick={() => setOverlayDialogOpen(true)}><Layers className="size-3.5"/>{t('overlays.configure')}</Button>, overlayControlContainer)}
+      <Dialog open={overlayDialogOpen} onOpenChange={setOverlayDialogOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{t('overlays.configure')}</DialogTitle>
+            <DialogDescription>{t('overlays.previewHint')}</DialogDescription></DialogHeader>
+          {sourcesQuery.isError ? <div className="space-y-2">
+            <p role="alert" className="text-sm text-destructive">{t('overlays.loadError')}</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => void sourcesQuery.refetch()} disabled={sourcesQuery.isFetching}>{t('overlays.retry')}</Button>
+          </div>
+            : sourcesQuery.isLoading ? <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+            : <OverlayPicker sources={sourcesQuery.data ?? {}} value={mapOverlayIds} baseId={mapBaseId}
+                onChange={(ids) => setOverlaySources(mode, ids)}/>}
+        </DialogContent>
+      </Dialog>
       {mode === 'wayback' && historyProvider === 'earth' && !earthPreview && (
         <div role="status" data-earth-preview-pending className="pointer-events-none absolute left-16 right-16 top-3 z-[500] mx-auto max-w-lg rounded-md border bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-sm">
           {t('wayback.earth.previewPending')}

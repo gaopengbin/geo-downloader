@@ -200,6 +200,17 @@ const zhCN = {
       confirmRemove: '确认移除',
     },
   },
+  overlays: {
+    configure: '配置叠加图层',
+    configureHint: '可选择任意栅格图源，也可新增自己的服务。列表从底层到顶层排列，后面的图层覆盖前面；透明图层适合叠加。',
+    previewHint: '设置立即用于地图预览，并按模块记忆。下载成果的叠加层请在输出参数中单独选择。',
+    selected: '已选图层（从底层到顶层）', available: '可添加的图源',
+    search: '搜索图源名称或 ID', add: '添加 {{name}}', remove: '移除 {{name}}',
+    moveLower: '降低 {{name}} 的层级', moveHigher: '提高 {{name}} 的层级',
+    unavailable: '图源已移除、不支持栅格叠加或与当前底图相同，本次不会加载。',
+    empty: '没有匹配的可添加图源，可在图源管理中新增。',
+    manageSources: '新增 / 编辑图源', loadError: '图源读取失败，请重试。', retry: '重新加载',
+  },
   tasks: {
     output: {
       savedPath: '保存位置', plannedPath: '计划保存位置（尚未确认生成文件）',
@@ -538,7 +549,7 @@ const zhCN = {
       format: '输出格式',
       mvtHint: '矢量瓦片不拼接/不重编码，PBF 原始字节原样保存',
       overlays: '叠加图层',
-      overlaysHint: '（注记/标签，按勾选顺序自下而上叠加）',
+      overlaysHint: '（自定义栅格图源，按列表顺序自下而上叠加）',
       overlaysSelected: '已选 {{count}} 层；下载时将额外拉取相同 z/x/y 瓦片并合成到主图（输出统一为 PNG 字节）',
       taskName: '任务名称',
       optional: '（可选）',

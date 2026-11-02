@@ -200,6 +200,17 @@ const enUS = {
       confirmRemove: 'Remove key',
     },
   },
+  overlays: {
+    configure: 'Configure overlays',
+    configureHint: 'Choose any raster source or add your own service. Layers run from bottom to top; later layers cover earlier ones. Transparent layers work best.',
+    previewHint: 'Changes apply to map preview immediately and are remembered per module. Select export overlays separately in output settings.',
+    selected: 'Selected layers (bottom to top)', available: 'Available sources',
+    search: 'Search source name or ID', add: 'Add {{name}}', remove: 'Remove {{name}}',
+    moveLower: 'Lower {{name}}', moveHigher: 'Raise {{name}}',
+    unavailable: 'Source removed, unsupported as a raster overlay, or identical to the base. It will not load.',
+    empty: 'No matching sources to add. Add a source in source management.',
+    manageSources: 'Add / edit sources', loadError: 'Could not load sources. Please retry.', retry: 'Reload sources',
+  },
   tasks: {
     output: {
       savedPath: 'Saved output', plannedPath: 'Planned location (output not confirmed)',
@@ -538,7 +549,7 @@ const enUS = {
       format: 'Output format',
       mvtHint: 'Vector tiles are saved as their original PBF bytes without merging or re-encoding',
       overlays: 'Overlay layers',
-      overlaysHint: '(labels are composited bottom to top in selection order)',
+      overlaysHint: '(custom raster layers are composited bottom to top in list order)',
       overlaysSelected: '{{count}} overlays selected. Matching z/x/y tiles will be fetched and composited into PNG output.',
       taskName: 'Task name',
       optional: '(optional)',
