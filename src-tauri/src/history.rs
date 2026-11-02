@@ -24,6 +24,8 @@ pub struct DownloadRecord {
     pub created_at: DateTime<Utc>,
     pub status: DownloadStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_secs: Option<u64>,
@@ -96,6 +98,7 @@ impl DownloadRecord {
             failed_count,
             created_at: Utc::now(),
             status,
+            error: None,
             log_file: None,
             duration_secs: None,
             has_pyramid: false,
@@ -204,11 +207,22 @@ impl HistoryStore {
                     log_original_size INTEGER NOT NULL DEFAULT 0,
                     log_stored_size INTEGER NOT NULL DEFAULT 0,
                     log_truncated INTEGER NOT NULL DEFAULT 0,
-                    log_updated_at TEXT
+                    log_updated_at TEXT,
+                    error TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_download_history_created_at
                     ON download_history(created_at DESC);",
             )?;
+            // Optional additive column: old rows and older clients remain valid.
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let has_error = {
+                let mut statement = tx.prepare("PRAGMA table_info(download_history)")?;
+                let names = statement.query_map([], |r| r.get::<_, String>(1))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                names.iter().any(|name| name == "error")
+            };
+            if !has_error { tx.execute_batch("ALTER TABLE download_history ADD COLUMN error TEXT;")?; }
+            tx.commit()?;
             Ok(())
         })?;
         Ok(store)
@@ -439,7 +453,7 @@ impl HistoryStore {
 const HISTORY_COLUMNS: &str = "id, name, source, source_name, zoom, format, file_path,
     file_size, tile_count, failed_count, created_at, status, log_path, duration_secs,
     has_pyramid, log_compressed, log_original_size, log_stored_size, log_truncated,
-    log_updated_at";
+    log_updated_at, error";
 
 fn insert_record(
     conn: &Connection,
@@ -453,10 +467,10 @@ fn insert_record(
                 id, name, source, source_name, zoom, format, file_path, file_size,
                 tile_count, failed_count, created_at, status, log_path, duration_secs,
                 has_pyramid, log_compressed, log_original_size, log_stored_size,
-                log_truncated, log_updated_at
+                log_truncated, log_updated_at, error
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
              )"
         ),
         params![
@@ -480,6 +494,7 @@ fn insert_record(
             to_i64(record.log_stored_size),
             record.log_truncated,
             record.log_updated_at.map(|value| value.to_rfc3339()),
+            record.error,
         ],
     )?;
     Ok(())
@@ -501,6 +516,7 @@ fn row_to_record(row: &Row<'_>) -> rusqlite::Result<DownloadRecord> {
         failed_count: row.get(9)?,
         created_at: parse_datetime(created_at, 10)?,
         status: DownloadStatus::from_str(&row.get::<_, String>(11)?)?,
+        error: row.get(20)?,
         log_file: row.get(12)?,
         duration_secs: row.get::<_, Option<i64>>(13)?.map(from_i64),
         has_pyramid: row.get(14)?,
@@ -560,6 +576,7 @@ mod tests {
             failed_count: 0,
             created_at: Utc.timestamp_opt(second, 0).unwrap(),
             status: DownloadStatus::Completed,
+            error: None,
             log_file: None,
             duration_secs: Some(1),
             has_pyramid: false,
@@ -582,6 +599,26 @@ mod tests {
         assert_eq!(page.page, 1);
         assert_eq!(page.page_size, 1);
         assert_eq!(page.records[0].id, "new");
+    }
+
+    #[test]
+    fn optional_failure_column_migrates_old_rows_without_replacing_them() {
+        let tmp = TempDir::new().unwrap();
+        let store = HistoryStore::open_at(tmp.path()).unwrap();
+        store.add(&record("legacy", 10)).unwrap();
+        let conn = Connection::open(&store.db_path).unwrap();
+        conn.execute_batch("ALTER TABLE download_history DROP COLUMN error;").unwrap();
+        drop(conn); drop(store);
+        let upgraded = HistoryStore::open_at(tmp.path()).unwrap();
+        let old = upgraded.get("legacy").unwrap().unwrap();
+        assert_eq!(old.file_path, "D:/legacy.tif");
+        assert_eq!(old.error, None);
+        let mut failed = record("failed", 20);
+        failed.status = DownloadStatus::Failed; failed.error = Some("磁盘只读".into());
+        upgraded.add(&failed).unwrap(); drop(upgraded);
+        let reopened = HistoryStore::open_at(tmp.path()).unwrap();
+        assert_eq!(reopened.page(1, 20).unwrap().total, 2);
+        assert_eq!(reopened.get("failed").unwrap().unwrap().error.as_deref(), Some("磁盘只读"));
     }
 
     #[test]

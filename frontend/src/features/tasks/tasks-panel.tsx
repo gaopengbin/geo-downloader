@@ -32,6 +32,8 @@ import {
 } from '@/features/tasks/tasks-api'
 import { getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
 import { useTaskUpdates } from '@/features/tasks/use-task-updates'
+import { isTaskResultVisible } from './task-results'
+import { OutputLocation } from './output-location'
 import type { PersistedTask, TaskInfo, TaskLog, TaskStatus } from '@/types/api'
 
 const ACTIVE_STATES: TaskStatus[] = [
@@ -43,9 +45,8 @@ const ACTIVE_STATES: TaskStatus[] = [
   'exporting',
   'building_pyramid',
 ]
-// FINISHED_STATES：列入此集合的任务会从活动面板隐藏并转入历史。
-// `completed_with_gaps` 故意不列入 — 设计稿要求"显示在已完成区，带醒目缺块徽章"，
-// 让用户在主面板能立即看到并选择「补漏重导」/「删除」。
+// Terminal states govern timing/actions, not visibility. Failure and OSM-result
+// retention is deliberately handled by isTaskResultVisible below.
 const FINISHED_STATES: TaskStatus[] = ['completed', 'failed', 'cancelled']
 
 function isActive(s: string): boolean {
@@ -329,7 +330,7 @@ function TaskRow({
   const showGapBadge = isCompletedWithGaps(status) && failedCount > 0
 
   return (
-    <div className="rounded-md border p-2.5 text-sm">
+    <div role="group" aria-label={task.name} data-task-id={task.id} className="rounded-md border p-2.5 text-sm">
       <div className="flex items-start gap-2">
         <input
           type="checkbox"
@@ -467,9 +468,9 @@ function TaskRow({
         <ProgressBar value={progress} />
         <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
           <span>{progress.toFixed(1)}%</span>
-          <span>
+          {total > 0 && <span>
             {completed.toLocaleString(locale)} / {total.toLocaleString(locale)}
-          </span>
+          </span>}
           {typeof task.failed_count === 'number' && task.failed_count > 0 && (
             <span className="text-destructive">
               {t('tasks.labels.failed', { count: task.failed_count })}
@@ -479,16 +480,18 @@ function TaskRow({
             <span>{formatBytes(task.file_size)}</span>
           )}
         </div>
-        {task.message && (
+        {task.message && (status !== 'failed' || !task.error) && (
           <p className="truncate text-xs text-muted-foreground" title={getTaskMessage(task, t)}>
             {getTaskMessage(task, t)}
           </p>
         )}
         {task.error && (
-          <p className="truncate text-xs text-destructive" title={task.error}>
+          <p className="whitespace-pre-wrap break-words text-xs text-destructive" title={task.error}>
             {task.error}
           </p>
         )}
+        {task.save_path && <OutputLocation path={task.save_path}
+          saved={status === 'completed' || status === 'completed_with_gaps'} strictFile={task.source === 'osm_vector'}/>}
       </div>
 
       {showLogs && <TaskLogPanel taskId={task.id} />}
@@ -668,12 +671,13 @@ export function TasksPanel() {
     [tasks],
   )
   const finishedCount = useMemo(
-    () => tasks.filter((t) => isFinished(String(t.status))).length,
+    () => tasks.filter((t) => !isTaskResultVisible(t) && String(t.status) === 'completed').length,
     [tasks],
   )
-  // 已完成/失败/取消的任务转入「历史记录」展示，活动列表只保留进行中/暂停
+  // Keep failures and actionable OSM outputs; linked history uses task IDs to
+  // avoid duplicate cards. A missing history write must not hide the result.
   const visibleTasks = useMemo(
-    () => tasks.filter((t) => !isFinished(String(t.status))),
+    () => tasks.filter(isTaskResultVisible),
     [tasks],
   )
   const visibleTaskIds = useMemo(() => visibleTasks.map((t) => t.id), [visibleTasks])

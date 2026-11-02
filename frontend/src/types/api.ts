@@ -290,6 +290,7 @@ export interface DownloadHistoryRecord {
   tile_count?: number
   failed_count?: number
   success?: boolean
+  error?: string | null
   created_at?: string
   status?: 'completed' | 'failed' | string
   log_file?: string | null

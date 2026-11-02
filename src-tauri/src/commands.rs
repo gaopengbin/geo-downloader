@@ -237,10 +237,10 @@ async fn remove_history_logs(
     .map_err(|error| format!("历史日志清理线程异常: {error}"))?
 }
 
-async fn persist_history_record(app: &AppHandle, record: DownloadRecord) {
+async fn persist_history_record(app: &AppHandle, record: DownloadRecord) -> bool {
     match history_blocking(move |store| store.add(&record)).await {
-        Ok(()) => { let _ = app.emit("download-history-updated", ()); }
-        Err(error) => log::error!("下载已结束，但历史记录写入失败: {error}"),
+        Ok(()) => { let _ = app.emit("download-history-updated", ()); true }
+        Err(error) => { log::error!("下载已结束，但历史记录写入失败: {error}"); false }
     }
 }
 
@@ -3190,10 +3190,13 @@ pub async fn build_pyramid_for_file(
 /// 真实文件分布在 `z<N>/` 子目录，因此原路径并不存在。这里逐级向上回退到第一个
 /// 实际存在的目录，保证「打开文件夹」按钮始终能定位到下载产物所在目录。
 #[tauri::command]
-pub fn open_file_location(file_path: String) -> Result<(), String> {
+pub fn open_file_location(file_path: String, require_file_exists: Option<bool>) -> Result<(), String> {
     let path = Path::new(&file_path);
 
-    let dir: std::path::PathBuf = if path.is_dir() {
+    let dir: std::path::PathBuf = if require_file_exists.unwrap_or(false) {
+        crate::osm_output::require_output_file(path)?;
+        path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new(".")).to_path_buf()
+    } else if path.is_dir() {
         path.to_path_buf()
     } else if path.is_file() {
         path.parent()
@@ -3302,116 +3305,62 @@ pub async fn create_osm_download_task(
     polygon: Option<Vec<PolygonCoord>>,
     task_name: String,
 ) -> Result<CreateTaskResult, String> {
-    use crate::admin::download_osm_features;
-
+    let save_path = crate::osm_output::absolute_output(&save_path)?.to_string_lossy().into_owned();
     let task_id = uuid::Uuid::new_v4().to_string();
-
     let (cancel_token, _pause_control) = task_manager.create_task(
-        task_id.clone(),
-        task_name.clone(),
-        "osm_vector".to_string(),
-        "OSM Overpass".to_string(),
-        0,
-        "geojson".to_string(),
-        save_path.clone(),
-        0,
+        task_id.clone(), task_name, "osm_vector".into(), "OSM Overpass".into(),
+        0, "geojson".into(), save_path.clone(), 0,
     );
-
     let tm = Arc::clone(&task_manager);
     let tid = task_id.clone();
-
     tokio::spawn(async move {
         let event_name = format!("task-progress-{}", tid);
-
-        // 请求中
-        tm.update_progress(&tid, TaskStatus::Downloading, 20.0, 0, 0, Some("正在请求 Overpass API...".to_string()));
+        task_log(&app, &tm, &tid, "INFO", &format!("OSM 保存位置: {}", save_path));
+        tm.update_progress(&tid, TaskStatus::Downloading, 20.0, 0, 0, Some("正在请求 Overpass API...".into()));
         let _ = app.emit(&event_name, TaskProgressPayload {
-            task_id: tid.clone(), status: "downloading".to_string(),
-            progress: 20.0, completed: 0, total: 0,
-            message: Some("正在请求 Overpass API...".to_string()),
+            task_id: tid.clone(), status: "downloading".into(), progress: 20.0,
+            completed: 0, total: 0, message: Some("正在请求 Overpass API...".into()),
         });
-
-        let poly_coords: Option<Vec<(f64, f64)>> = polygon.map(|p| p.iter().map(|c| (c.lat, c.lng)).collect());
-
-        let geojson = match download_osm_features(
-            bounds.south, bounds.west, bounds.north, bounds.east,
-            &feature_type, proxy.as_deref(), poly_coords.as_deref(),
-        ).await {
-            Ok(g) => g,
-            Err(e) => {
-                if tm.is_cancelled(&tid) {
-                    tm.mark_cancelled(&tid);
-                    let _ = app.emit(&event_name, TaskProgressPayload {
-                        task_id: tid, status: "cancelled".to_string(),
-                        progress: 0.0, completed: 0, total: 0, message: Some("已取消".to_string()),
-                    });
-                } else {
-                    tm.fail_task(&tid, e.clone());
-                    let _ = app.emit(&event_name, TaskProgressPayload {
-                        task_id: tid, status: "failed".to_string(),
-                        progress: 0.0, completed: 0, total: 0, message: Some(format!("失败: {}", e)),
-                    });
-                }
-                return;
-            }
-        };
-
-        if cancel_token.is_cancelled() {
-            tm.mark_cancelled(&tid);
+        let result: Result<u64, String> = async {
+            let coordinates = polygon.map(|p| p.into_iter().map(|c| (c.lat, c.lng)).collect::<Vec<_>>());
+            let geojson = tokio::select! {
+                biased;
+                _ = cancel_token.cancelled() => return Err("已取消".into()),
+                result = crate::admin::download_osm_features(
+                    bounds.south, bounds.west, bounds.north, bounds.east,
+                    &feature_type, proxy.as_deref(), coordinates.as_deref(),
+                ) => result?,
+            };
+            if cancel_token.is_cancelled() { return Err("已取消".into()); }
+            tm.update_progress(&tid, TaskStatus::Exporting, 80.0, 0, 0, Some("正在保存并核验文件...".into()));
             let _ = app.emit(&event_name, TaskProgressPayload {
-                task_id: tid, status: "cancelled".to_string(),
-                progress: 0.0, completed: 0, total: 0, message: Some("已取消".to_string()),
+                task_id: tid.clone(), status: "exporting".into(), progress: 80.0,
+                completed: 0, total: 0, message: Some("正在保存并核验文件...".into()),
             });
-            return;
-        }
-
-        // 保存文件
-        tm.update_progress(&tid, TaskStatus::Exporting, 80.0, 0, 0, Some("保存文件...".to_string()));
-        let _ = app.emit(&event_name, TaskProgressPayload {
-            task_id: tid.clone(), status: "exporting".to_string(),
-            progress: 80.0, completed: 0, total: 0, message: Some("保存文件...".to_string()),
-        });
-
-        let content = match serde_json::to_string_pretty(&geojson) {
-            Ok(c) => c,
-            Err(e) => {
-                let err = format!("序列化失败: {}", e);
-                tm.fail_task(&tid, err.clone());
-                let _ = app.emit(&event_name, TaskProgressPayload {
-                    task_id: tid, status: "failed".to_string(),
-                    progress: 0.0, completed: 0, total: 0, message: Some(err),
-                });
-                return;
-            }
+            let path = PathBuf::from(&save_path); let cancel = cancel_token.clone();
+            tokio::task::spawn_blocking(move || crate::osm_output::write_geojson(&path, &geojson, || cancel.is_cancelled()))
+                .await.map_err(|e| format!("保存线程失败: {e}"))?
+        }.await;
+        // Read the accepted terminal state: cancellation must never be emitted
+        // or archived as completion if it won the task manager's terminal guard.
+        let Some(task) = crate::osm_output::settle_task(&tm, &tid, result, cancel_token.is_cancelled()) else { return };
+        let (status, message, progress) = match &task.status {
+            TaskStatus::Completed => ("completed", format!("文件已保存: {}", save_path), 100.0),
+            TaskStatus::Failed => ("failed", task.error.clone().unwrap_or_else(|| "OSM 下载失败".into()), task.progress),
+            TaskStatus::Cancelled => ("cancelled", "已取消".into(), task.progress),
+            _ => return,
         };
-
-        let file_size = content.len() as u64;
-        if let Err(e) = std::fs::write(&save_path, &content) {
-            let err = format!("保存文件失败: {}", e);
-            tm.fail_task(&tid, err.clone());
-            let _ = app.emit(&event_name, TaskProgressPayload {
-                task_id: tid, status: "failed".to_string(),
-                progress: 0.0, completed: 0, total: 0, message: Some(err),
-            });
-            return;
+        task_log(&app, &tm, &tid, if status == "failed" { "ERROR" } else { "INFO" }, &message);
+        if let Some(record) = crate::osm_output::history_record(&task) {
+            let metadata = tm.get_log_metadata(&tid).unwrap_or_default();
+            if !persist_history_record(&app, record.with_log_metadata(&metadata)).await {
+                task_log(&app, &tm, &tid, "WARN", "历史记录暂未写入；当前任务及保存路径仍保留，请勿删除任务。");
+            }
         }
-
-        // 完成
-        tm.complete_task(&tid, file_size);
         let _ = app.emit(&event_name, TaskProgressPayload {
-            task_id: tid.clone(), status: "completed".to_string(),
-            progress: 100.0, completed: 0, total: 0, message: Some("完成!".to_string()),
+            task_id: tid, status: status.into(), progress, completed: 0, total: 0, message: Some(message),
         });
-
-        // 自动添加历史记录
-        let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
-        let record = DownloadRecord::new(
-            task_name, "osm_vector".to_string(), "OSM Overpass".to_string(),
-            0, "geojson".to_string(), save_path, file_size, 0, 0, DownloadStatus::Completed,
-        ).with_log_metadata(&log_metadata);
-        persist_history_record(&app, record).await;
     });
-
     Ok(CreateTaskResult { task_id, tile_count: 0 })
 }
 
@@ -3438,13 +3387,11 @@ pub async fn download_osm_data(
         poly_coords.as_deref()
     ).await?;
     
-    // 保存到文件
-    let content = serde_json::to_string_pretty(&geojson)
-        .map_err(|e| format!("序列化失败: {}", e))?;
-    std::fs::write(&save_path, &content)
-        .map_err(|e| format!("保存文件失败: {}", e))?;
-    
-    Ok(save_path)
+    let path = crate::osm_output::absolute_output(&save_path)?;
+    tokio::task::spawn_blocking(move || {
+        crate::osm_output::write_geojson(&path, &geojson, || false)?;
+        Ok(path.to_string_lossy().into_owned())
+    }).await.map_err(|e| format!("保存线程失败: {e}"))?
 }
 
 /// 下载行政边界并保存到文件

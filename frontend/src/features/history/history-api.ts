@@ -43,8 +43,8 @@ export function buildPyramidForFile(recordId: string | number, filePath: string)
   return invokeCommand<void>('build_pyramid_for_file', { recordId, filePath })
 }
 
-export function openFileLocation(filePath: string) {
-  return invokeCommand<void>('open_file_location', { filePath })
+export function openFileLocation(filePath: string, requireFileExists = false) {
+  return invokeCommand<void>('open_file_location', { filePath, requireFileExists })
 }
 
 export function openFile(filePath: string) {

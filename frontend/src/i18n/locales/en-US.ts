@@ -43,7 +43,7 @@ const enUS = {
     tabs: { download: 'Download', history: 'Download Center', settings: 'Settings' },
     tasks: {
       title: 'Tasks',
-      description: 'Active / Paused / Resumable',
+      description: 'Download progress / Failures / Saved outputs',
       historyTitle: 'History',
       historyDescription: 'Completed / Failed / Deleted',
     },
@@ -201,6 +201,12 @@ const enUS = {
     },
   },
   tasks: {
+    output: {
+      savedPath: 'Saved output', plannedPath: 'Planned location (output not confirmed)',
+      copyPath: 'Copy path', copied: 'Output path copied', copyError: 'Could not copy the path',
+      inCurrentTasks: 'These results are shown in the task list above. Removing a task keeps its history record.',
+      historyUnavailable: 'History is temporarily unavailable. Current tasks are retained. Refresh to retry.',
+    },
     status: {
       pending: 'Waiting',
       preparing: 'Preparing',

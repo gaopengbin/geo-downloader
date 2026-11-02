@@ -3,6 +3,7 @@ pub mod config;
 pub mod tile;
 pub mod downloader;
 mod update_download;
+mod osm_output;
 pub mod tianditu_tokens;
 pub mod acquisition_diagnostic;
 #[cfg(test)]mod acquisition_live_acceptance;

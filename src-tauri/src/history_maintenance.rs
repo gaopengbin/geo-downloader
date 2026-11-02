@@ -188,6 +188,7 @@ mod tests {
             failed_count: 0,
             created_at,
             status: DownloadStatus::Completed,
+            error: None,
             log_file: Some(path.to_string_lossy().into_owned()),
             duration_secs: None,
             has_pyramid: false,

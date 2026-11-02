@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardCopy,
-  FolderOpen,
   Inbox,
   Layers,
   Map as MapIcon,
@@ -31,9 +30,11 @@ import {
   clearDownloadHistory,
   deleteDownloadRecord,
   getDownloadHistory,
-  openFileLocation,
 } from '@/features/history/history-api'
 import { readLogFile } from '@/features/tasks/tasks-api'
+import { getActiveTasks } from '@/features/tasks/tasks-api'
+import { historyWithoutVisibleTasks } from '@/features/tasks/task-results'
+import { OutputLocation } from '@/features/tasks/output-location'
 import { serveLocalTiles } from '@/features/tiles3d/tiles3d-api'
 import { MvtPreview } from '@/features/mvt/mvt-preview'
 import type { DownloadHistoryRecord, TaskLog } from '@/types/api'
@@ -190,10 +191,6 @@ function HistoryCard({
     onError: (e) => toast.error(t('history.toast.previewError', { message: String(e) })),
   })
 
-  const openMutation = useMutation({
-    mutationFn: () => openFileLocation(filePath),
-    onError: (e) => toast.error(t('history.toast.openError', { message: String(e) })),
-  })
   const deleteMutation = useMutation({
     mutationFn: async () => {
       const ok = await askDialog(
@@ -238,7 +235,7 @@ function HistoryCard({
   })()
 
   return (
-    <div className="rounded-md border p-2.5 text-sm">
+    <div role="group" aria-label={record.name} data-history-id={id} className="rounded-md border p-2.5 text-sm">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="truncate font-medium" title={record.name}>
           {record.name}
@@ -284,25 +281,11 @@ function HistoryCard({
         <span>{formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}</span>
       </div>
 
-      {!isFailed && filePath && (
-        <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={filePath}>
-          {filePath}
-        </p>
-      )}
+      {isFailed && record.error && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-destructive">{String(record.error)}</p>}
+      {filePath && <OutputLocation path={filePath} saved={!isFailed}
+        strictFile={record.source === 'osm_vector' || String(record.format) === 'geojson'}/>}
 
       <div className="mt-2 flex flex-wrap items-center gap-1">
-        {!isFailed && filePath && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => openMutation.mutate()}
-            disabled={openMutation.isPending}
-            className="h-7 gap-1 text-xs"
-          >
-            <FolderOpen className="size-3" />
-            {t('history.actions.openFolder')}
-          </Button>
-        )}
         {canBuildPyramid && (
           <Button
             size="sm"
@@ -382,6 +365,8 @@ export function HistoryPanel() {
     () => new Map(),
   )
   const [page, setPage] = useState(1)
+  // Subscribe to task cache changes without starting another task poller.
+  const currentTasks = useQuery({ queryKey: ['active-tasks'], queryFn: getActiveTasks, enabled: false })
 
   const historyQuery = useQuery({
     queryKey: ['download-history', page],
@@ -456,7 +441,8 @@ export function HistoryPanel() {
     onError: (e) => toast.error(t('history.toast.clearError', { message: String(e) })),
   })
 
-  const records = useMemo(() => historyQuery.data?.records ?? [], [historyQuery.data])
+  const pageRecords = useMemo(() => historyQuery.data?.records ?? [], [historyQuery.data])
+  const records = useMemo(() => historyWithoutVisibleTasks(pageRecords, currentTasks.data ?? []), [pageRecords, currentTasks.data])
   const total = historyQuery.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const handleRecordDeleted = useCallback(() => {
@@ -507,10 +493,11 @@ export function HistoryPanel() {
       </div>
 
       {historyQuery.isLoading && <p className="text-xs text-muted-foreground">{t('history.loading')}</p>}
-      {!historyQuery.isLoading && records.length === 0 && (
+      {historyQuery.isError && <p role="alert" className="text-xs text-destructive">{t('tasks.output.historyUnavailable')}</p>}
+      {!historyQuery.isLoading && !historyQuery.isError && records.length === 0 && (
         <div className="flex flex-col items-center gap-2 py-8 text-xs text-muted-foreground">
           <Inbox className="size-7 opacity-50" />
-          <p>{t('history.empty')}</p>
+          <p>{t(pageRecords.length ? 'tasks.output.inCurrentTasks' : 'history.empty')}</p>
         </div>
       )}
       {records.map((r) => (

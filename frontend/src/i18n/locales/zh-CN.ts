@@ -43,7 +43,7 @@ const zhCN = {
     tabs: { download: '资源下载', history: '下载中心', settings: '设置' },
     tasks: {
       title: '任务',
-      description: '进行中 / 暂停 / 可恢复',
+      description: '下载进度 / 失败原因 / 保存位置',
       historyTitle: '历史记录',
       historyDescription: '已完成 / 失败 / 已删除',
     },
@@ -201,6 +201,12 @@ const zhCN = {
     },
   },
   tasks: {
+    output: {
+      savedPath: '保存位置', plannedPath: '计划保存位置（尚未确认生成文件）',
+      copyPath: '复制路径', copied: '保存路径已复制', copyError: '复制路径失败',
+      inCurrentTasks: '本页结果正在上方任务列表中展示，移除任务后仍可在历史中查看。',
+      historyUnavailable: '历史记录暂时无法读取，当前任务仍保留。请点击刷新重试。',
+    },
     status: {
       pending: '等待中',
       preparing: '准备中',
