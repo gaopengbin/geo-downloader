@@ -1,13 +1,15 @@
 //! Process-local download scheduling. Rates are client policy, not provider quotas.
 use rand::Rng;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 use tokio::time::Instant;
 
-const RECOVERY_WINDOW: Duration = Duration::from_secs(2);
+const RECOVERY_WINDOW: Duration = Duration::from_secs(1);
+const ISOLATED_OBSERVATION: Duration = Duration::from_secs(8);
+const CONGESTION_OBSERVATION: Duration = Duration::from_secs(30);
 const MAX_BUDGETS: usize = 128;
 static AMAP: OnceLock<Arc<Gate>> = OnceLock::new();
 static TIANDITU: OnceLock<Mutex<HashMap<[u8; 32], Arc<Gate>>>> = OnceLock::new();
@@ -54,11 +56,34 @@ struct Policy { initial_qps: u32, max_qps: u32, initial_concurrency: usize, max_
 const AMAP_POLICY: Policy = Policy { initial_qps: 16, max_qps: 16, initial_concurrency: 4, max_concurrency: 4, adaptive: false };
 const TIANDITU_POLICY: Policy = Policy { initial_qps: 16, max_qps: 64, initial_concurrency: 4, max_concurrency: 16, adaptive: true };
 
-struct Gate { state: Mutex<State>, changed: Notify, policy: Policy }
+struct Gate { state: Mutex<State>, turn: AsyncMutex<()>, changed: Notify, policy: Policy }
+#[derive(Clone, Copy)]
+struct Recovery { qps: u32, concurrency: usize, observe_until: Instant, observe_for: Duration }
 struct State {
     next: Option<Instant>, cooldown_until: Option<Instant>, qps: u32,
     concurrency: usize, active: usize, successes: u32, epoch: u64,
-    limit_streak: u32, limited_once: bool, last_change: Instant,
+    limit_streak: u32, wave_rejections: u32, last_limit: Option<Instant>, last_change: Instant,
+    proven_qps: u32, proven_concurrency: usize, recovery: Option<Recovery>,
+    starts: VecDeque<Instant>,
+}
+
+// Compensate a bounded timer oversleep, rather than adding that lateness to
+// every following interval. A late runtime never accumulates a send burst.
+fn paced_next(now: Instant, scheduled: Option<Instant>, spacing: Duration) -> Instant {
+    let scheduled = scheduled.unwrap_or(now);
+    if now.saturating_duration_since(scheduled) > spacing * 2 { return now + spacing; }
+    (scheduled + spacing).max(now + spacing / 2).min(now + spacing)
+}
+
+impl State {
+    fn rate_ready(&mut self, now: Instant) -> Instant {
+        while self.starts.front().is_some_and(|start| now.duration_since(*start) >= Duration::from_secs(1)) {
+            self.starts.pop_front();
+        }
+        let limit = self.qps as usize;
+        if self.starts.len() >= limit { self.starts[self.starts.len() - limit] + Duration::from_secs(1) }
+        else { now }
+    }
 }
 pub(crate) struct Permit { gate: Arc<Gate>, epoch: u64 }
 impl Drop for Permit {
@@ -76,25 +101,60 @@ impl Gate {
         let now = Instant::now();
         Self { state: Mutex::new(State { next: None, cooldown_until: None,
             qps: policy.initial_qps, concurrency: policy.initial_concurrency,
-            active: 0, successes: 0, epoch: 0, limit_streak: 0, limited_once: false, last_change: now }),
-            changed: Notify::new(), policy }
+            active: 0, successes: 0, epoch: 0, limit_streak: 0, wave_rejections: 0,
+            last_limit: None, last_change: now, proven_qps: policy.initial_qps,
+            proven_concurrency: policy.initial_concurrency, recovery: None, starts: VecDeque::new() }),
+            turn: AsyncMutex::new(()), changed: Notify::new(), policy }
     }
     fn limited(&self, epoch: u64, delay: Duration) {
-        let now = Instant::now(); let mut state = self.state.lock().unwrap();
+        self.limited_at(epoch, delay, Instant::now());
+    }
+    fn limited_at(&self, epoch: u64, delay: Duration, now: Instant) {
+        let mut state = self.state.lock().unwrap();
         let delay = delay.min(Duration::from_secs(86_400));
         let until = if epoch == state.epoch {
+            let recurring = state.last_limit.is_some_and(|last| now.duration_since(last) < CONGESTION_OBSERVATION);
+            let prior_qps = state.qps;
+            let prior_concurrency = state.concurrency;
             state.qps = (state.qps / 2).max(1);
             state.concurrency = (state.concurrency / 2).max(1);
             state.epoch = state.epoch.wrapping_add(1);
             state.limit_streak = state.limit_streak.saturating_add(1);
-            state.limited_once = true;
+            state.wave_rejections = 1;
+            state.last_limit = Some(now);
+            if self.policy.adaptive {
+                // A single rejected tile can recover to previously working
+                // capacity. Repeated congestion learns a lower ceiling instead.
+                let ceiling = if recurring { (prior_qps * 3 / 4).max(1) } else { prior_qps };
+                let observation = if recurring { CONGESTION_OBSERVATION } else { ISOLATED_OBSERVATION };
+                state.recovery = Some(Recovery {
+                    qps: state.proven_qps.min(ceiling).max(state.qps),
+                    concurrency: state.proven_concurrency.min(prior_concurrency).max(state.concurrency),
+                    observe_until: now + observation, observe_for: observation,
+                });
+            }
             // Service-wide exponential backoff does not reset on each new tile.
             let cap_ms = 1000u64 << state.limit_streak.saturating_sub(1).min(5);
             let jitter = Duration::from_millis(rand::thread_rng().gen_range(cap_ms / 2..=cap_ms));
             now + delay.max(jitter)
-        } else { now + delay };
+        } else {
+            if epoch.wrapping_add(1) == state.epoch {
+                state.wave_rejections = state.wave_rejections.saturating_add(1);
+                if state.wave_rejections >= 3 && self.policy.adaptive {
+                    // Multiple rejections from one old wave still halve only
+                    // once, but they are not treated as an isolated failure.
+                    state.recovery = Some(Recovery { qps: state.qps, concurrency: state.concurrency,
+                        observe_until: now + CONGESTION_OBSERVATION, observe_for: CONGESTION_OBSERVATION });
+                }
+            }
+            now + delay
+        };
         // Old replies honor Retry-After without multiplying one failure wave.
         state.cooldown_until = Some(state.cooldown_until.map_or(until, |prior| prior.max(until)));
+        let cooldown_end = state.cooldown_until.unwrap();
+        if let Some(recovery) = &mut state.recovery {
+            recovery.observe_until = recovery.observe_until.max(cooldown_end + recovery.observe_for);
+        }
         state.successes = 0; state.last_change = now;
         state.next = Some(state.next.map_or(state.cooldown_until.unwrap(), |next| next.max(state.cooldown_until.unwrap())));
         drop(state); self.changed.notify_waiters();
@@ -103,15 +163,32 @@ impl Gate {
         let mut state = self.state.lock().unwrap();
         if epoch != state.epoch || state.cooldown_until.is_some_and(|until| now < until) { return; }
         state.successes = state.successes.saturating_add(1);
-        let window = if state.limited_once { Duration::from_secs(5) } else { RECOVERY_WINDOW };
-        if state.successes >= 16 && now.duration_since(state.last_change) >= window {
-            let step = if self.policy.adaptive && !state.limited_once { 4 } else { 1 };
-            state.qps = (state.qps + step).min(self.policy.max_qps);
-            state.concurrency = (state.concurrency + 1).min(self.policy.max_concurrency);
+        let window = if self.policy.adaptive { RECOVERY_WINDOW }
+            else if state.last_limit.is_some() { Duration::from_secs(5) } else { Duration::from_secs(2) };
+        let stable_since = state.last_change.max(state.cooldown_until.unwrap_or(state.last_change));
+        if state.successes >= 16 && now.duration_since(stable_since) >= window {
+            state.proven_qps = state.qps;
+            state.proven_concurrency = state.concurrency;
+            if self.policy.adaptive {
+                if let Some(recovery) = state.recovery.filter(|recovery| now < recovery.observe_until) {
+                    state.qps = (state.qps + (state.qps / 2).max(4)).min(recovery.qps);
+                    state.concurrency = (state.concurrency + 2).min(recovery.concurrency);
+                } else {
+                    state.recovery = None;
+                    state.qps = (state.qps + 8).min(self.policy.max_qps);
+                    state.concurrency = (state.concurrency + 2).min(self.policy.max_concurrency);
+                }
+            } else {
+                state.qps = (state.qps + 1).min(self.policy.max_qps);
+                state.concurrency = (state.concurrency + 1).min(self.policy.max_concurrency);
+            }
             state.limit_streak = 0; state.successes = 0; state.last_change = now;
         }
     }
     async fn acquire(self: &Arc<Self>) -> Permit {
+        // One FIFO waiter owns the send clock; others wait on the mutex instead
+        // of all waking and contending for every single request start.
+        let _turn = self.turn.lock().await;
         loop {
             // Register before checking: no lost release between check and await.
             // Cancellation does not reserve a future start or leak capacity.
@@ -119,11 +196,16 @@ impl Gate {
             let deadline = {
                 let mut state = self.state.lock().unwrap(); let now = Instant::now();
                 if state.active >= state.concurrency { None } else {
-                    let deadline = state.next.into_iter().chain(state.cooldown_until).max().unwrap_or(now);
+                    let rate_ready = if self.policy.adaptive { state.rate_ready(now) } else { now };
+                    let deadline = state.next.into_iter().chain(state.cooldown_until).chain(Some(rate_ready)).max().unwrap_or(now);
                     if deadline <= now {
                         state.active += 1;
-                        // No accumulated tokens, so late wakeups cannot burst.
-                        state.next = Some(now + Duration::from_secs_f64(1.0 / f64::from(state.qps)));
+                        let spacing = Duration::from_secs_f64(1.0 / f64::from(state.qps));
+                        state.next = Some(if self.policy.adaptive {
+                            let next = paced_next(now, state.next, spacing);
+                            state.starts.push_back(now);
+                            next
+                        } else { now + spacing });
                         return Permit { gate: self.clone(), epoch: state.epoch };
                     }
                     Some(deadline)
@@ -170,6 +252,42 @@ mod tests {
         format!("https://{host}/{layer}_w/wmts?LAYER={layer}&TILEMATRIXSET=w&tk={key}&TILEROW=1")
     }
     #[test]
+    fn timer_lateness_is_bounded_and_long_stalls_do_not_accumulate_send_credits() {
+        let now = Instant::now(); let spacing = Duration::from_micros(15_625);
+        let next = paced_next(now + spacing * 2, Some(now + spacing), spacing);
+        assert_eq!(next, now + spacing * 2 + spacing / 2);
+        assert_eq!(paced_next(now + spacing * 100, Some(now), spacing), now + spacing * 101);
+    }
+    #[test]
+    fn rolling_budget_enforces_the_target_rate_including_after_a_rate_reduction() {
+        let gate = Gate::new(TIANDITU_POLICY); let now = Instant::now();
+        let mut state = gate.state.lock().unwrap(); state.qps = 4;
+        for millis in [900,700,500,300] { state.starts.push_back(now - Duration::from_millis(millis)); }
+        assert_eq!(state.rate_ready(now), now + Duration::from_millis(100));
+        state.qps = 2;
+        assert_eq!(state.rate_ready(now), now + Duration::from_millis(500));
+        assert_eq!(state.rate_ready(now + Duration::from_secs(1)), now + Duration::from_secs(1));
+        assert!(state.starts.is_empty());
+    }
+    #[tokio::test]
+    async fn busy_runtime_keeps_a_rolling_rate_bound_without_a_restart_burst() {
+        let gate = Arc::new(Gate::new(Policy { initial_qps: 32, max_qps: 32, initial_concurrency: 16, ..TIANDITU_POLICY }));
+        let mut tasks = Vec::new();
+        for _ in 0..65 {
+            let gate = gate.clone();
+            tasks.push(tokio::spawn(async move { let permit = gate.acquire().await; let at = Instant::now(); drop(permit); at }));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Simulate one busy-runtime interval; no production code blocks a thread.
+        std::thread::sleep(Duration::from_millis(80));
+        let mut starts = Vec::new();
+        for task in tasks { starts.push(task.await.unwrap()); } starts.sort();
+        for (i, at) in starts.iter().enumerate() {
+            assert!(starts[i..].iter().take_while(|next| next.duration_since(*at) < Duration::from_millis(999)).count() <= 32);
+        }
+        for pair in starts.windows(2) { assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(12)); }
+    }
+    #[test]
     fn only_amap_tile_hosts_share_the_budget() {
         for url in ["https://webrd0{s}.is.autonavi.com/appmaptile?style=8&x={x}",
             "https://WEBST01.IS.AUTONAVI.COM.:443/appmaptile"] { assert!(applies(url)); }
@@ -204,6 +322,19 @@ mod tests {
         let c = tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap().unwrap(); drop(b); drop(c);
         assert_eq!(gate.state.lock().unwrap().active, 0);
     }
+    #[tokio::test]
+    async fn cancelling_the_front_waiter_unblocks_the_next_without_reserving_a_send() {
+        let gate = Arc::new(Gate::new(Policy { initial_qps: 1000, initial_concurrency: 1, ..TIANDITU_POLICY }));
+        let active = gate.acquire().await;
+        let front = tokio::spawn({ let gate = gate.clone(); async move { gate.acquire().await } });
+        tokio::task::yield_now().await;
+        let next = tokio::spawn({ let gate = gate.clone(); async move { gate.acquire().await } });
+        tokio::task::yield_now().await;
+        front.abort(); let _ = front.await; drop(active);
+        let permit = tokio::time::timeout(Duration::from_secs(1), next).await.unwrap().unwrap();
+        assert_eq!(gate.state.lock().unwrap().active, 1); drop(permit);
+        assert_eq!(gate.state.lock().unwrap().active, 0);
+    }
     #[test]
     fn one_failure_wave_halves_rate_once_and_old_successes_do_not_recover_it() {
         let gate = Gate::new(TIANDITU_POLICY); gate.limited(0, Duration::from_millis(250));
@@ -219,10 +350,38 @@ mod tests {
         let origin = Instant::now(); let deadline = gate.state.lock().unwrap().next;
         for _ in 0..100 { gate.succeeded_at(1, origin + Duration::from_millis(500)); }
         assert_eq!(gate.state.lock().unwrap().qps, 8);
-        for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(6)); }
-        let state = gate.state.lock().unwrap(); assert_eq!((state.qps, state.concurrency), (9, 3)); assert_eq!(state.next, deadline); drop(state);
-        for step in 2..70 { for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(step * 6)); } }
+        for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(2)); }
+        let state = gate.state.lock().unwrap(); assert_eq!((state.qps, state.concurrency), (12, 4)); assert_eq!(state.next, deadline); drop(state);
+        for step in 3..20 { for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(step)); } }
         assert_eq!(gate.state.lock().unwrap().qps, 64);
+    }
+    #[test]
+    fn isolated_congestion_recovers_proven_capacity_without_permanent_slow_mode() {
+        let gate = Gate::new(TIANDITU_POLICY); let origin = Instant::now();
+        for step in 1..=6 { for _ in 0..16 { gate.succeeded_at(0, origin + Duration::from_secs(step)); } }
+        assert_eq!(gate.state.lock().unwrap().qps, 64);
+        gate.limited_at(0, Duration::from_secs(1), origin + Duration::from_secs(8));
+        assert_eq!(gate.state.lock().unwrap().qps, 32);
+        for step in [10,11,12] { for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(step)); } }
+        assert_eq!(gate.state.lock().unwrap().qps, 56);
+        for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(17)); }
+        assert_eq!(gate.state.lock().unwrap().qps, 64);
+        assert!(gate.state.lock().unwrap().recovery.is_none());
+    }
+    #[test]
+    fn repeated_or_widespread_limits_hold_a_lower_ceiling_instead_of_fast_oscillation() {
+        let gate = Gate::new(TIANDITU_POLICY); let origin = Instant::now();
+        for step in 1..=6 { for _ in 0..16 { gate.succeeded_at(0, origin + Duration::from_secs(step)); } }
+        gate.limited_at(0, Duration::from_secs(1), origin + Duration::from_secs(8));
+        gate.limited_at(1, Duration::from_secs(1), origin + Duration::from_secs(10));
+        for step in 12..30 { for _ in 0..16 { gate.succeeded_at(2, origin + Duration::from_secs(step)); } }
+        assert_eq!(gate.state.lock().unwrap().qps, 24);
+        // Same-wave errors do not cut again, but prevent an early fast recovery.
+        gate.limited_at(2, Duration::from_secs(1), origin + Duration::from_secs(31));
+        gate.limited_at(2, Duration::from_secs(1), origin + Duration::from_secs(31));
+        gate.limited_at(2, Duration::from_secs(1), origin + Duration::from_secs(31));
+        for step in 33..60 { for _ in 0..16 { gate.succeeded_at(3, origin + Duration::from_secs(step)); } }
+        assert_eq!(gate.state.lock().unwrap().qps, 12);
     }
     #[tokio::test]
     async fn cooldown_postpones_waiters_and_does_not_release_a_restart_burst() {
@@ -237,6 +396,6 @@ mod tests {
     fn healthy_rate_is_learned_and_reused_by_the_next_task() {
         let url = url("t3.tianditu.gov.cn", "cva", "learn-test"); let gate = gate_for(&url).unwrap(); let now = Instant::now();
         for step in 1..5 { for _ in 0..16 { gate.succeeded_at(0, now + Duration::from_secs(step * 3)); } }
-        assert_eq!(gate_for(&url).unwrap().state.lock().unwrap().qps, 32);
+        assert_eq!(gate_for(&url).unwrap().state.lock().unwrap().qps, 48);
     }
 }
