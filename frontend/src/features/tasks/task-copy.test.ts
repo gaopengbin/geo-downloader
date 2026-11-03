@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import { getTaskErrorMessage, getTaskMessage, getTaskStatusKey } from './task-copy.ts'
 import type { TaskInfo } from '@/types/api'
+import { getTaskHeading } from './task-heading.ts'
 
 test('maps every known task state to a translation key', () => {
   assert.equal(getTaskStatusKey('pending'), 'tasks.status.pending')
@@ -33,4 +34,27 @@ test('OSM failures distinguish unavailability, incomplete data and rejected quer
   assert.equal(getTaskErrorMessage('OSM_QUERY_INCOMPLETE: timeout with partial elements', translate), 'tasks.osm.incomplete')
   assert.equal(getTaskErrorMessage('OSM_REQUEST_REJECTED: HTTP 400', translate), 'tasks.osm.rejected')
   assert.equal(getTaskErrorMessage('HTTP 429 from a different provider', translate), 'HTTP 429 from a different provider')
+})
+
+test('auto task headings show source/date/levels once without losing multiple levels', () => {
+  assert.deepEqual(getTaskHeading('Google Earth 2026-07-14 z17', 'Google Earth 历史影像 2026-07-14', 17),
+    { title: 'Google Earth 2026-07-14', source: undefined, level: 'z17' })
+  assert.deepEqual(getTaskHeading('天地图 卫星 z15~z18', '天地图 卫星', 15),
+    { title: '天地图 卫星', source: undefined, level: 'z15~z18' })
+  assert.deepEqual(getTaskHeading('ArcGIS 卫星 z10,15,18', 'ArcGIS 卫星', 10),
+    { title: 'ArcGIS 卫星', source: undefined, level: 'z10,15,18' })
+  assert.deepEqual(getTaskHeading('OSM 道路', 'OSM 道路', 0),
+    { title: 'OSM 道路', source: undefined, level: undefined })
+})
+
+test('custom names, differing imagery dates and mismatched levels retain source details', () => {
+  for (const [name, source, zoom] of [
+    ['朝阳区变化对比', 'Google Earth 历史影像 2026-07-14', 17],
+    ['Google Earth 2013-10-16 z17', 'Google Earth 历史影像 2026-07-14', 17],
+    ['天地图 卫星 z18', '天地图 卫星', 17],
+  ] as const) {
+    assert.deepEqual(getTaskHeading(name, source, zoom), { title: name, source, level: `z${zoom}` })
+  }
+  assert.deepEqual(getTaskHeading('自定义图源 z17', '自定义图源 z17', 17),
+    { title: '自定义图源 z17', source: undefined, level: 'z17' })
 })

@@ -35,7 +35,7 @@ import {
 import { getTaskErrorMessage, getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
 import { useTaskUpdates } from '@/features/tasks/use-task-updates'
 import { isTaskResultVisible } from './task-results'
-import { OutputLocation } from './output-location'
+import { OutputActions } from './output-location'
 import type { PersistedTask, TaskInfo, TaskLog, TaskStatus } from '@/types/api'
 
 const ACTIVE_STATES: TaskStatus[] = [
@@ -367,11 +367,11 @@ function TaskRow({
             {getTaskErrorMessage(task.error, t)}
           </p>
         )}
-        {task.save_path && <OutputLocation path={task.save_path}
-          saved={status === 'completed' || status === 'completed_with_gaps'} strictFile={task.source === 'osm_vector'}/>}
       </div>
       <div data-task-card-actions className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t pt-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {task.save_path && <OutputActions path={task.save_path}
+            saved={status === 'completed' || status === 'completed_with_gaps'} strictFile={task.source === 'osm_vector'}/>}
           <Button
             size="sm"
             variant="ghost"

@@ -35,7 +35,7 @@ import {
 import { readLogFile } from '@/features/tasks/tasks-api'
 import { getActiveTasks } from '@/features/tasks/tasks-api'
 import { historyWithoutVisibleTasks } from '@/features/tasks/task-results'
-import { OutputLocation } from '@/features/tasks/output-location'
+import { OutputActions } from '@/features/tasks/output-location'
 import { TaskCardHeading } from '@/features/tasks/task-card-heading'
 import { serveLocalTiles } from '@/features/tiles3d/tiles3d-api'
 import { MvtPreview } from '@/features/mvt/mvt-preview'
@@ -62,10 +62,14 @@ function formatDuration(secs?: number): string | null {
   return `${h}h ${m}m`
 }
 
-function formatDate(iso: string | undefined, locale: string): string {
+function formatDate(iso: string | undefined, locale: string, compact = false): string {
   if (!iso) return '-'
   try {
-    return new Date(iso).toLocaleString(locale, { hour12: false })
+    const date = new Date(iso)
+    if (Number.isNaN(date.getTime())) return iso
+    return date.toLocaleString(locale, compact
+      ? { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
+      : { hour12: false })
   } catch {
     return iso
   }
@@ -243,7 +247,7 @@ function HistoryCard({
         statusTitle={t(isFailed ? 'history.status.failed' : 'history.status.completed')}
         status={<Badge variant={isFailed ? 'destructive' : 'default'}>{t(isFailed ? 'history.status.failed' : 'history.status.completed')}</Badge>}/>
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+      <div data-task-card-metadata className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs tabular-nums text-muted-foreground">
         {typeof record.tile_count === 'number' && record.tile_count > 0 && (
           <span className="whitespace-nowrap">
             {record.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}{' '}
@@ -256,29 +260,32 @@ function HistoryCard({
           <span className="whitespace-nowrap">{formatBytes(record.file_size)}</span>
         )}
         {duration && <span className="whitespace-nowrap">{t('history.labels.duration', { duration })}</span>}
+        {record.created_at && <span data-task-card-date className="max-w-full truncate" title={formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}>
+          {formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language, true)}
+        </span>}
         {hasPyramid && <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[11px] font-normal">{t('history.labels.pyramid')}</Badge>}
         {record.log_truncated && <Badge variant="outline" className="px-1.5 py-0 text-[11px] font-normal">{t('history.labels.truncated')}</Badge>}
       </div>
-      {record.created_at && <p className="truncate text-xs tabular-nums text-muted-foreground" title={formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}>
-        {formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}
-      </p>}
 
       {isFailed && record.error && <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={String(record.error)}>{getTaskErrorMessage(String(record.error), t)}</p>}
-      {filePath && <OutputLocation path={filePath} saved={!isFailed}
-        strictFile={record.source === 'osm_vector' || String(record.format) === 'geojson'}/>}
 
       <div data-task-card-actions className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t pt-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+        {filePath && <OutputActions path={filePath} saved={!isFailed}
+          strictFile={record.source === 'osm_vector' || String(record.format) === 'geojson'}/>}
         {canBuildPyramid && (
           <Button
             size="sm"
             variant="outline"
             onClick={() => pyramidMutation.mutate()}
             disabled={pyramidMutation.isPending}
-            className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
+            title={pyramidLabel} aria-label={pyramidLabel}
+            className={pyramidMutation.isPending
+              ? 'h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs'
+              : 'size-7 shrink-0'}
           >
             <Layers className="size-3" />
-            {pyramidLabel}
+            {pyramidMutation.isPending && pyramidLabel}
           </Button>
         )}
         {canPreviewMvt && (

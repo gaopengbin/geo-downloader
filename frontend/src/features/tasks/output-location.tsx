@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { openFileLocation } from '@/features/history/history-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 
-export function OutputLocation({ path, saved, strictFile = false }: { path: string; saved: boolean; strictFile?: boolean }) {
+export function OutputActions({ path, saved, strictFile = false }: { path: string; saved: boolean; strictFile?: boolean }) {
   const { t } = useTranslation()
   const report = (action: 'open_folder' | 'copy_path', outcome: 'success' | 'failed') => {
     void trackTelemetry('output_location_action', { action, outcome, strict_file: strictFile })
@@ -21,19 +21,12 @@ export function OutputLocation({ path, saved, strictFile = false }: { path: stri
     catch { report('copy_path', 'failed'); toast.error(t('tasks.output.copyError')) }
   }
   if (!path) return null
-  const separator = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'))
-  const label = t(saved ? 'tasks.output.savedPath' : 'tasks.output.plannedPath')
-  return <div data-output-location className="min-w-0 space-y-2 rounded-md border bg-muted/20 p-2.5">
-    <div className="flex min-w-0 items-start gap-2">
-      <p className="min-w-0 flex-1 truncate pt-1 text-xs font-medium" title={label}>{label}</p>
-      <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={copy}
-        title={t('tasks.output.copyPath')} aria-label={t('tasks.output.copyPath')}><ClipboardCopy className="size-3.5"/></Button>
-    </div>
-    <p data-output-path className="flex min-w-0 font-mono text-xs leading-4 text-muted-foreground select-text" title={path}>
-      {separator > 0 ? <><span className="min-w-0 truncate">{path.slice(0, separator)}</span><span className="max-w-[70%] shrink-0 truncate">{path.slice(separator)}</span></> : <span className="min-w-0 truncate">{path}</span>}
-    </p>
-    {saved && <Button size="sm" variant="outline" className="h-7 w-full min-w-0 justify-start gap-1.5 px-2 text-xs" onClick={() => open.mutate()} disabled={open.isPending}>
+  return <>
+    {saved && <Button data-output-open size="sm" variant="outline" className="h-7 min-w-0 gap-1 px-2 text-xs" onClick={() => open.mutate()} disabled={open.isPending}
+        title={path}>
         <FolderOpen className="size-3"/>{t('history.actions.openFolder')}
     </Button>}
-  </div>
+    <Button data-output-copy size="icon" variant="ghost" className="size-7 shrink-0" onClick={copy}
+      title={`${t('tasks.output.copyPath')}\n${path}`} aria-label={t('tasks.output.copyPath')}><ClipboardCopy className="size-3.5"/></Button>
+  </>
 }

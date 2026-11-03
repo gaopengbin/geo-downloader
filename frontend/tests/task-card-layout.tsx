@@ -38,7 +38,7 @@ if(query.has('osm')) tasks = [
   {id:'osm-failed',name:'OSM 道路：服务连接失败',source:'osm_vector',source_name:'OSM Overpass',status:'failed',progress:20,error:'OSM_SERVICE_UNAVAILABLE: overpass-api.de: 无法连接服务；备用服务: HTTP 503。本次未生成输出文件。',save_path:output.replace('.tif','.geojson'),total:0,completed:0},
 ]
 let records: DownloadHistoryRecord[] = [
-  {id:'complete',name:'Google Earth 2026-07-14 z17',source:'earth_keyhole_fixture',source_name:'Google Earth 历史影像 2026-07-14',zoom:17,format:'geotiff',status:'completed',file_path:output,file_size:170000,tile_count:4,created_at:'2026-10-27T21:13:43+08:00',log_file:'fixture.log',has_pyramid:false},
+  {id:'complete',name:'Google Earth 2026-07-14 z17',source:'earth_keyhole_fixture',source_name:'Google Earth 历史影像 2026-07-14',zoom:17,format:'geotiff',status:'completed',file_path:output,file_size:170000,tile_count:4,duration_secs:4,created_at:'2026-10-27T21:13:43+08:00',log_file:'fixture.log',has_pyramid:false},
   {id:'long',name:'Google Earth 2013-10-16 z14_超长文件名_一个非常长的测试任务名称',source:'earth_keyhole_fixture',source_name:'Google Earth 历史影像 2013-10-16',zoom:14,format:'geotiff',status:'completed',file_path:longPath,file_size:32010000,tile_count:285,duration_secs:186,created_at:'2026-10-27T17:37:57+08:00',log_file:'fixture-long.log',has_pyramid:true,log_truncated:true},
 ]
 if(query.has('stress')) records.push({id:'history-failed',name:'历史任务失败_不会把计划路径标为已生成文件',source:'osm_vector',format:'geojson',status:'failed',success:false,error:'请求失败，尚未生成输出文件。',file_path:longPath.replace('.tif','.geojson'),file_size:0,created_at:'2026-11-02T08:12:13+08:00'})
