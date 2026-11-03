@@ -219,6 +219,7 @@ const zhCN = {
     manageSources: '新增 / 编辑图源', loadError: '图源读取失败，请重试。', retry: '重新加载',
   },
   tasks: {
+    cardActions: { open: '打开', copy: '复制', pyramid: '金字塔', preview: '预览', retry: '重试', export: '导出' },
     osm: {
       queued: '等待 OSM 请求队列…',
       request: '正在请求 OSM 服务 {{current}} / {{total}}（{{host}}）',

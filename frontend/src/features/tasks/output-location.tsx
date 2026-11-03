@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { ClipboardCopy, FolderOpen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
+import { TaskCardAction } from './task-card-actions'
 import { openFileLocation } from '@/features/history/history-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 
@@ -22,11 +22,11 @@ export function OutputActions({ path, saved, strictFile = false }: { path: strin
   }
   if (!path) return null
   return <>
-    {saved && <Button data-output-open size="sm" variant="outline" className="h-7 min-w-0 gap-1 px-2 text-xs" onClick={() => open.mutate()} disabled={open.isPending}
-        title={path}>
-        <FolderOpen className="size-3"/>{t('history.actions.openFolder')}
-    </Button>}
-    <Button data-output-copy size="icon" variant="ghost" className="size-7 shrink-0" onClick={copy}
-      title={`${t('tasks.output.copyPath')}\n${path}`} aria-label={t('tasks.output.copyPath')}><ClipboardCopy className="size-3.5"/></Button>
+    {saved && <TaskCardAction data-output-open icon={FolderOpen} onClick={() => open.mutate()} disabled={open.isPending}
+        title={`${t('history.actions.openFolder')}\n${path}`} aria-label={t('history.actions.openFolder')}>
+        {t('tasks.cardActions.open')}
+    </TaskCardAction>}
+    <TaskCardAction data-output-copy icon={ClipboardCopy} onClick={copy}
+      title={`${t('tasks.output.copyPath')}\n${path}`} aria-label={t('tasks.output.copyPath')}>{t('tasks.cardActions.copy')}</TaskCardAction>
   </>
 }

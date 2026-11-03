@@ -85,7 +85,8 @@ function ResizeExample(){
   <div className="min-w-0 flex-1 bg-muted/20 p-4 text-sm">独立验证区域 · 当前侧栏 <output data-resize-width>{width}</output>px（最小 {SIDEBAR_MIN_WIDTH}px）<output id="receipt" className="mt-3 block break-all text-xs">尚未操作</output></div>
  </div>
 }
-createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProvider client={client}><ThemeProvider>
+const root = createRoot(document.getElementById('root')!)
+root.render(<StrictMode><QueryClientProvider client={client}><ThemeProvider>
  <div className="fixed inset-0 flex flex-col">
   <header className="flex shrink-0 flex-wrap items-center gap-4 border-b p-3 text-xs">
    <span>下载卡片布局验证 · 模拟任务与路径，不操作真实文件</span>
@@ -100,3 +101,4 @@ createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProv
   </div><output id="receipt" className="m-4 block max-w-3xl break-all text-[10px]">尚未操作</output></main>}
  </div><Toaster/>
 </ThemeProvider></QueryClientProvider></StrictMode>)
+import.meta.hot?.dispose(() => root.unmount())

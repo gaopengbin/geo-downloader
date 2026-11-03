@@ -37,6 +37,7 @@ import { getActiveTasks } from '@/features/tasks/tasks-api'
 import { historyWithoutVisibleTasks } from '@/features/tasks/task-results'
 import { OutputActions } from '@/features/tasks/output-location'
 import { TaskCardHeading } from '@/features/tasks/task-card-heading'
+import { TaskCardAction, TaskCardActions } from '@/features/tasks/task-card-actions'
 import { serveLocalTiles } from '@/features/tiles3d/tiles3d-api'
 import { MvtPreview } from '@/features/mvt/mvt-preview'
 import type { DownloadHistoryRecord, TaskLog } from '@/types/api'
@@ -269,62 +270,48 @@ function HistoryCard({
 
       {isFailed && record.error && <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={String(record.error)}>{getTaskErrorMessage(String(record.error), t)}</p>}
 
-      <div data-task-card-actions className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t pt-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <TaskCardActions>
         {filePath && <OutputActions path={filePath} saved={!isFailed}
           strictFile={record.source === 'osm_vector' || String(record.format) === 'geojson'}/>}
         {canBuildPyramid && (
-          <Button
-            size="sm"
-            variant="outline"
+          <TaskCardAction
+            icon={Layers}
             onClick={() => pyramidMutation.mutate()}
             disabled={pyramidMutation.isPending}
             title={pyramidLabel} aria-label={pyramidLabel}
-            className={pyramidMutation.isPending
-              ? 'h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs'
-              : 'size-7 shrink-0'}
           >
-            <Layers className="size-3" />
-            {pyramidMutation.isPending && pyramidLabel}
-          </Button>
+            {pyramidMutation.isPending ? pyramidLabel : t('tasks.cardActions.pyramid')}
+          </TaskCardAction>
         )}
         {canPreviewMvt && (
-          <Button
-            size="sm"
-            variant="outline"
+          <TaskCardAction
+            icon={MapIcon}
             onClick={() => mvtPreviewMutation.mutate()}
             disabled={mvtPreviewMutation.isPending}
-            className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
+            title={t('history.actions.previewMvt')} aria-label={t('history.actions.previewMvt')}
           >
-            <MapIcon className="size-3" />
             {mvtPreviewMutation.isPending
               ? t('history.actions.startingPreview')
-              : t('history.actions.previewMvt')}
-          </Button>
+              : t('tasks.cardActions.preview')}
+          </TaskCardAction>
         )}
         {logFile && (
-          <Button
-            size="sm"
-            variant="outline"
+          <TaskCardAction
+            icon={showLogs ? ChevronDown : ChevronRight}
             onClick={() => setShowLogs((v) => !v)}
-            className="h-7 gap-1 px-2 text-xs"
           >
-            {showLogs ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
             {t('history.actions.logs')}
-          </Button>
+          </TaskCardAction>
         )}
-        </div>
-        <Button
-          size="icon"
-          variant="ghost"
+        <TaskCardAction
+          icon={Trash2} danger
           onClick={() => deleteMutation.mutate()}
           disabled={deleteMutation.isPending}
-          className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
           title={t('history.actions.delete')} aria-label={t('history.actions.delete')}
         >
-          <Trash2 className="size-3" />
-        </Button>
-      </div>
+          {t('history.actions.delete')}
+        </TaskCardAction>
+      </TaskCardActions>
 
       {showLogs && logFile && <HistoryLogPanel logFile={logFile} />}
       {canPreviewMvt && (

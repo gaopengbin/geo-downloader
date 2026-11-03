@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TaskCardHeading } from './task-card-heading'
+import { TaskCardAction, TaskCardActions } from './task-card-actions'
 import { isTauriRuntime } from '@/lib/tauri'
 import {
   cancelTask,
@@ -368,103 +369,77 @@ function TaskRow({
           </p>
         )}
       </div>
-      <div data-task-card-actions className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t pt-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <TaskCardActions>
           {task.save_path && <OutputActions path={task.save_path}
             saved={status === 'completed' || status === 'completed_with_gaps'} strictFile={task.source === 'osm_vector'}/>}
-          <Button
-            size="sm"
-            variant="ghost"
+          <TaskCardAction
+            icon={showLogs ? ChevronDown : ChevronRight}
             onClick={() => setShowLogs((v) => !v)}
-            className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
             title={showLogs ? t('tasks.actions.hideLogs') : t('tasks.actions.viewLogs')}
           >
-            {showLogs ? (
-              <ChevronDown className="size-3.5" />
-            ) : (
-              <ChevronRight className="size-3.5" />
-            )}
             {t('history.actions.logs')}
-          </Button>
+          </TaskCardAction>
           {isActive(status) && (
             <>
               {(status === 'pending' || status === 'preparing' || status === 'downloading' || status === 'paused') && (
-                <Button
-                  size="sm"
-                  variant="ghost"
+                <TaskCardAction
+                  icon={status === 'paused' ? Play : Pause}
                   onClick={() => pauseMutation.mutate()}
                   disabled={pauseMutation.isPending}
-                  className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
                   title={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
                 >
-                  {status === 'paused' ? (
-                    <Play className="size-3.5" />
-                  ) : (
-                    <Pause className="size-3.5" />
-                  )}
                   {status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
-                </Button>
+                </TaskCardAction>
               )}
               {/* Issue #31：待决策态加「补漏重试」入口（仅下载缺失瓦片） */}
               {status === 'pending_decision' && (
-                <Button
-                  size="sm"
-                  variant="ghost"
+                <TaskCardAction
+                  icon={RefreshCw}
                   onClick={() => resumeMutation.mutate()}
                   disabled={resumeMutation.isPending}
-                  className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
                   title={t('tasks.actions.retryMissing')}
                 >
-                  <RefreshCw className="size-3.5" />{t('tasks.actions.retryMissing')}
-                </Button>
+                  {t('tasks.cardActions.retry')}
+                </TaskCardAction>
               )}
               {/* Issue #31：暂停 / 待决策态加「强制按现状导出」入口 */}
               {(status === 'paused' || status === 'pending_decision') && !task.preparation && (
-                <Button
-                  size="sm"
-                  variant="ghost"
+                <TaskCardAction
+                  icon={Download}
                   onClick={() => exportPartialMutation.mutate()}
                   disabled={exportPartialMutation.isPending}
-                  className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
                   title={t('tasks.actions.exportPartial')}
                 >
-                  <Download className="size-3.5" />{t('tasks.actions.exportPartial')}
-                </Button>
+                  {t('tasks.cardActions.export')}
+                </TaskCardAction>
               )}
             </>
           )}
           {isCompletedWithGaps(status) && (
             <>
               {/* Issue #31：补漏重导（resume_task 增量下载缺失瓦片） */}
-              <Button
-                size="sm"
-                variant="ghost"
+              <TaskCardAction
+                icon={RefreshCw}
                 onClick={() => resumeMutation.mutate()}
                 disabled={resumeMutation.isPending}
-                className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
                 title={t('tasks.actions.retryAndReplace')}
               >
-                <RefreshCw className="size-3.5" />{t('tasks.actions.retryAndReplace')}
-              </Button>
+                {t('tasks.cardActions.retry')}
+              </TaskCardAction>
             </>
           )}
 
-        </div>
-        <div className="shrink-0">
           {(isActive(status) || isCompletedWithGaps(status) || isFinished(status)) && (
-            <Button
-              size="icon"
-              variant="ghost"
+            <TaskCardAction
+              icon={Trash2} danger
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
-              className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
               title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}
             >
-              <Trash2 className="size-3.5" />
-            </Button>
+              {t('history.actions.delete')}
+            </TaskCardAction>
           )}
-        </div>
-      </div>
+      </TaskCardActions>
       {showLogs && <TaskLogPanel taskId={task.id} />}
     </div>
   )
@@ -529,13 +504,13 @@ function ResumableRow({
         <span className="whitespace-nowrap">{t('tasks.labels.tiles', { count: task.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language) })}</span>
         {task.created_at && <span className="max-w-full truncate" title={task.created_at}>{task.created_at}</span>}
       </div>
-      <div data-task-card-actions className="mt-2 flex items-center justify-between gap-2 border-t pt-2">
-        <Button size="sm" variant="outline" className="h-7 min-w-0 gap-1.5 px-2 text-xs" onClick={() => resumeMutation.mutate()}
-          disabled={resumeMutation.isPending}><Play className="size-3.5"/>{t('tasks.actions.continue')}</Button>
-        <Button size="icon" variant="ghost" className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+      <TaskCardActions>
+        <TaskCardAction icon={Play} onClick={() => resumeMutation.mutate()}
+          disabled={resumeMutation.isPending}>{t('tasks.actions.continue')}</TaskCardAction>
+        <TaskCardAction icon={Trash2} danger
           onClick={() => discardMutation.mutate()} disabled={discardMutation.isPending}
-          title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}><Trash2 className="size-3.5"/></Button>
-      </div>
+          title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}>{t('history.actions.delete')}</TaskCardAction>
+      </TaskCardActions>
     </div>
   )
 }

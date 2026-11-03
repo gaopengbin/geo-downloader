@@ -219,6 +219,7 @@ const enUS = {
     manageSources: 'Add / edit sources', loadError: 'Could not load sources. Please retry.', retry: 'Reload sources',
   },
   tasks: {
+    cardActions: { open: 'Open', copy: 'Copy', pyramid: 'Pyramid', preview: 'Preview', retry: 'Retry', export: 'Export' },
     osm: {
       queued: 'Waiting in the OSM request queue…',
       request: 'Requesting OSM service {{current}} / {{total}} ({{host}})',
