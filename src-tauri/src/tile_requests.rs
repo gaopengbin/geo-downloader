@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Mutex as AsyncMutex, Notify};
 use tokio::time::Instant;
+use crate::download_scheduling::{UserPolicy, UserState};
 
 const RECOVERY_WINDOW: Duration = Duration::from_secs(1);
 const ISOLATED_OBSERVATION: Duration = Duration::from_secs(8);
@@ -14,6 +15,8 @@ const MAX_BUDGETS: usize = 128;
 static AMAP: OnceLock<Arc<Gate>> = OnceLock::new();
 static TIANDITU: OnceLock<Mutex<HashMap<[u8; 32], Arc<Gate>>>> = OnceLock::new();
 static OVERFLOW: OnceLock<Arc<Gate>> = OnceLock::new();
+static GENERIC: OnceLock<Mutex<HashMap<[u8; 32], Arc<Gate>>>> = OnceLock::new();
+static GENERIC_OVERFLOW: OnceLock<Arc<Gate>> = OnceLock::new();
 
 pub(crate) fn applies(template: &str) -> bool {
     reqwest::Url::parse(&template.replace("{s}", "1")).ok().is_some_and(|url| {
@@ -55,6 +58,7 @@ fn budget_key(url: &str) -> Option<[u8; 32]> {
 struct Policy { initial_qps: u32, max_qps: u32, initial_concurrency: usize, max_concurrency: usize, adaptive: bool }
 const AMAP_POLICY: Policy = Policy { initial_qps: 16, max_qps: 16, initial_concurrency: 4, max_concurrency: 4, adaptive: false };
 const TIANDITU_POLICY: Policy = Policy { initial_qps: 16, max_qps: 64, initial_concurrency: 4, max_concurrency: 16, adaptive: true };
+const GENERIC_POLICY: Policy = Policy { initial_qps: 0, max_qps: 0, initial_concurrency: usize::MAX, max_concurrency: usize::MAX, adaptive: false };
 
 struct Gate { state: Mutex<State>, turn: AsyncMutex<()>, changed: Notify, policy: Policy }
 #[derive(Clone, Copy)]
@@ -65,6 +69,7 @@ struct State {
     limit_streak: u32, wave_rejections: u32, last_limit: Option<Instant>, last_change: Instant,
     proven_qps: u32, proven_concurrency: usize, recovery: Option<Recovery>,
     starts: VecDeque<Instant>,
+    user: UserState,
 }
 
 // Compensate a bounded timer oversleep, rather than adding that lateness to
@@ -85,10 +90,13 @@ impl State {
         else { now }
     }
 }
-pub(crate) struct Permit { gate: Arc<Gate>, epoch: u64 }
+pub(crate) struct Permit { gate: Arc<Gate>, epoch: u64, user_batch: Option<u64> }
 impl Drop for Permit {
     fn drop(&mut self) {
-        self.gate.state.lock().unwrap().active -= 1;
+        let mut state = self.gate.state.lock().unwrap();
+        state.active -= 1;
+        state.user.finished(self.user_batch, Instant::now());
+        drop(state);
         self.gate.changed.notify_waiters();
     }
 }
@@ -103,7 +111,7 @@ impl Gate {
             qps: policy.initial_qps, concurrency: policy.initial_concurrency,
             active: 0, successes: 0, epoch: 0, limit_streak: 0, wave_rejections: 0,
             last_limit: None, last_change: now, proven_qps: policy.initial_qps,
-            proven_concurrency: policy.initial_concurrency, recovery: None, starts: VecDeque::new() }),
+            proven_concurrency: policy.initial_concurrency, recovery: None, starts: VecDeque::new(), user: UserState::default() }),
             turn: AsyncMutex::new(()), changed: Notify::new(), policy }
     }
     fn limited(&self, epoch: u64, delay: Duration) {
@@ -116,8 +124,8 @@ impl Gate {
             let recurring = state.last_limit.is_some_and(|last| now.duration_since(last) < CONGESTION_OBSERVATION);
             let prior_qps = state.qps;
             let prior_concurrency = state.concurrency;
-            state.qps = (state.qps / 2).max(1);
-            state.concurrency = (state.concurrency / 2).max(1);
+            if state.qps > 0 { state.qps = (state.qps / 2).max(1); }
+            if self.policy.max_concurrency != usize::MAX { state.concurrency = (state.concurrency / 2).max(1); }
             state.epoch = state.epoch.wrapping_add(1);
             state.limit_streak = state.limit_streak.saturating_add(1);
             state.wave_rejections = 1;
@@ -162,6 +170,7 @@ impl Gate {
     fn succeeded_at(&self, epoch: u64, now: Instant) {
         let mut state = self.state.lock().unwrap();
         if epoch != state.epoch || state.cooldown_until.is_some_and(|until| now < until) { return; }
+        if self.policy.max_qps == 0 { state.limit_streak = 0; return; }
         state.successes = state.successes.saturating_add(1);
         let window = if self.policy.adaptive { RECOVERY_WINDOW }
             else if state.last_limit.is_some() { Duration::from_secs(5) } else { Duration::from_secs(2) };
@@ -186,6 +195,9 @@ impl Gate {
         }
     }
     async fn acquire(self: &Arc<Self>) -> Permit {
+        self.acquire_with_user(false, UserPolicy::default).await
+    }
+    async fn acquire_with_user(self: &Arc<Self>, download: bool, user_policy: impl Fn() -> UserPolicy) -> Permit {
         // One FIFO waiter owns the send clock; others wait on the mutex instead
         // of all waking and contending for every single request start.
         let _turn = self.turn.lock().await;
@@ -193,20 +205,26 @@ impl Gate {
             // Register before checking: no lost release between check and await.
             // Cancellation does not reserve a future start or leak capacity.
             let changed = self.changed.notified(); tokio::pin!(changed); changed.as_mut().enable();
+            let configured_user = download.then(&user_policy);
             let deadline = {
                 let mut state = self.state.lock().unwrap(); let now = Instant::now();
-                if state.active >= state.concurrency { None } else {
+                if let Some(policy) = configured_user { state.user.configure(policy); }
+                let user_ready = if download { state.user.ready_at(now) } else { Some(now) };
+                if state.active >= state.concurrency || user_ready.is_none() { None } else {
                     let rate_ready = if self.policy.adaptive { state.rate_ready(now) } else { now };
-                    let deadline = state.next.into_iter().chain(state.cooldown_until).chain(Some(rate_ready)).max().unwrap_or(now);
+                    let deadline = state.next.into_iter().chain(state.cooldown_until).chain(Some(rate_ready)).chain(user_ready).max().unwrap_or(now);
                     if deadline <= now {
                         state.active += 1;
+                        if state.qps > 0 {
                         let spacing = Duration::from_secs_f64(1.0 / f64::from(state.qps));
                         state.next = Some(if self.policy.adaptive {
                             let next = paced_next(now, state.next, spacing);
                             state.starts.push_back(now);
                             next
                         } else { now + spacing });
-                        return Permit { gate: self.clone(), epoch: state.epoch };
+                        }
+                        let user_batch = if download { state.user.started(now) } else { None };
+                        return Permit { gate: self.clone(), epoch: state.epoch, user_batch };
                     }
                     Some(deadline)
                 }
@@ -231,11 +249,53 @@ fn gate_for(url: &str) -> Option<Arc<Gate>> {
     let gate = Arc::new(Gate::new(TIANDITU_POLICY)); registry.insert(key, gate.clone()); Some(gate)
 }
 pub(crate) async fn acquire(url: &str) -> Option<Permit> { Some(gate_for(url)?.acquire().await) }
+/// User limits apply only to task downloads, never interactive map requests.
+pub(crate) async fn acquire_download(url: &str) -> Option<Permit> {
+    let gate = if let Some(gate) = gate_for(url) { gate } else {
+        let parsed = reqwest::Url::parse(url).ok()?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() { return None; }
+        let key: [u8; 32] = Sha256::digest(parsed.origin().ascii_serialization().as_bytes()).into();
+        let mut registry = GENERIC.get_or_init(Default::default).lock().unwrap();
+        if let Some(gate) = registry.get(&key) { gate.clone() } else {
+            if registry.len() >= MAX_BUDGETS {
+                if let Some(gate) = GENERIC_OVERFLOW.get() { gate.clone() } else {
+                    if !crate::download_scheduling::current().enabled() { return None; }
+                    GENERIC_OVERFLOW.get_or_init(|| Arc::new(Gate::new(GENERIC_POLICY))).clone()
+                }
+            } else {
+                if !crate::download_scheduling::current().enabled() { return None; }
+                let gate = Arc::new(Gate::new(GENERIC_POLICY)); registry.insert(key, gate.clone()); gate
+            }
+        }
+    };
+    Some(gate.acquire_with_user(true, crate::download_scheduling::current).await)
+}
+pub(crate) fn settings_saved(settings: &crate::settings::AppSettings) {
+    crate::download_scheduling::configure(settings);
+    for gate in [&AMAP, &OVERFLOW, &GENERIC_OVERFLOW].into_iter().filter_map(OnceLock::get) { gate.changed.notify_waiters(); }
+    for registry in [&TIANDITU, &GENERIC].into_iter().filter_map(OnceLock::get) {
+        for gate in registry.lock().unwrap().values() { gate.changed.notify_waiters(); }
+    }
+}
 /// Progress text only; no key or URL leaves this module.
 pub(crate) fn cooldown_remaining(url: &str) -> Option<Duration> {
-    let gate = gate_for(url)?; let until = gate.state.lock().unwrap().cooldown_until?;
+    let gate = existing_gate(url)?; let until = gate.state.lock().unwrap().cooldown_until?;
     until.checked_duration_since(Instant::now()).filter(|delay| !delay.is_zero())
 }
+fn existing_gate(url: &str) -> Option<Arc<Gate>> {
+    if let Some(gate) = gate_for(url) { return Some(gate); }
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let key: [u8; 32] = Sha256::digest(parsed.origin().ascii_serialization().as_bytes()).into();
+    let registry = GENERIC.get()?.lock().unwrap();
+    registry.get(&key).cloned().or_else(|| if registry.len() >= MAX_BUDGETS { GENERIC_OVERFLOW.get().cloned() } else { None })
+}
+pub(crate) fn batch_pause_remaining(url: &str) -> Option<Duration> {
+    let gate = existing_gate(url)?;
+    let remaining = gate.state.lock().unwrap().user.pause_remaining(Instant::now());
+    remaining
+}
+#[cfg(test)]
+pub(crate) static TEST_GATE_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 #[cfg(test)]
 pub(crate) fn reset_for_tests() {
     if let Some(registry) = TIANDITU.get() { registry.lock().unwrap().clear(); }
@@ -296,6 +356,7 @@ mod tests {
     }
     #[test]
     fn budgets_share_across_tasks_and_subdomains_but_isolate_keys_and_services() {
+        let _guard = TEST_GATE_LOCK.blocking_lock();
         let base = url("t0.tianditu.gov.cn", "img", "test-a");
         assert_eq!(budget_key(&base), budget_key(&url("t7.tianditu.gov.cn", "img", "test-a")));
         assert_eq!(budget_key(&base), budget_key(&base.replace("TILEROW=1", "TILEROW=99")));
@@ -394,8 +455,51 @@ mod tests {
     }
     #[test]
     fn healthy_rate_is_learned_and_reused_by_the_next_task() {
+        let _guard = TEST_GATE_LOCK.blocking_lock();
         let url = url("t3.tianditu.gov.cn", "cva", "learn-test"); let gate = gate_for(&url).unwrap(); let now = Instant::now();
         for step in 1..5 { for _ in 0..16 { gate.succeeded_at(0, now + Duration::from_secs(step * 3)); } }
         assert_eq!(gate_for(&url).unwrap().state.lock().unwrap().qps, 48);
+    }
+    #[tokio::test]
+    async fn configured_rate_is_shared_between_waiters_while_probes_remain_independent() {
+        let gate = Arc::new(Gate::new(GENERIC_POLICY));
+        let policy = UserPolicy { rate: 10, ..UserPolicy::default() };
+        let mut tasks = Vec::new();
+        for _ in 0..12 { let gate = gate.clone(); tasks.push(tokio::spawn(async move {
+            let permit = gate.acquire_with_user(true, || policy).await; let at = Instant::now(); drop(permit); at
+        })); }
+        let mut starts = Vec::new(); for task in tasks { starts.push(task.await.unwrap()); } starts.sort();
+        for pair in starts.windows(2) { assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(95)); }
+        let policy = UserPolicy { batch_size: 1, batch_pause_ms: 100, rate: 0 };
+        let held = gate.acquire_with_user(true, || policy).await;
+        let probe = tokio::time::timeout(Duration::from_millis(50), gate.acquire()).await.unwrap();
+        drop(probe); drop(held);
+    }
+    #[tokio::test]
+    async fn batch_waiter_cancellation_releases_the_fifo_without_consuming_a_request() {
+        let gate = Arc::new(Gate::new(GENERIC_POLICY));
+        let policy = UserPolicy { batch_size: 1, batch_pause_ms: 50, rate: 0 };
+        let active = gate.acquire_with_user(true, || policy).await;
+        let waiting = tokio::spawn({let gate = gate.clone(); async move { gate.acquire_with_user(true, || policy).await }});
+        tokio::task::yield_now().await; waiting.abort(); let _ = waiting.await;
+        let released = Instant::now(); drop(active);
+        let next = tokio::time::timeout(Duration::from_secs(1), gate.acquire_with_user(true, || policy)).await.unwrap();
+        assert!(released.elapsed() >= Duration::from_millis(45)); drop(next);
+        assert_eq!(gate.state.lock().unwrap().active, 0);
+    }
+    #[tokio::test]
+    async fn live_changes_wake_waiters_without_clearing_server_cooldown() {
+        let gate = Arc::new(Gate::new(GENERIC_POLICY));
+        let config = Arc::new(Mutex::new(UserPolicy { rate: 1, ..UserPolicy::default() }));
+        let first = gate.acquire_with_user(true, || *config.lock().unwrap()).await; drop(first);
+        let waiting = tokio::spawn({let gate = gate.clone(); let config = config.clone(); async move {
+            gate.acquire_with_user(true, || *config.lock().unwrap()).await
+        }});
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let until = Instant::now() + Duration::from_millis(100);
+        gate.state.lock().unwrap().cooldown_until = Some(until);
+        *config.lock().unwrap() = UserPolicy::default(); gate.changed.notify_waiters();
+        let permit = tokio::time::timeout(Duration::from_millis(400), waiting).await.unwrap().unwrap();
+        assert!(Instant::now() >= until); drop(permit);
     }
 }

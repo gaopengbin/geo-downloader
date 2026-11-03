@@ -6,6 +6,7 @@ mod update_download;
 mod osm_output;
 mod overpass;
 mod tile_requests;
+mod download_scheduling;
 pub mod tianditu_tokens;
 pub mod acquisition_diagnostic;
 #[cfg(test)]mod acquisition_live_acceptance;
@@ -254,6 +255,7 @@ pub fn run() {
             if let Ok(sm) = settings::SettingsManager::new() {
                 if let Ok(s) = sm.get() {
                     config::set_allow_invalid_certs(s.allow_invalid_certs);
+                    tile_requests::settings_saved(&s);
                     // 同步瓦片缓存配置
                     tile_cache::set_enabled(s.tile_cache_enabled);
                     if let Some(dir) = s.tile_cache_dir.as_ref().filter(|d| !d.trim().is_empty()) {

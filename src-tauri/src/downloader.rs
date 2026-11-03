@@ -421,6 +421,8 @@ impl TileDownloader {
             .or_else(|| self.rate_limit.remaining());
         if let Some(delay) = remaining {
             format!("服务限流，自动冷却约 {} 秒后继续下载", delay.as_secs().saturating_add(1))
+        } else if let Some(delay) = crate::tile_requests::batch_pause_remaining(url.as_deref().unwrap_or(&self.source.url)) {
+            format!("DOWNLOAD_BATCH_PAUSE:{}", delay.as_secs().saturating_add(1))
         } else if retrying > 0 { format!("下载中，{} 个瓦片正在重试", retrying) }
         else { "downloading".into() }
     }
@@ -470,8 +472,11 @@ impl TileDownloader {
             let request_url = selected.as_ref().map(|selected| tianditu_tokens::token_url(url, &selected.token));
             let url = request_url.as_deref().unwrap_or(url);
             // Schedule the credential actually being sent, including backups.
-            let provider_permit = crate::tile_requests::acquire(url).await;
-            if provider_permit.is_none() { rate_limit.wait().await; }
+            // A settings change may add a shared gate while this downloader is
+            // already cooling. Never discard that older Retry-After deadline.
+            rate_limit.wait().await;
+            let provider_permit = crate::tile_requests::acquire_download(url).await;
+            if rate_limit.remaining().is_some() { drop(provider_permit); continue; }
             if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) {
                 if pool.current()?.token != used.token { continue; }
             }
@@ -1264,6 +1269,9 @@ fn report_progress_now(total:u32,finished:u32,since_last:Duration)->bool {total<
 #[cfg(test)]
 #[path = "download_scheduler_tests.rs"]
 mod scheduler_tests;
+#[cfg(test)]
+#[path = "download_scheduling_acceptance.rs"]
+mod user_scheduling_acceptance;
 
 #[cfg(test)]
 mod tests {
@@ -1507,6 +1515,7 @@ mod tests {
 
     #[tokio::test]
     async fn amap_requests_across_hosts_and_tasks_share_start_rate() {
+        let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1551,6 +1560,7 @@ mod tests {
 
     #[tokio::test]
     async fn amap_403_remains_terminal_without_saving_an_error_tile() {
+        let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
         let (local, count, server) = mock_tile_server(wire("403 Forbidden", "", b"denied")).await;
         let address = reqwest::Url::parse(&local).unwrap().socket_addrs(|| None).unwrap()[0];
         let host = "webrd01.is.autonavi.com";
@@ -1616,6 +1626,7 @@ mod tests {
 
     #[tokio::test]
     async fn tianditu_failover_retries_the_same_tile_and_shares_active_token_across_layers() {
+        let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut png = std::io::Cursor::new(Vec::new());
         image::DynamicImage::new_rgb8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
@@ -1672,6 +1683,7 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limits_preserve_tokens_and_other_hosts_never_receive_tokens() {
+        let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
         for tianditu in [true, false] {
             let (url, count, server) = mock_tile_server(wire("429 Too Many Requests", "Retry-After: 0\r\n", b"quota exhausted")).await;
             let address = reqwest::Url::parse(&url).unwrap().socket_addrs(|| None).unwrap()[0];
@@ -1702,6 +1714,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_waf_and_long_retry_after_do_not_rotate_tokens() {
+        let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
         for (status, headers, prefix) in [
             ("418 I'm a teapot", "", "天地图"),
             ("429 Too Many Requests", "Retry-After: 120\r\n", "TILE_RATE_LIMITED:"),
@@ -1739,6 +1752,7 @@ mod tests {
 
     #[tokio::test]
     async fn amap_and_tianditu_retry_429_with_the_same_request_then_save_valid_tiles() {
+        let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         for host in ["t0.tianditu.gov.cn", "webrd01.is.autonavi.com"] {
             crate::tile_requests::reset_for_tests();
@@ -1782,6 +1796,22 @@ mod tests {
             assert_eq!(pool.diagnostics().token_switches, 0);
         }
         crate::tile_requests::reset_for_tests();
+    }
+
+    #[tokio::test]
+    async fn existing_local_cooldown_is_preserved_when_a_shared_gate_is_present() {
+        let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let (url, count, server) = mock_tile_server(wire("200 OK", "Content-Type: image/png\r\n", &png.into_inner())).await;
+        let address = reqwest::Url::parse(&url).unwrap().socket_addrs(|| None).unwrap()[0];
+        let url = format!("http://webrd01.is.autonavi.com:{}/appmaptile?x=0&y=0&z=1", address.port());
+        let client = Client::builder().no_proxy().resolve("webrd01.is.autonavi.com", address).build().unwrap();
+        let local = RateLimitGate::default(); local.defer(Duration::from_millis(100));
+        let start = std::time::Instant::now(); let directory = tempfile::tempdir().unwrap();
+        TileDownloader::download_one_tile(&client, &url, &Default::default(), &directory.path().join("tile.png"), 0, None, &local, None).await.unwrap();
+        assert!(start.elapsed() >= Duration::from_millis(95));
+        assert_eq!(count.load(Ordering::SeqCst), 1); server.abort();
     }
 
     #[tokio::test]

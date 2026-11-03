@@ -2,6 +2,8 @@ import { z } from 'zod'
 import type { TFunction } from 'i18next'
 import { warningThresholdSchema } from './warning-threshold-schema.ts'
 
+const boundedInteger = (max: number, error: string) => z.number({ error }).int(error).min(0, error).max(max, error)
+
 export const createSettingsSchema = (t: TFunction) => z.object({
   tianditu_token: z.string().trim(),
   tianditu_backup_tokens: z.string().trim(),
@@ -13,6 +15,9 @@ export const createSettingsSchema = (t: TFunction) => z.object({
   proxy_enabled: z.boolean(),
   proxy_url: z.string().trim(),
   default_concurrency: z.number().int().min(1).max(100),
+  download_rate_limit: boundedInteger(10000, t('settings.scheduling.rateError')),
+  download_batch_size: boundedInteger(100000, t('settings.scheduling.batchError')),
+  download_batch_pause_ms: boundedInteger(600000, t('settings.scheduling.pauseError')),
   default_zoom: z.number().int().min(0).max(22),
   default_format: z.enum(['geotiff', 'tiles', 'mbtiles', 'gpkg']),
   memory_budget_mb: warningThresholdSchema,

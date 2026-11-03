@@ -23,6 +23,7 @@ test('OSM recovery progress is localized without hiding unknown backend messages
   assert.equal(getTaskMessage(task('OVERPASS_WAIT:30'), translate), translate('tasks.osm.wait', { seconds: 30 }))
   assert.equal(getTaskMessage(task('OVERPASS_FALLBACK:3:3'), translate), translate('tasks.osm.fallback', { current: 3, total: 3 }))
   assert.equal(getTaskMessage(task('OVERPASS_QUEUED'), translate), translate('tasks.osm.queued'))
+  assert.equal(getTaskMessage(task('DOWNLOAD_BATCH_PAUSE:2', 'custom_source'), translate), translate('tasks.labels.batchPause', { seconds: 2 }))
   assert.equal(getTaskMessage(task('OVERPASS_ERROR: server disconnected'), translate), translate('tasks.osm.recovering'))
   assert.equal(getTaskMessage(task('future protocol'), translate), 'future protocol')
   assert.equal(getTaskMessage(task('OVERPASS_WAIT:30', 'other'), translate), 'OVERPASS_WAIT:30')

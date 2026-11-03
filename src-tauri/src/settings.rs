@@ -61,6 +61,15 @@ pub struct AppSettings {
     /// 默认并发数
     #[serde(default = "default_concurrency")]
     pub default_concurrency: u32,
+    /// Additional per-service request ceiling; 0 keeps automatic provider pacing.
+    #[serde(default)]
+    pub download_rate_limit: u32,
+    /// Network attempts per batch; 0 disables batching.
+    #[serde(default)]
+    pub download_batch_size: u32,
+    /// Pause after a completed batch; 0 uses 600–2200ms jitter.
+    #[serde(default)]
+    pub download_batch_pause_ms: u32,
     /// 默认缩放级别
     #[serde(default = "default_zoom")]
     pub default_zoom: u8,
@@ -163,6 +172,9 @@ impl Default for AppSettings {
             proxy_enabled: default_proxy_enabled(),
             proxy_url: default_proxy_url(),
             default_concurrency: default_concurrency(),
+            download_rate_limit: 0,
+            download_batch_size: 0,
+            download_batch_pause_ms: 0,
             default_zoom: default_zoom(),
             default_format: default_format(),
             default_source: default_source(),
@@ -232,6 +244,7 @@ impl SettingsManager {
 
     /// 保存设置
     pub fn save(&self, settings: &AppSettings) -> Result<(), String> {
+        crate::download_scheduling::UserPolicy::from_settings(settings).validate()?;
         for source in settings.custom_sources.iter().chain(&settings.source_overrides) {
             source.headers.validated()?;
         }
@@ -268,6 +281,22 @@ mod tests {
         assert!(settings.deepseek_api_key.is_none());
         assert_eq!(settings.memory_budget_mb, 2048);
         assert_eq!(settings.tile_count_warning, 500_000);
+        assert_eq!((settings.download_rate_limit, settings.download_batch_size, settings.download_batch_pause_ms), (0, 0, 0));
+    }
+
+    #[test]
+    fn download_scheduling_roundtrips_and_invalid_changes_preserve_the_saved_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = super::SettingsManager::from_file_path(directory.path().join("settings.json"));
+        let mut settings = AppSettings::default();
+        for (rate, batch, pause) in [(8, 64, 1200), (0, 128, 0), (0, 0, 0)] {
+            settings.download_rate_limit = rate; settings.download_batch_size = batch; settings.download_batch_pause_ms = pause;
+            manager.save(&settings).unwrap(); let loaded = manager.get().unwrap();
+            assert_eq!((loaded.download_rate_limit, loaded.download_batch_size, loaded.download_batch_pause_ms), (rate, batch, pause));
+        }
+        settings.download_batch_pause_ms = 600_001;
+        assert!(manager.save(&settings).is_err());
+        assert_eq!(manager.get().unwrap().download_batch_pause_ms, 0);
     }
 
     #[test]

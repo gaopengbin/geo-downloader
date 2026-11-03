@@ -27,13 +27,14 @@ Object.assign(window, { __TAURI_INTERNALS__: {
     switch (command) {
       case 'get_settings': return structuredClone(saves > 0 && params.get('mismatch') === '1'
         ? {...stored,tianditu_token:null}
-        : saves > 0 && params.get('mismatch') === 'backups' ? {...stored,tianditu_backup_tokens:[]} : stored)
+        : saves > 0 && params.get('mismatch') === 'backups' ? {...stored,tianditu_backup_tokens:[]}
+        : saves > 0 && params.get('mismatch') === 'scheduling' ? {...stored,download_rate_limit:0} : stored)
       case 'save_settings':
         if (params.get('fail') === '1') throw new Error('测试：保存目录不可写')
         stored = structuredClone(args?.settings as AppSettings)
         if (params.get('persist') === '1') sessionStorage.setItem(storageKey, JSON.stringify(stored))
         saves++
-        document.getElementById('qa-receipt')!.textContent = `saves=${saves}; tokenSaved=${Boolean(stored.tianditu_token)}; backups=${stored.tianditu_backup_tokens?.length ?? 0}`
+        document.getElementById('qa-receipt')!.textContent = `saves=${saves}; tokenSaved=${Boolean(stored.tianditu_token)}; backups=${stored.tianditu_backup_tokens?.length ?? 0}; rate=${stored.download_rate_limit}; batch=${stored.download_batch_size}; pause=${stored.download_batch_pause_ms}`
         return null
       case 'assistant_secret_status': return {configured:false}
       case 'get_system_memory': return {total_mb:98302,available_mb:92656}

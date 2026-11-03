@@ -69,6 +69,9 @@ const DEFAULT_VALUES: SettingsFormValues = {
   proxy_enabled: false,
   proxy_url: '',
   default_concurrency: 8,
+  download_rate_limit: 0,
+  download_batch_size: 0,
+  download_batch_pause_ms: 0,
   default_zoom: 10,
   default_format: 'geotiff',
   memory_budget_mb: 2048,
@@ -100,6 +103,9 @@ function fromAppSettings(s: AppSettings | undefined): SettingsFormValues {
     proxy_enabled: s.proxy_enabled ?? false,
     proxy_url: s.proxy_url ?? '',
     default_concurrency: s.default_concurrency ?? 8,
+    download_rate_limit: s.download_rate_limit ?? 0,
+    download_batch_size: s.download_batch_size ?? 0,
+    download_batch_pause_ms: s.download_batch_pause_ms ?? 0,
     default_zoom: s.default_zoom ?? 10,
     default_format: safeFmt,
     memory_budget_mb: s.memory_budget_mb ?? 2048,
@@ -127,6 +133,9 @@ function toAppSettings(values: SettingsFormValues, base: AppSettings | undefined
     proxy_enabled: values.proxy_enabled,
     proxy_url: values.proxy_url.trim(),
     default_concurrency: values.default_concurrency,
+    download_rate_limit: values.download_rate_limit,
+    download_batch_size: values.download_batch_size,
+    download_batch_pause_ms: values.download_batch_pause_ms,
     default_zoom: values.default_zoom,
     default_format: values.default_format,
     memory_budget_mb: values.memory_budget_mb,
@@ -178,6 +187,7 @@ export function SettingsPanel() {
   }, [settingsQuery.data, reset])
 
   const proxyEnabled = useWatch({ control, name: 'proxy_enabled' })
+  const downloadBatchSize = useWatch({ control, name: 'download_batch_size' })
   const aiAssistantEnabled = useWatch({ control, name: 'ai_assistant_enabled' })
   const debugMode = useWatch({ control, name: 'debug_mode' })
   const allowInvalidCerts = useWatch({ control, name: 'allow_invalid_certs' })
@@ -208,6 +218,11 @@ export function SettingsPanel() {
       if ((persisted.tianditu_token ?? null) !== submitted.tianditu_token
         || JSON.stringify(persisted.tianditu_backup_tokens ?? []) !== JSON.stringify(submitted.tianditu_backup_tokens)) {
         throw new Error(t('settings.tokenVerifyFailed'))
+      }
+      if (persisted.download_rate_limit !== submitted.download_rate_limit
+        || persisted.download_batch_size !== submitted.download_batch_size
+        || persisted.download_batch_pause_ms !== submitted.download_batch_pause_ms) {
+        throw new Error(t('settings.scheduling.verifyFailed'))
       }
       return persisted
     },
@@ -318,6 +333,7 @@ export function SettingsPanel() {
 
   return (
     <form
+      noValidate
       onSubmit={onSubmit}
       className="space-y-3"
       data-agent-target="settings-panel"
@@ -436,6 +452,40 @@ export function SettingsPanel() {
               max={22}
               {...register('default_zoom', { valueAsNumber: true })}
             />
+          </div>
+          <div data-download-scheduling className="space-y-3 border-t pt-3 sm:col-span-2">
+            <div className="space-y-1">
+              <h4 className="text-sm font-medium">{t('settings.scheduling.title')}</h4>
+              <p className="text-xs leading-relaxed text-muted-foreground">{t('settings.scheduling.hint')}</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="download_rate_limit">{t('settings.scheduling.rate')}</Label>
+              <Input id="download_rate_limit" type="number" min={0} max={10000} step={1}
+                aria-describedby="download-rate-hint" aria-invalid={Boolean(errors.download_rate_limit)}
+                {...register('download_rate_limit', { valueAsNumber: true })}/>
+              <p id="download-rate-hint" className="text-xs leading-relaxed text-muted-foreground">{t('settings.scheduling.rateHint')}</p>
+              {errors.download_rate_limit && <p className="text-xs text-destructive">{errors.download_rate_limit.message}</p>}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="download_batch_size">{t('settings.scheduling.batchSize')}</Label>
+                <Input id="download_batch_size" type="number" min={0} max={100000} step={1}
+                  aria-describedby="download-batch-hint" aria-invalid={Boolean(errors.download_batch_size)}
+                  {...register('download_batch_size', { valueAsNumber: true })}/>
+                <p id="download-batch-hint" className="text-xs leading-relaxed text-muted-foreground">{t('settings.scheduling.batchHint')}</p>
+                {errors.download_batch_size && <p className="text-xs text-destructive">{errors.download_batch_size.message}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="download_batch_pause_ms">{t('settings.scheduling.batchPause')}</Label>
+                <Input id="download_batch_pause_ms" type="number" min={0} max={600000} step={1}
+                  disabled={!downloadBatchSize || downloadBatchSize < 0}
+                  aria-describedby="download-pause-hint" aria-invalid={Boolean(errors.download_batch_pause_ms)}
+                  {...register('download_batch_pause_ms', { valueAsNumber: true })}/>
+                <p id="download-pause-hint" className="text-xs leading-relaxed text-muted-foreground">{t('settings.scheduling.pauseHint')}</p>
+                {errors.download_batch_pause_ms && <p className="text-xs text-destructive">{errors.download_batch_pause_ms.message}</p>}
+              </div>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">{t('settings.scheduling.scope')}</p>
           </div>
           <div className="space-y-1.5 sm:col-span-2">
             <Label>{t('settings.fields.format')}</Label>

@@ -3290,6 +3290,7 @@ pub fn save_settings(mut settings: AppSettings) -> Result<(), String> {
     ).into_iter().filter(|token| Some(token.as_str()) != settings.tianditu_token.as_deref()).collect();
     manager.save(&settings)?;
     crate::tianditu_tokens::settings_saved(&settings);
+    crate::tile_requests::settings_saved(&settings);
     // 同步全局 TLS 严格性开关，避免用户变更后仍需重启才生效
     crate::config::set_allow_invalid_certs(settings.allow_invalid_certs);
     // 同步瓦片缓存配置

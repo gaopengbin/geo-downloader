@@ -42,6 +42,12 @@ export interface AppSettings {
   proxy_url?: string
   /** 默认并发数 */
   default_concurrency?: number
+  /** Additional requests/second ceiling per service; 0 = automatic. */
+  download_rate_limit?: number
+  /** Requests per batch; 0 = disabled. */
+  download_batch_size?: number
+  /** Batch pause in ms; 0 = randomized 600–2200 ms when batching is enabled. */
+  download_batch_pause_ms?: number
   /** 默认缩放级别 */
   default_zoom?: number
   /** 默认输出格式 */

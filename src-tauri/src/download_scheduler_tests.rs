@@ -5,6 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[tokio::test]
 #[ignore = "2048 real loopback tile transfers, one injected 429; about two minutes"]
 async fn two_tasks_share_a_smooth_budget_recover_and_resume_without_requests() {
+    let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
     let _lock = tcache::CACHE_TEST_LOCK.lock().unwrap();
     let old = tcache::get_config();
     struct Restore(tcache::CacheConfig);
@@ -77,6 +78,7 @@ async fn two_tasks_share_a_smooth_budget_recover_and_resume_without_requests() {
 
 #[tokio::test]
 async fn cooling_is_visible_and_cancellation_drops_queued_requests() {
+    let _guard = crate::tile_requests::TEST_GATE_LOCK.lock().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let count = Arc::new(AtomicU32::new(0)); let received = count.clone();
