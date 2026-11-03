@@ -38,6 +38,7 @@ import { historyWithoutVisibleTasks } from '@/features/tasks/task-results'
 import { OutputActions } from '@/features/tasks/output-location'
 import { TaskCardHeading } from '@/features/tasks/task-card-heading'
 import { TaskCardAction, TaskCardActions } from '@/features/tasks/task-card-actions'
+import { Tooltip } from '@/components/ui/tooltip'
 import { serveLocalTiles } from '@/features/tiles3d/tiles3d-api'
 import { MvtPreview } from '@/features/mvt/mvt-preview'
 import type { DownloadHistoryRecord, TaskLog } from '@/types/api'
@@ -261,14 +262,14 @@ function HistoryCard({
           <span className="whitespace-nowrap">{formatBytes(record.file_size)}</span>
         )}
         {duration && <span className="whitespace-nowrap">{t('history.labels.duration', { duration })}</span>}
-        {record.created_at && <span data-task-card-date className="max-w-full truncate" title={formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}>
+        {record.created_at && <Tooltip content={formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}><span data-task-card-date tabIndex={0} className="max-w-full truncate">
           {formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language, true)}
-        </span>}
+        </span></Tooltip>}
         {hasPyramid && <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[11px] font-normal">{t('history.labels.pyramid')}</Badge>}
         {record.log_truncated && <Badge variant="outline" className="px-1.5 py-0 text-[11px] font-normal">{t('history.labels.truncated')}</Badge>}
       </div>
 
-      {isFailed && record.error && <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={String(record.error)}>{getTaskErrorMessage(String(record.error), t)}</p>}
+      {isFailed && record.error && <Tooltip content={String(record.error)}><p tabIndex={0} className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]">{getTaskErrorMessage(String(record.error), t)}</p></Tooltip>}
 
       <TaskCardActions>
         {filePath && <OutputActions path={filePath} saved={!isFailed}
@@ -320,9 +321,9 @@ function HistoryCard({
             <DialogHeader>
               <DialogTitle>{t('history.previewTitle', { name: record.name })}</DialogTitle>
             </DialogHeader>
-            <p className="truncate font-mono text-[11px] text-muted-foreground" title={mvtPreviewUrl ?? ''}>
+            <Tooltip content={mvtPreviewUrl}><p tabIndex={0} className="truncate font-mono text-[11px] text-muted-foreground">
               {mvtPreviewUrl}
-            </p>
+            </p></Tooltip>
             {mvtPreviewUrl && (
               <div style={{ height: 520 }}>
                 <MvtPreview urlTemplate={mvtPreviewUrl} maxZoom={record.zoom as number | undefined ?? 14} />
@@ -445,28 +446,28 @@ export function HistoryPanel() {
           {t('history.labels.total', { count: total })}
         </span>
         <div className="flex items-center gap-1">
-          <Button
+          <Tooltip content={t('history.actions.refresh')}><Button
             variant="ghost"
             size="icon"
             onClick={() => historyQuery.refetch()}
             disabled={historyQuery.isFetching}
             className="size-7"
-            title={t('history.actions.refresh')}
+            aria-label={t('history.actions.refresh')}
           >
             <RefreshCw
               className={`size-3.5 ${historyQuery.isFetching ? 'animate-spin' : ''}`}
             />
-          </Button>
-          <Button
+          </Button></Tooltip>
+          <Tooltip content={t('history.actions.clear')}><Button
             variant="ghost"
             size="icon"
             onClick={() => clearMutation.mutate()}
             disabled={clearMutation.isPending || total === 0}
             className="size-7"
-            title={t('history.actions.clear')}
+            aria-label={t('history.actions.clear')}
           >
             <X className="size-3.5" />
-          </Button>
+          </Button></Tooltip>
         </div>
       </div>
 

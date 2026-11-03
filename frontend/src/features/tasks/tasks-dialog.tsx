@@ -15,6 +15,7 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Tooltip } from '@/components/ui/tooltip'
 import {
   Dialog,
   DialogContent,
@@ -118,9 +119,9 @@ function TaskRow({ task }: { task: TaskInfo }) {
   return (
     <div className="rounded-md border p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="truncate font-medium" title={task.name}>
+        <Tooltip content={task.name}><span tabIndex={0} className="truncate font-medium">
           {task.name}
-        </span>
+        </span></Tooltip>
         <Badge variant={statusVariant(status)}>{statusKey ? t(statusKey) : status}</Badge>
         {task.source_name && (
           <Badge variant="outline" className="font-normal">
@@ -136,41 +137,41 @@ function TaskRow({ task }: { task: TaskInfo }) {
           {isActive(status) && (
             <>
               {(status === 'downloading' || status === 'paused') && (
-                <Button
+                <Tooltip content={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}><Button
                   size="sm"
                   variant="ghost"
                   onClick={() => pauseMutation.mutate()}
                   disabled={pauseMutation.isPending}
-                  title={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
+                  aria-label={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
                 >
                   {status === 'paused' ? (
                     <Play className="size-4" />
                   ) : (
                     <Pause className="size-4" />
                   )}
-                </Button>
+                </Button></Tooltip>
               )}
-              <Button
+              <Tooltip content={t('tasks.actions.cancel')}><Button
                 size="sm"
                 variant="ghost"
                 onClick={() => cancelMutation.mutate()}
                 disabled={cancelMutation.isPending}
-                title={t('tasks.actions.cancel')}
+                aria-label={t('tasks.actions.cancel')}
               >
                 <X className="size-4" />
-              </Button>
+              </Button></Tooltip>
             </>
           )}
           {isFinished(status) && (
-            <Button
+            <Tooltip content={t('tasks.actions.remove')}><Button
               size="sm"
               variant="ghost"
               onClick={() => removeMutation.mutate()}
               disabled={removeMutation.isPending}
-              title={t('tasks.actions.remove')}
+              aria-label={t('tasks.actions.remove')}
             >
               <Trash2 className="size-4" />
-            </Button>
+            </Button></Tooltip>
           )}
         </div>
       </div>
@@ -194,14 +195,14 @@ function TaskRow({ task }: { task: TaskInfo }) {
           )}
         </div>
         {task.message && (
-          <p className="truncate text-xs text-muted-foreground" title={getTaskMessage(task, t)}>
+          <Tooltip content={getTaskMessage(task, t)}><p tabIndex={0} className="truncate text-xs text-muted-foreground">
             {getTaskMessage(task, t)}
-          </p>
+          </p></Tooltip>
         )}
         {task.error && (
-          <p className="truncate text-xs text-destructive" title={task.error}>
+          <Tooltip content={task.error}><p tabIndex={0} className="truncate text-xs text-destructive">
             {task.error}
-          </p>
+          </p></Tooltip>
         )}
       </div>
     </div>

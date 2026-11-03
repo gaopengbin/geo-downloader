@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Tooltip } from '@/components/ui/tooltip'
 import { clampSidebarWidth, sidebarWidthFromDrag, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_RESIZE_STEP } from './sidebar-width'
 
 export function SidebarResizeHandle({ width, onWidthChange }: { width: number; onWidthChange: (width: number) => void }) {
@@ -15,10 +16,9 @@ export function SidebarResizeHandle({ width, onWidthChange }: { width: number; o
     window.addEventListener('blur', finish)
     return () => { window.removeEventListener('blur', finish); finish() }
   }, [finish])
-  return <div role="separator" aria-orientation="vertical" tabIndex={0}
+  return <Tooltip content={t('layout.sidebarResizeHint', { min: SIDEBAR_MIN_WIDTH, max: SIDEBAR_MAX_WIDTH })} side="right"><div role="separator" aria-orientation="vertical" tabIndex={0}
     aria-label={t('layout.resizeSidebar')} aria-controls="workspace-sidebar"
     aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={clampSidebarWidth(width)}
-    title={t('layout.sidebarResizeHint', { min: SIDEBAR_MIN_WIDTH, max: SIDEBAR_MAX_WIDTH })}
     className="group relative h-full w-1 shrink-0 touch-none cursor-col-resize bg-border/40 transition-colors hover:bg-primary focus-visible:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     onPointerDown={(event) => {
       if (event.button !== 0) return
@@ -37,5 +37,5 @@ export function SidebarResizeHandle({ width, onWidthChange }: { width: number; o
         : event.key === 'ArrowLeft' ? width - SIDEBAR_RESIZE_STEP : event.key === 'ArrowRight' ? width + SIDEBAR_RESIZE_STEP : null
       if (next == null) return
       event.preventDefault(); onWidthChange(clampSidebarWidth(next))
-    }}><div className="absolute inset-y-0 -left-1 -right-1"/></div>
+    }}><div className="absolute inset-y-0 -left-1 -right-1"/></div></Tooltip>
 }

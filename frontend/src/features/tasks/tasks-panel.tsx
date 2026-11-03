@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { TaskCardHeading } from './task-card-heading'
 import { TaskCardAction, TaskCardActions } from './task-card-actions'
+import { Tooltip } from '@/components/ui/tooltip'
 import { isTauriRuntime } from '@/lib/tauri'
 import {
   cancelTask,
@@ -354,19 +355,19 @@ function TaskRow({
           {task.file_size != null && task.file_size > 0 && (
             <span className="whitespace-nowrap">{formatBytes(task.file_size)}</span>
           )}
-          <span className="whitespace-nowrap" title={t('tasks.labels.elapsed')}>{t('tasks.labels.elapsed')} {formatElapsed(elapsed)}</span>
-          {showGapBadge && <Badge variant="outline" className={`px-1.5 py-0 text-[11px] ${gapBadgeClasses(gapsRatio)}`}
-            title={t('tasks.labels.gaps', { failed: failedCount, total })}>{t('tasks.labels.gapsPercent', { percent: (gapsRatio * 100).toFixed(gapsRatio < 0.01 ? 2 : 1) })}</Badge>}
+          <span className="whitespace-nowrap">{t('tasks.labels.elapsed')} {formatElapsed(elapsed)}</span>
+          {showGapBadge && <Tooltip content={t('tasks.labels.gaps', { failed: failedCount, total })}><Badge tabIndex={0} variant="outline" className={`px-1.5 py-0 text-[11px] ${gapBadgeClasses(gapsRatio)}`}>
+            {t('tasks.labels.gapsPercent', { percent: (gapsRatio * 100).toFixed(gapsRatio < 0.01 ? 2 : 1) })}</Badge></Tooltip>}
         </div>
         {task.message && (status !== 'failed' || !task.error) && (
-          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]" title={getTaskMessage(task, t)}>
+          <Tooltip content={getTaskMessage(task, t)}><p tabIndex={0} className="line-clamp-2 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
             {getTaskMessage(task, t)}
-          </p>
+          </p></Tooltip>
         )}
         {task.error && (
-          <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={task.error}>
+          <Tooltip content={task.error}><p tabIndex={0} className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]">
             {getTaskErrorMessage(task.error, t)}
-          </p>
+          </p></Tooltip>
         )}
       </div>
       <TaskCardActions>
@@ -502,7 +503,7 @@ function ResumableRow({
           disabled={selectionDisabled} aria-label={t('tasks.labels.select', { name: task.task_name })}/>}/>
       <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
         <span className="whitespace-nowrap">{t('tasks.labels.tiles', { count: task.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language) })}</span>
-        {task.created_at && <span className="max-w-full truncate" title={task.created_at}>{task.created_at}</span>}
+        {task.created_at && <Tooltip content={task.created_at}><span tabIndex={0} className="max-w-full truncate">{task.created_at}</span></Tooltip>}
       </div>
       <TaskCardActions>
         <TaskCardAction icon={Play} onClick={() => resumeMutation.mutate()}
@@ -786,7 +787,7 @@ export function TasksPanel() {
             </>
           )}
         </span>
-        <Button
+        <Tooltip content={t('tasks.actions.refresh')}><Button
           variant="ghost"
           size="icon"
           onClick={() => {
@@ -795,10 +796,10 @@ export function TasksPanel() {
           }}
           disabled={tasksQuery.isFetching}
           className="size-7"
-          title={t('tasks.actions.refresh')}
+          aria-label={t('tasks.actions.refresh')}
         >
           <RefreshCw className={`size-3.5 ${tasksQuery.isFetching ? 'animate-spin' : ''}`} />
-        </Button>
+        </Button></Tooltip>
       </div>
 
       <div className="space-y-2">

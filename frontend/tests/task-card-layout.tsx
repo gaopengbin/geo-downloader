@@ -72,6 +72,7 @@ Object.assign(window,{__TAURI_EVENT_PLUGIN_INTERNALS__:{unregisterListener:()=>{
 }})
 const {TasksPanel}=await import('../src/features/tasks/tasks-panel')
 const {HistoryPanel}=await import('../src/features/history/history-panel')
+const {TasksDialog}=await import('../src/features/tasks/tasks-dialog')
 const client=new QueryClient({defaultOptions:{queries:{retry:false,refetchOnWindowFocus:false}}})
 function ResizeExample(){
  const [requested,setWidth]=useState(SIDEBAR_DEFAULT_WIDTH)
@@ -90,7 +91,8 @@ root.render(<StrictMode><QueryClientProvider client={client}><ThemeProvider>
  <div className="fixed inset-0 flex flex-col">
   <header className="flex shrink-0 flex-wrap items-center gap-4 border-b p-3 text-xs">
    <span>下载卡片布局验证 · 模拟任务与路径，不操作真实文件</span>
-   <a href="?">常规样例</a><a href="?stress">压力样例</a><a href="?stress&en&dark">English / Dark</a><a href="?resize&stress">拖拽宽度验证</a><a href="?resize&osm">OSM 恢复提示</a>
+   <a href="?">常规样例</a><a href="?stress">压力样例</a><a href="?stress&en&dark">English / Dark</a><a href="?resize&stress">拖拽宽度验证</a><a href="?resize&osm">OSM 恢复提示</a><a href="?resize&stress&dialog">任务弹窗验证</a>
+   {query.has('dialog') && <TasksDialog/>}
   </header>
   {query.has('resize')?<ResizeExample/>:<main className="min-h-0 flex-1 overflow-auto"><div className="flex items-start gap-4 p-4">
    {(query.has('single')?[Number(query.get('single'))]:[380,480]).map(width=><section key={width} data-panel-width={width} className="shrink-0 space-y-3" style={{width}}>

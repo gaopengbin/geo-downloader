@@ -3,6 +3,7 @@ import { History } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { Tooltip } from '@/components/ui/tooltip'
 import { isTauriRuntime } from '@/lib/tauri'
 import { getResumableTasks } from '@/features/tasks/tasks-api'
 import { useAppStore } from '@/store/app-store'
@@ -25,17 +26,17 @@ export function ResumableTasksButton() {
   if (!inTauri || count === 0) return null
 
   return (
-    <Button
+    <Tooltip content={t('tasks.resumableTitle', { count })}><Button
       data-tour="resumable-tasks"
       variant="ghost"
       size="sm"
       className="relative h-8 gap-1 px-2 text-xs"
-      title={t('tasks.resumableTitle', { count })}
+      aria-label={t('tasks.resumableTitle', { count })}
       onClick={() => setTab('history')}
     >
       <History className="size-3.5" />
       <span className="font-semibold">{count}</span>
       <span className="absolute -right-0.5 -top-0.5 flex size-2 rounded-full bg-amber-500 ring-2 ring-background" />
-    </Button>
+    </Button></Tooltip>
   )
 }
