@@ -59,7 +59,7 @@ impl XyzFixture {
                     Err(error) => panic!("fixture accept failed: {error}"),
                 };
                 stream
-                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
                 stream
                     .set_write_timeout(Some(Duration::from_millis(500)))
@@ -72,6 +72,9 @@ impl XyzFixture {
                         Ok(n) => request.extend_from_slice(&buffer[..n]),
                     }
                 }
+                // An idle/fragmented TCP connection is not an HTTP request for
+                // a missing tile. Close it so transport retry remains possible.
+                if !request.windows(4).any(|w| w == b"\r\n\r\n") { continue; }
                 let request = String::from_utf8_lossy(&request);
                 let path = request
                     .lines()

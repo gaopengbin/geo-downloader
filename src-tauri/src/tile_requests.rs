@@ -450,8 +450,17 @@ mod tests {
         let waiting = tokio::spawn({ let gate = gate.clone(); async move { gate.acquire().await } });
         tokio::task::yield_now().await; first.limited(Duration::from_millis(100)); drop(first);
         let begin = Instant::now(); let second = waiting.await.unwrap(); assert!(begin.elapsed() >= Duration::from_millis(450));
-        let begin = Instant::now(); drop(second); let _third = gate.acquire().await;
-        assert!(begin.elapsed() >= Duration::from_millis(120));
+        let next = {
+            let state = gate.state.lock().unwrap();
+            let spacing = Duration::from_secs_f64(1.0 / f64::from(state.qps));
+            let next = state.next.unwrap();
+            // Bounded catch-up deliberately permits half-spacing after a late
+            // wake. Check the actual clock, not a flaky 120ms caller interval.
+            assert!(next >= *state.starts.back().unwrap() + spacing / 2);
+            next
+        };
+        drop(second); let _third = gate.acquire().await;
+        assert!(Instant::now() >= next);
     }
     #[test]
     fn healthy_rate_is_learned_and_reused_by_the_next_task() {

@@ -26,6 +26,8 @@ pub mod tile_pack;
 pub mod downloader;
 #[path = "../../../src-tauri/src/tile_requests.rs"]
 mod tile_requests;
+#[path = "../../../src-tauri/src/download_scheduling.rs"]
+mod download_scheduling;
 #[path = "../../../src-tauri/src/acquisition_diagnostic.rs"]
 pub mod acquisition_diagnostic;
 #[path = "../../../src-tauri/src/tianditu_tokens.rs"]
@@ -65,8 +67,20 @@ mod settings {
     pub struct SettingsManager;
     #[derive(serde::Deserialize)]
     #[serde(default)]
-    pub struct AppSettings { pub export_buffer_mb: u32, pub tianditu_token: Option<String>, pub tianditu_backup_tokens: Vec<String> }
-    impl Default for AppSettings { fn default()->Self { Self { export_buffer_mb:64,tianditu_token:None,tianditu_backup_tokens:Vec::new() } } }
+    pub struct AppSettings {
+        pub export_buffer_mb: u32,
+        pub tianditu_token: Option<String>,
+        pub tianditu_backup_tokens: Vec<String>,
+        pub download_rate_limit: u32,
+        pub download_batch_size: u32,
+        pub download_batch_pause_ms: u32,
+    }
+    impl Default for AppSettings {
+        fn default()->Self {
+            Self { export_buffer_mb:64,tianditu_token:None,tianditu_backup_tokens:Vec::new(),
+                download_rate_limit:0,download_batch_size:0,download_batch_pause_ms:0 }
+        }
+    }
     impl SettingsManager {
         pub fn new() -> Result<Self, String> { Ok(Self) }
         pub fn get(&self) -> Result<AppSettings, String> { Err("Desktop settings are not read by the headless core".into()) }
