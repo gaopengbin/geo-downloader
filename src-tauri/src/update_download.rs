@@ -35,8 +35,10 @@ pub(crate) struct Transfer {
     pub reason: Option<Reason>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Route { Direct, System }
 #[derive(Clone)]
-struct Candidate { source: Source, url: String }
+struct Candidate { source: Source, route: Route, url: String }
 pub(crate) struct Spec {
     filename: String,
     sha256: String,
@@ -64,11 +66,15 @@ impl Spec {
         if ![mirror.as_str(), github.as_str(), versioned.as_str()].contains(&parsed.as_str()) {
             return Err("安装包地址与官方版本不匹配，请重新检查更新".into());
         }
-        let candidates = if parsed.as_str() == github {
-            vec![Candidate { source: Source::Github, url: github }, Candidate { source: Source::Mirror, url: mirror }]
-        } else {
-            vec![Candidate { source: Source::Mirror, url: parsed.to_string() }, Candidate { source: Source::Github, url: github }]
-        };
+        // A system proxy can send the domestic CDN through a much slower overseas
+        // route. Prefer direct delivery even when metadata came from GitHub, then
+        // retain the system route for networks that require a proxy. Integrity is
+        // pinned to this version, regardless of the metadata source or route.
+        let candidates = vec![
+            Candidate { source: Source::Mirror, route: Route::Direct, url: mirror.clone() },
+            Candidate { source: Source::Mirror, route: Route::System, url: mirror },
+            Candidate { source: Source::Github, route: Route::System, url: github },
+        ];
         Ok(Self { filename, sha256: hash, size, candidates })
     }
 }
@@ -96,6 +102,13 @@ fn client_builder() -> reqwest::ClientBuilder {
             if attempt.previous().len() >= 6 || !official_redirect(attempt.url()) { attempt.error("更新重定向地址无效") }
             else { attempt.follow() }
         }))
+}
+
+fn route_client_builder(route: Route) -> reqwest::ClientBuilder {
+    match route {
+        Route::Direct => client_builder().no_proxy(),
+        Route::System => client_builder(),
+    }
 }
 
 struct Failure { reason: Reason, message: String }
@@ -159,8 +172,8 @@ async fn attempt<F: FnMut(Transfer)>(
     Ok(())
 }
 
-async fn download_with_client<F: FnMut(Transfer) + Send>(
-    spec: &Spec, directory: &Path, client: &Client, policy: Policy, mut notify: F,
+async fn download_with_clients<F: FnMut(Transfer) + Send>(
+    spec: &Spec, directory: &Path, direct: &Client, system: &Client, policy: Policy, mut notify: F,
 ) -> Result<PathBuf, String> {
     let mut previous = None;
     let mut errors = Vec::new();
@@ -172,6 +185,7 @@ async fn download_with_client<F: FnMut(Transfer) + Send>(
         notify(Transfer { source: candidate.source, phase: "downloading", attempt: index + 1,
             progress: 0, downloaded: 0, total: spec.size, bytes_per_second: 0.0, reason: None });
         let partial = directory.join(format!("installer-{}.part", index + 1));
+        let client = match candidate.route { Route::Direct => direct, Route::System => system };
         let result = tokio::time::timeout(policy.total,
             attempt(spec, candidate, index, &partial, client, policy, &mut notify)).await
             .unwrap_or_else(|_| Err(Failure::new(Reason::Timeout, "下载总时长超限")));
@@ -196,8 +210,9 @@ async fn download_with_client<F: FnMut(Transfer) + Send>(
 }
 
 pub(crate) async fn download<F: FnMut(Transfer) + Send>(spec: &Spec, directory: &Path, notify: F) -> Result<PathBuf, String> {
-    let client = client_builder().build().map_err(|_| "无法创建更新下载连接")?;
-    download_with_client(spec, directory, &client, Policy::default(), notify).await
+    let direct = route_client_builder(Route::Direct).build().map_err(|_| "无法创建更新下载连接")?;
+    let system = route_client_builder(Route::System).build().map_err(|_| "无法创建更新下载连接")?;
+    download_with_clients(spec, directory, &direct, &system, Policy::default(), notify).await
 }
 
 #[cfg(test)]
@@ -252,18 +267,31 @@ mod tests {
         Mock { url, count, task }
     }
     fn candidates(spec: &mut Spec, first: &Mock, second: &Mock) {
-        spec.candidates[0].url = first.url.clone(); spec.candidates[1].url = second.url.clone();
+        // Never leave a real third candidate in an isolated mock test.
+        spec.candidates = vec![
+            Candidate { source: Source::Mirror, route: Route::Direct, url: first.url.clone() },
+            Candidate { source: Source::Github, route: Route::System, url: second.url.clone() },
+        ];
     }
     fn local_client() -> Client { Client::builder().no_proxy().build().unwrap() }
+    async fn download_with_client<F: FnMut(Transfer) + Send>(
+        spec: &Spec, directory: &Path, client: &Client, policy: Policy, notify: F,
+    ) -> Result<PathBuf, String> {
+        download_with_clients(spec, directory, client, client, policy, notify).await
+    }
 
     #[test]
     fn candidate_versions_and_integrity_are_fixed_before_network_access() {
         let body = bytes(); let s = spec(&body);
-        assert_eq!(s.candidates.len(), 2);
-        assert!(s.candidates[1].url.contains("/releases/download/v3.6.24/GeoDownloader_3.6.24_"));
-        let reverse = Spec::new(&s.candidates[1].url, "3.6.24", &s.sha256, s.size).unwrap();
-        assert_eq!(reverse.candidates[0].source, Source::Github);
-        assert_eq!(reverse.candidates[1].source, Source::Mirror);
+        assert_eq!(s.candidates.len(), 3);
+        assert_eq!(s.candidates[0].route, Route::Direct);
+        assert_eq!(s.candidates[1].route, Route::System);
+        assert_eq!(s.candidates[0].url, s.candidates[1].url);
+        assert!(s.candidates[2].url.contains("/releases/download/v3.6.24/GeoDownloader_3.6.24_"));
+        let reverse = Spec::new(&s.candidates[2].url, "3.6.24", &s.sha256, s.size).unwrap();
+        assert_eq!(reverse.candidates[0].source, Source::Mirror);
+        assert_eq!(reverse.candidates[0].route, Route::Direct);
+        assert_eq!(reverse.candidates[2].source, Source::Github);
         for url in ["https://laogao.xyz.evil.test/installer.exe", "http://laogao.xyz/packages/latest/installer.exe",
             "https://laogao.xyz/packages/latest/GeoDownloader_3.6.23_windows_x64-setup.exe"] {
             assert!(Spec::new(url, "3.6.24", &s.sha256, s.size).is_err());
@@ -293,6 +321,72 @@ mod tests {
         assert_eq!(events.last().unwrap().progress, 100);
         assert!(events.iter().filter(|e| e.phase != "installing").all(|e| e.progress < 100));
     }
+
+    #[tokio::test]
+    async fn domestic_direct_does_not_contact_the_configured_proxy() {
+        let body = bytes(); let mut s = spec(&body);
+        let origin = mock(body.clone(), Behavior::Fast).await;
+        let proxy = mock(body.clone(), Behavior::Rejected).await;
+        s.candidates[0].url = origin.url.clone();
+        let system = client_builder().no_proxy().proxy(reqwest::Proxy::all(&proxy.url).unwrap()).build().unwrap();
+        let direct = route_client_builder(Route::Direct).build().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = download_with_clients(&s, dir.path(), &direct, &system, policy(), |_| {}).await.unwrap();
+        assert_eq!(fs::read(path).unwrap(), body);
+        assert_eq!(origin.count.load(Ordering::SeqCst), 1);
+        assert_eq!(proxy.count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn failed_direct_recovers_through_proxy_to_the_same_domestic_url() {
+        let body = bytes(); let mut s = spec(&body);
+        let origin = mock(body.clone(), Behavior::Rejected).await;
+        let proxy = mock(body.clone(), Behavior::Fast).await;
+        s.candidates[0].url = origin.url.clone(); s.candidates[1].url = origin.url.clone();
+        let system = client_builder().no_proxy().proxy(reqwest::Proxy::all(&proxy.url).unwrap()).build().unwrap();
+        let dir = tempfile::tempdir().unwrap(); let mut events = vec![];
+        let path = download_with_clients(&s, dir.path(), &local_client(), &system, policy(), |e| events.push(e)).await.unwrap();
+        assert_eq!(fs::read(path).unwrap(), body);
+        assert_eq!(origin.count.load(Ordering::SeqCst), 1);
+        assert_eq!(proxy.count.load(Ordering::SeqCst), 1);
+        assert!(events.iter().any(|e| e.phase == "switching" && e.source == Source::Mirror && e.attempt == 2));
+        assert_eq!(events.last().unwrap().attempt, 2);
+    }
+
+    async fn three_routes(backup_behavior: Behavior, succeeds: bool) {
+        let body = bytes(); let mut s = spec(&body);
+        let origin = mock(body.clone(), Behavior::Rejected).await;
+        let domestic_proxy = mock(body.clone(), Behavior::Corrupt).await;
+        let github_proxy = mock(body.clone(), backup_behavior).await;
+        s.candidates[0].url = origin.url.clone(); s.candidates[1].url = origin.url.clone();
+        s.candidates[2].url = "http://github-update.test/installer".into();
+        let domestic_url = domestic_proxy.url.clone(); let github_url = github_proxy.url.clone();
+        let system = client_builder().no_proxy().proxy(reqwest::Proxy::custom(move |url| {
+            Some(if url.host_str() == Some("github-update.test") { github_url.clone() } else { domestic_url.clone() })
+        })).build().unwrap();
+        let dir = tempfile::tempdir().unwrap(); let mut events = vec![];
+        let result = download_with_clients(&s, dir.path(), &local_client(), &system, policy(), |e| events.push(e)).await;
+        assert_eq!(origin.count.load(Ordering::SeqCst), 1);
+        assert_eq!(domestic_proxy.count.load(Ordering::SeqCst), 1);
+        assert_eq!(github_proxy.count.load(Ordering::SeqCst), 1);
+        assert!(events.iter().any(|e| e.phase == "switching" && e.source == Source::Github
+            && e.attempt == 3 && e.reason == Some(Reason::Invalid)));
+        if succeeds {
+            assert_eq!(fs::read(result.unwrap()).unwrap(), body);
+            assert_eq!(events.last().unwrap().attempt, 3);
+            assert_eq!(events.last().unwrap().progress, 100);
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        } else {
+            assert!(result.unwrap_err().starts_with("UPDATE_SOURCES_FAILED:"));
+            assert!(events.iter().all(|e| e.progress < 100));
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn github_backup_retains_proxy_after_both_domestic_routes_fail() { three_routes(Behavior::Fast, true).await; }
+    #[tokio::test]
+    async fn all_three_routes_fail_without_installation_or_partial_files() { three_routes(Behavior::Corrupt, false).await; }
 
     async fn switches(behavior: Behavior, expected: Reason, p: Policy) {
         let body = bytes(); let mut s = spec(&body);
@@ -365,12 +459,79 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Bounded real installer route diagnostics; downloads only, never installs or changes proxy settings"]
+    async fn diagnose_real_installer_routes() {
+        let out = PathBuf::from(std::env::var("GEOD_UPDATE_QA_OUTPUT").expect("Set isolated QA output directory"));
+        fs::create_dir_all(&out).unwrap();
+        let version = "3.6.26";
+        let filename = format!("GeoDownloader_{version}_windows_x64-setup.exe");
+        let mirror = format!("https://laogao.xyz/packages/latest/{filename}");
+        let origin = format!("https://laogao.xyz/packages/v{version}/{filename}");
+        let cdn = format!("https://download.laogao.xyz/agent-updates/windows-x86_64/{version}/{filename}");
+        async fn probe(label: &'static str, client: Client, url: String) -> serde_json::Value {
+            let started = Instant::now();
+            let response = tokio::time::timeout(Duration::from_secs(10), client.get(&url).header("User-Agent", "GeoDownloader").send()).await;
+            let mut response = match response {
+                Ok(Ok(response)) => response,
+                _ => return serde_json::json!({"route":label,"failed":"headers","seconds":started.elapsed().as_secs_f64()}),
+            };
+            let status = response.status().as_u16(); let protocol = format!("{:?}", response.version());
+            let peer = response.remote_addr().map(|value| value.to_string());
+            let host = response.url().host_str().map(str::to_owned);
+            let expected = response.content_length(); let mut received = 0u64; let mut hash = Sha256::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+            loop {
+                match tokio::time::timeout_at(deadline, response.chunk()).await {
+                    Ok(Ok(Some(bytes))) => { received += bytes.len() as u64; hash.update(&bytes); }
+                    _ => break,
+                }
+            }
+            let seconds = started.elapsed().as_secs_f64();
+            serde_json::json!({"route":label,"status":status,"protocol":protocol,"peer":peer,"host":host,
+                "expected":expected,"received":received,"seconds":seconds,"bytes_per_second":received as f64 / seconds.max(0.001),
+                "complete":status==200 && expected==Some(received),"sha256":if status==200 && expected==Some(received){Some(format!("{:x}",hash.finalize()))}else{None},
+                "installerLaunched":false,"globalProxyChanged":false})
+        }
+        let routes = [
+            ("legacy-default", Client::new(), mirror.clone()),
+            ("updater-default", client_builder().build().unwrap(), mirror.clone()),
+            ("updater-direct", client_builder().no_proxy().build().unwrap(), mirror.clone()),
+            ("updater-direct-http1", client_builder().no_proxy().http1_only().build().unwrap(), mirror),
+            ("cdn-direct-http1", client_builder().no_proxy().http1_only().build().unwrap(), cdn),
+            ("origin-direct", client_builder().no_proxy().build().unwrap(), origin),
+        ];
+        let jobs = routes.into_iter().map(|(label,client,url)| tokio::spawn(probe(label,client,url))).collect::<Vec<_>>();
+        let mut results = Vec::new();
+        for job in jobs { let result = job.await.unwrap(); println!("{}", result); results.push(result); }
+        fs::write(out.join("route-diagnostics.json"), serde_json::to_vec_pretty(&results).unwrap()).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "Real production downloader with current system proxy; verifies package without launching installer"]
+    async fn live_production_route_download_without_installation() {
+        let out = PathBuf::from(std::env::var("GEOD_UPDATE_QA_OUTPUT").expect("Set isolated QA output directory"));
+        fs::create_dir_all(&out).unwrap();
+        let s = Spec::new("https://laogao.xyz/packages/latest/GeoDownloader_3.6.26_windows_x64-setup.exe",
+            "3.6.26", "9ce801593e4331459e4972a9be6fc2595fcb653f46e6e4f65a417ce8976c3307", 10606568).unwrap();
+        let dir = tempfile::tempdir().unwrap(); let mut events = vec![]; let started = Instant::now();
+        let path = download(&s, dir.path(), |e| events.push(e)).await.unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), s.size);
+        assert_eq!(format!("{:x}", Sha256::digest(fs::read(&path).unwrap())), s.sha256);
+        assert_eq!(events.last().unwrap().progress, 100);
+        let receipt = serde_json::json!({"passed":true,"seconds":started.elapsed().as_secs_f64(),
+            "bytes":s.size,"sha256":s.sha256,"events":events,"installerLaunched":false,"globalProxyChanged":false});
+        println!("{}", receipt);
+        fs::write(out.join("production-route.json"), serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    }
+
+    #[tokio::test]
     #[ignore = "Downloads the real public installer through a controlled slow-primary failover; never installs"]
     async fn live_slow_primary_to_verified_official_backup() {
         let out = PathBuf::from(std::env::var("GEOD_UPDATE_QA_OUTPUT").expect("Set isolated QA output directory"));
         fs::create_dir_all(&out).unwrap();
         let mut s = Spec::new("https://laogao.xyz/packages/latest/GeoDownloader_3.6.24_windows_x64-setup.exe",
             "3.6.24", "230762542abecb8856910424be726b326e451947fe0428c9a8ad520af2b41b05", 10505425).unwrap();
+        s.candidates.remove(1); // This test specifically exercises domestic -> GitHub.
         let primary = mock(vec![0; s.size as usize], Behavior::Slow).await;
         s.candidates[0].url = primary.url.clone();
         let proxy = std::env::var("GEOD_UPDATE_QA_PROXY").expect("Set the existing local proxy for GitHub, mock stays direct");
