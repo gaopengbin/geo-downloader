@@ -4,6 +4,8 @@ import type { ComponentType, SVGProps } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { AppShell } from '@/components/layout/app-shell'
+import { SidebarResizeHandle } from '@/components/layout/sidebar-resize-handle'
+import { clampSidebarWidth, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '@/components/layout/sidebar-width'
 import { MapStatusBar } from '@/components/layout/map-status-bar'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { AssistantButton } from '@/features/assistant/assistant-button'
@@ -140,26 +142,8 @@ function App() {
   const trackedTabRef = useRef<SidebarTab | null>(null)
 
   // 侧边栏拖拽宽度
-  const [sidebarWidth, setSidebarWidth] = useState(380)
-  const draggingRef = useRef(false)
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!draggingRef.current) return
-      const w = Math.max(280, Math.min(600, e.clientX))
-      setSidebarWidth(w)
-    }
-    const onUp = () => {
-      draggingRef.current = false
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [])
+  const [requestedSidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
+  const sidebarWidth = clampSidebarWidth(requestedSidebarWidth)
 
   // 启动后静默检查一次更新
   useEffect(() => {
@@ -299,8 +283,9 @@ function App() {
         <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* 左侧控制面板 */}
         <aside
+          id="workspace-sidebar"
           className="flex h-full shrink-0 flex-col border-r bg-background"
-          style={{ width: sidebarWidth }}
+          style={{ width: sidebarWidth, minWidth: SIDEBAR_MIN_WIDTH, maxWidth: SIDEBAR_MAX_WIDTH }}
         >
           {/* Tab 头 */}
           <div
@@ -386,22 +371,11 @@ function App() {
         <TelemetryBootstrap />
 
         {/* 拖拽条 */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          className="group relative h-full w-1 shrink-0 cursor-col-resize bg-border/40 transition-colors hover:bg-primary"
-          onMouseDown={() => {
-            draggingRef.current = true
-            document.body.style.cursor = 'col-resize'
-            document.body.style.userSelect = 'none'
-          }}
-        >
-          <div className="absolute inset-y-0 -left-1 -right-1" />
-        </div>
+        <SidebarResizeHandle width={sidebarWidth} onWidthChange={setSidebarWidth}/>
 
         {/* 右侧地图：Leaflet（默认）与 Cesium（3D Tiles 模式）同时挂载，按 mode CSS 切换显隐 */}
         {/* 将地图浮层限制在工作区内，避免时间轴和预览提示越过全局弹窗的遮罩。 */}
-        <main className="relative isolate h-full flex-1" data-tour="map-canvas">
+        <main className="relative isolate h-full min-w-0 flex-1" data-tour="map-canvas">
           <div
             className="absolute inset-0"
             style={{ display: mode === 'tiles3d' ? 'none' : 'block' }}

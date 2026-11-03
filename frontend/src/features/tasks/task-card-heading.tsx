@@ -12,7 +12,7 @@ export function TaskCardHeading({ title, status, statusTitle, source, zoom, sele
   return <div className="min-w-0 space-y-1.5" data-task-card-heading>
     <div className="flex min-w-0 items-start gap-2">
       {selection && <div className="flex shrink-0 items-center pt-0.5">{selection}</div>}
-      <p data-task-card-title className="min-w-0 flex-1 line-clamp-2 font-medium leading-5 [overflow-wrap:anywhere]" title={title}>{title}</p>
+      <p data-task-card-title className="min-w-0 flex-1 truncate font-medium leading-5" title={title}>{title}</p>
       <div data-task-card-status title={statusTitle} className="max-w-[45%] shrink-0 pt-0.5 [&>*]:block [&>*]:max-w-full [&>*]:truncate [&>*]:px-1.5 [&>*]:py-0 [&>*]:text-[11px] [&>*]:leading-5">{status}</div>
     </div>
     {(source || (typeof zoom === 'number' && zoom > 0)) && <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground" data-task-card-source>

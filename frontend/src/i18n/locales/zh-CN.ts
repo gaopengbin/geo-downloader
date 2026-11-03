@@ -1,4 +1,8 @@
 const zhCN = {
+  layout: {
+    resizeSidebar: '调整侧栏宽度',
+    sidebarResizeHint: '拖动调整侧栏宽度（{{min}}–{{max}} px），或使用方向键；双击恢复默认宽度。',
+  },
   notifications: {
     "guest": "公共公告 · 已读状态保存在本机",
   "title": "消息中心",

@@ -262,7 +262,7 @@ function HistoryCard({
         {formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}
       </p>}
 
-      {isFailed && record.error && <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]">{String(record.error)}</p>}
+      {isFailed && record.error && <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={String(record.error)}>{String(record.error)}</p>}
       {filePath && <OutputLocation path={filePath} saved={!isFailed}
         strictFile={record.source === 'osm_vector' || String(record.format) === 'geojson'}/>}
 

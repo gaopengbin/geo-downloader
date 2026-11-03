@@ -1,4 +1,8 @@
 const enUS = {
+  layout: {
+    resizeSidebar: 'Resize sidebar',
+    sidebarResizeHint: 'Drag to resize ({{min}}–{{max}} px), or use arrow keys. Double-click to reset.',
+  },
   notifications: {
     "guest": "Public notices · Read status saved on this device",
   "title": "Message center",

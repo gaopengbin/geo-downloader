@@ -363,7 +363,7 @@ function TaskRow({
           </p>
         )}
         {task.error && (
-          <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={task.error}>
+          <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={task.error}>
             {task.error}
           </p>
         )}

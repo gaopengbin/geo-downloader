@@ -1,6 +1,6 @@
 // Actual task/history components. Native task operations and paths are isolated
 // samples: no real jobs, clipboard, output files or Explorer windows are touched.
-import { StrictMode } from 'react'
+import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'sonner'
@@ -8,6 +8,8 @@ import type { TaskInfo, PersistedTask, DownloadHistoryRecord } from '../src/type
 import { initializeI18n, changeAppLanguage } from '../src/i18n'
 import { ThemeProvider } from '../src/components/theme/theme-provider'
 import { PanelSection } from '../src/components/layout/panel-section'
+import { SidebarResizeHandle } from '../src/components/layout/sidebar-resize-handle'
+import { clampSidebarWidth, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH } from '../src/components/layout/sidebar-width'
 import { History, ClipboardList } from 'lucide-react'
 import { useTelemetryStore } from '../src/features/telemetry/telemetry-store'
 import '@fontsource-variable/geist/index.css'
@@ -66,18 +68,30 @@ Object.assign(window,{__TAURI_EVENT_PLUGIN_INTERNALS__:{unregisterListener:()=>{
 const {TasksPanel}=await import('../src/features/tasks/tasks-panel')
 const {HistoryPanel}=await import('../src/features/history/history-panel')
 const client=new QueryClient({defaultOptions:{queries:{retry:false,refetchOnWindowFocus:false}}})
+function ResizeExample(){
+ const [requested,setWidth]=useState(SIDEBAR_DEFAULT_WIDTH)
+ const width=clampSidebarWidth(requested)
+ return <div className="flex min-h-0 flex-1 overflow-hidden">
+  <aside id="workspace-sidebar" data-resize-sidebar style={{width,minWidth:SIDEBAR_MIN_WIDTH,maxWidth:SIDEBAR_MAX_WIDTH}} className="h-full shrink-0 space-y-3 overflow-y-auto border-r p-3">
+   <PanelSection icon={ClipboardList} title="任务" description="下载进度 / 失败原因 / 保存位置"><TasksPanel/></PanelSection>
+   <PanelSection icon={History} title="历史记录" description="已完成 / 失败 / 已删除"><HistoryPanel/></PanelSection>
+  </aside>
+  <SidebarResizeHandle width={width} onWidthChange={setWidth}/>
+  <div className="min-w-0 flex-1 bg-muted/20 p-4 text-sm">独立验证区域 · 当前侧栏 <output data-resize-width>{width}</output>px（最小 {SIDEBAR_MIN_WIDTH}px）<output id="receipt" className="mt-3 block break-all text-xs">尚未操作</output></div>
+ </div>
+}
 createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProvider client={client}><ThemeProvider>
  <div className="fixed inset-0 flex flex-col">
   <header className="flex shrink-0 flex-wrap items-center gap-4 border-b p-3 text-xs">
    <span>下载卡片布局验证 · 模拟任务与路径，不操作真实文件</span>
-   <a href="?">常规样例</a><a href="?stress">压力样例</a><a href="?stress&en&dark">English / Dark</a>
+   <a href="?">常规样例</a><a href="?stress">压力样例</a><a href="?stress&en&dark">English / Dark</a><a href="?resize&stress">拖拽宽度验证</a>
   </header>
-  <main className="min-h-0 flex-1 overflow-auto"><div className="flex items-start gap-4 p-4">
-   {(query.has('single')?[Number(query.get('single'))]:[280,320,400]).map(width=><section key={width} data-panel-width={width} className="shrink-0 space-y-3" style={{width}}>
+  {query.has('resize')?<ResizeExample/>:<main className="min-h-0 flex-1 overflow-auto"><div className="flex items-start gap-4 p-4">
+   {(query.has('single')?[Number(query.get('single'))]:[380,480]).map(width=><section key={width} data-panel-width={width} className="shrink-0 space-y-3" style={{width}}>
     <h2 className="text-xs font-medium text-muted-foreground">侧栏内容宽度 {width}px</h2>
     <PanelSection icon={ClipboardList} title={query.has('en')?'Tasks':'任务'} description={query.has('en')?'Progress / Failures / Output':'下载进度 / 失败原因 / 保存位置'}><TasksPanel/></PanelSection>
     <PanelSection icon={History} title={query.has('en')?'History':'历史记录'} description={query.has('en')?'Completed / Failed':'已完成 / 失败 / 已删除'}><HistoryPanel/></PanelSection>
    </section>)}
-  </div><output id="receipt" className="m-4 block max-w-3xl break-all text-[10px]">尚未操作</output></main>
+  </div><output id="receipt" className="m-4 block max-w-3xl break-all text-[10px]">尚未操作</output></main>}
  </div><Toaster/>
 </ThemeProvider></QueryClientProvider></StrictMode>)
