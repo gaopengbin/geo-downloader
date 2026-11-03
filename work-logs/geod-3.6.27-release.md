@@ -15,3 +15,14 @@
 本机已有 3.6.26 安装窗口保持不动。旧客户端二进制不能由服务器清单远程修改，新线路策略在升级到 3.6.27 后生效。发布保持不可变 tag、五包完整校验、固定主机密钥上传、服务端复核、原子激活和回滚流程；不更新 GeoD Agent 索引或发送额外应用内通知。
 
 本次证据目录：`G:/code/tif-downloader/artifacts/updater-speed-20261103/` 与 `G:/code/tif-downloader/artifacts/geod-3.6.27-release/`。
+
+## 已验证交付
+
+- 不可变源码及 tag：`b5c3b7e9fe6eeb35fb3ae67a5449c70db81ac53d` / `v3.6.27`，Release run `41656146598` 四平台成功，两个 macOS 签名检查成功。发布校验 6 项、更新清单校验 5 项通过。
+- 正式发布页：https://github.com/gaopengbin/geo-downloader/releases/tag/v3.6.27 。公开 latest、canonical 页面、五个附件的名称、大小和 SHA-256 均核对通过。
+- Windows 安装包 10,641,233 字节，SHA-256 `65d877eec4b19287e79540de1bd6199f6cca8e13aaf6ce9c7c493ef2c1555930`，内嵌版本 3.6.27，归档校验通过。公网国内直连回读约 1.56 秒；同步器使用系统代理读取同一包约 41.01 秒，均完整校验。未执行安装器。
+- 国内镜像原子切换为 `/srv/laogao/packages/v3.6.27`，回滚 `/srv/laogao/packages/v3.6.26`，备份 `/srv/laogao/backups/geod-mirror-3627-20261103`。五包完整公网回读均成功，发布页不使用临时 untagged 地址。
+- Windows 精确 URL 重定向到已完整哈希及 Range 校验的不可变 CDN 对象，保留旧地址；Nginx 备份 `/srv/laogao/backups/geod-legacy-cdn-20261103-150603/portfolio-direct.conf`，校验并平滑重载成功。GeoD Agent latest 索引字节未变，采集服务和数据库未修改。
+- 官网源码 `dd43a2ff86073c67a53f01c467de553b4ea2a1fa`，腾讯云四个桌面路由及版本信息已回读确认 3.6.27，40 个非桌面文档哈希保留。官网回滚为 `/srv/laogao/releases/geod-website/geod-website-desktop-3626-20261103`。
+- Cloudflare Pages run `41661066077` 成功，使用同一官网源码提交。
+- 发布检查补充 Windows 原生请求库在现有系统代理下的真实验收与直连/代理速度对比，避免再次仅据直连 HTTP 速度判断客户端更新体验。
