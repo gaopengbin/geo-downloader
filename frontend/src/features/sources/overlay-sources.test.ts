@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { moveOverlay, overlayCandidates, rememberedOverlayIds, validOverlayIds } from './overlay-sources.ts'
+import { enabledOverlayIds, normalizeOverlaySelection, reorderOverlaySelection, restoreOverlaySelections } from './layer-selection.ts'
 
 const sources = {
   base: { name: 'Imagery', url: 'https://test.invalid/{z}/{x}/{y}.png' },
@@ -37,4 +38,33 @@ test('reordering preserves all IDs and the original selection', () => {
   assert.deepEqual(original, ['label', 'custom_roads'])
   assert.deepEqual(moveOverlay(original, 0, 1), ['custom_roads', 'label'])
   assert.equal(moveOverlay(original, 0, -1), original)
+})
+
+test('upgrading preserves download intent, including explicit empty lists, before preview preferences', () => {
+  const restored = restoreOverlaySelections({ selectedSourceByMode: { imagery: 'base' }, overlayVisibilityByMode: {
+    imagery: { cia: true }, wayback: { cva: true, custom_roads: false }, dem: { cia: true },
+  } }, { overlaySourcesByMode: { imagery: ['label', 'custom_roads', 'base'], dem: [] } })
+  assert.deepEqual(restored.imagery, [{ sourceId: 'label', visible: true }, { sourceId: 'custom_roads', visible: true }])
+  assert.deepEqual(restored.dem, [])
+  assert.deepEqual(restored.wayback, [{ sourceId: 'tianditu_vector_label', visible: true }, { sourceId: 'custom_roads', visible: false }])
+})
+
+test('canonical empty selections never resurrect stale legacy preferences on restart', () => {
+  assert.deepEqual(restoreOverlaySelections({ overlayLayersByMode: { imagery: [] }, overlayVisibilityByMode: { imagery: { cia: true } } },
+    { overlaySourcesByMode: { imagery: ['label'] } }).imagery, [])
+})
+
+test('reorder preserves hidden layers, numeric source ordering and immutable snapshots', () => {
+  const current = [{ sourceId: '10', visible: false }, { sourceId: '2', visible: true }]
+  const updated = reorderOverlaySelection(current, ['2', 'new', '10', '2'])
+  assert.deepEqual(updated, [{ sourceId: '2', visible: true }, { sourceId: 'new', visible: true }, { sourceId: '10', visible: false }])
+  assert.deepEqual(current, [{ sourceId: '10', visible: false }, { sourceId: '2', visible: true }])
+  assert.deepEqual(normalizeOverlaySelection(updated, '2'), [{ sourceId: 'new', visible: true }, { sourceId: '10', visible: false }])
+})
+
+test('map and task use the same visible raster stack, excluding base, stale and unsupported layers', () => {
+  const selection = normalizeOverlaySelection([{ sourceId: 'label', visible: false }, 'custom_roads', 'vector', 'missing', 'base'])
+  assert.deepEqual(enabledOverlayIds(selection, sources, 'base'), ['custom_roads'])
+  const enabled = selection.map((entry) => entry.sourceId === 'label' ? { ...entry, visible: true } : entry)
+  assert.deepEqual(enabledOverlayIds(enabled, sources, 'base'), ['label', 'custom_roads'])
 })

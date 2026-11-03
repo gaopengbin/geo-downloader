@@ -24,6 +24,10 @@ import { PanelSection } from '@/components/layout/panel-section'
 import { StatCard } from '@/components/layout/stat-card'
 import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
+import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { enabledOverlayIds } from '@/features/sources/layer-selection'
+import { SharedOverlayPicker } from '@/features/sources/shared-overlay-picker'
 import { estimateDownload } from '@/features/download/download-api'
 import { buildSelectionCropPolygon } from '@/features/download/crop-utils'
 import {
@@ -118,7 +122,7 @@ export function WaybackPage() {
     const state = useWaybackStore.getState()
     const current = useAppStore.getState().selectedSourceByMode.wayback
     if (state.provider !== 'esri' && current && matchesHistoricalProvider(current, state.provider)) state.rememberSource(state.provider, current)
-    if (next !== 'esri') useAppStore.getState().setSelectedSourceForMode('wayback', state.sourceByProvider[next] ?? null)
+    useAppStore.getState().setSelectedSourceForMode('wayback', next === 'esri' ? 'esri_wayback' : state.sourceByProvider[next] ?? null)
     state.setProvider(next)
   }
   const historySelector = <PanelSection icon={History} title={t('wayback.sources.title')} description={t('wayback.sources.description')}>
@@ -139,6 +143,7 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
   const { t, i18n } = useTranslation()
   const inTauri = isTauriRuntime()
   const qc = useQueryClient()
+  useEffect(() => { useAppStore.getState().setSelectedSourceForMode('wayback', 'esri_wayback') }, [])
 
   const bounds = useSelectionStore((s) => s.bounds)
   const polygon = useSelectionStore((s) => s.polygon)
@@ -188,6 +193,8 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
     queryFn: getSettings,
     enabled: inTauri,
   })
+  const overlayToken = primaryTiandituToken(settingsQuery.data)
+  const overlaySources = useQuery({ queryKey: ['tile-sources-merged', overlayToken], queryFn: () => getTileSourcesMerged(overlayToken), enabled: inTauri })
   // 全局并发统一从设置中获取（不在面板中暴露调节器）
   useEffect(() => {
     const c = settingsQuery.data?.default_concurrency
@@ -368,7 +375,8 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
         proxy,
         polygon: cropPolygon,
         crop_to_shape: cropPolygon != null,
-        tianditu_token: null,
+        tianditu_token: overlayToken,
+        overlay_sources: enabledOverlayIds(useAppStore.getState().overlayLayersByMode.wayback ?? [], overlaySources.data ?? {}, 'esri_wayback'),
         compression: format === 'geotiff' ? compression : 'none',
         build_pyramid: format === 'geotiff' && buildPyramid,
         generate_sidecars: format === 'geotiff' && generateSidecars,
@@ -409,6 +417,7 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
       const cropPolygon = buildSelectionCropPolygon(bounds, polygon, effectiveCropToShape)
 
       let created = 0
+      const overlays = enabledOverlayIds(useAppStore.getState().overlayLayersByMode.wayback ?? [], overlaySources.data ?? {}, 'esri_wayback')
       for (const v of versions) {
         const filename = `wayback_${v.date}_${zLabel}_${timestampNow()}.${ext}`
         const savePath = joinPath(dir, filename)
@@ -424,7 +433,8 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
           proxy,
           polygon: cropPolygon,
           crop_to_shape: cropPolygon != null,
-          tianditu_token: null,
+          tianditu_token: overlayToken,
+          overlay_sources: overlays,
           compression: format === 'geotiff' ? compression : 'none',
           build_pyramid: format === 'geotiff' && buildPyramid,
           generate_sidecars: format === 'geotiff' && generateSidecars,
@@ -926,6 +936,10 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
           </p>
         </div>
 
+        {wbMode === 'incremental' ? <p className="text-xs text-muted-foreground">{t('overlays.incrementalHint')}</p>
+          : <div className="space-y-2"><Label className="text-xs">{t('download.output.overlays')}</Label>
+              <SharedOverlayPicker mode="wayback" sources={overlaySources.data ?? {}} baseId="esri_wayback"/>
+            </div>}
         <Separator />
 
         <Tabs value={wbMode} onValueChange={(v) => changeMode(v as WbMode)}>
@@ -942,7 +956,7 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
               size="sm"
               className="w-full"
               onClick={() => singleMutation.mutate()}
-              disabled={singleMutation.isPending || !bounds || !versionId}
+              disabled={singleMutation.isPending || !bounds || !versionId || !overlaySources.data}
             >
               {singleMutation.isPending ? (
                 <Loader2 className="mr-1 size-3.5 animate-spin" />
@@ -997,7 +1011,7 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
               size="sm"
               className="w-full"
               onClick={() => batchMutation.mutate()}
-              disabled={batchMutation.isPending || batchSelected.size === 0 || !bounds}
+              disabled={batchMutation.isPending || batchSelected.size === 0 || !bounds || !overlaySources.data}
             >
               {batchMutation.isPending ? (
                 <Loader2 className="mr-1 size-3.5 animate-spin" />

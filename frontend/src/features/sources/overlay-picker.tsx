@@ -3,17 +3,21 @@ import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import { SourcesDialog } from './sources-dialog'
 import { moveOverlay, overlayCandidates } from './overlay-sources'
 import type { TileSource } from '@/types/api'
 import { trackTelemetry, telemetryCountBucket } from '@/features/telemetry/telemetry-client'
+import type { OverlaySelection } from './layer-selection'
 
-export function OverlayPicker({ sources, value, onChange, baseId, target = 'download' }: {
+export function OverlayPicker({ sources, value, onChange, baseId, target = 'download', selection, onVisibilityChange }: {
   sources: Record<string, TileSource>
   value: string[]
   onChange: (ids: string[]) => void
   baseId?: string | null
   target?: 'preview' | 'download'
+  selection?: OverlaySelection[]
+  onVisibilityChange?: (id: string, visible: boolean) => void
 }) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
@@ -29,6 +33,9 @@ export function OverlayPicker({ sources, value, onChange, baseId, target = 'down
     <p className="text-xs text-muted-foreground">{t('overlays.configureHint')}</p>
     {value.length > 0 && <ol className="space-y-1" aria-label={t('overlays.selected')}>
       {value.map((id, index) => <li key={id} data-overlay-id={id} className="flex items-center gap-1 rounded-md border p-2 text-xs">
+        {onVisibilityChange && <Checkbox checked={selection?.find((entry) => entry.sourceId === id)?.visible !== false}
+          disabled={!eligible.has(id)} aria-label={t('overlays.visibility', { name: sources[id]?.name ?? id })}
+          onChange={(event) => onVisibilityChange(id, event.target.checked)}/>}
         <span className="mr-1 text-muted-foreground">{index + 1}</span>
         <div className="min-w-0 flex-1">
           <p className="break-words font-medium">{sources[id]?.name ?? id}</p>

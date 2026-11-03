@@ -28,7 +28,7 @@ const receipt = { saves: 0, requests: [] as { id: string; z: number; x: number; 
 function updateReceipt() {
   const node = document.getElementById('receipt')
   if (node) node.textContent = JSON.stringify({ ...receipt, requests: receipt.requests.slice(-15), totalRequests: receipt.requests.length,
-    remembered: useAppStore.getState().overlayVisibilityByMode, customCount: settings.custom_sources?.length ?? 0 })
+    remembered: useAppStore.getState().overlayLayersByMode, customCount: settings.custom_sources?.length ?? 0 })
 }
 Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} }, __TAURI_INTERNALS__: {
   transformCallback: () => 0, unregisterCallback: () => {},
@@ -55,7 +55,7 @@ Object.assign(window, { __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: 
   },
 } })
 if (!location.search.includes('restore')) useAppStore.setState({ mode: 'imagery', selectedSourceByMode: { imagery: 'fixture_base', wayback: 'fixture_base' },
-  overlayVisibilityByMode: { imagery: { cia: true }, wayback: {} } })
+  overlayLayersByMode: { imagery: [{ sourceId: 'tianditu_satellite_label', visible: true }], wayback: [] } })
 useTelemetryStore.setState({ consent: 'disabled', noticeAcknowledgedVersion: 999 })
 useWaybackStore.setState({ provider: 'esri', previewVersionId: null })
 const { MapCanvas } = await import('../src/features/map/map-canvas')

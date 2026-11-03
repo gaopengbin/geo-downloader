@@ -29,6 +29,8 @@ import { useAppStore } from '@/store/app-store'
 import { useSelectionStore } from '@/store/selection-store'
 import { createDownloadTask } from '@/features/download/download-api'
 import { getSettings } from '@/features/settings/settings-api'
+import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { enabledOverlayIds } from '@/features/sources/layer-selection'
 import {
   focusImagerySourcePicker,
   requestOsmDownloadApproval,
@@ -115,10 +117,25 @@ export function BatchDialog() {
   // === 批量下载 ===
   const startBatch = async () => {
     if (!features || selected.size === 0) return
-    if (!params.ready || !params.source) {
+    const snapshot = useImageryParamsStore.getState()
+    const shared = useAppStore.getState()
+    if (!snapshot.ready || !snapshot.source) {
       toast.error(t('batch.toast.missingParams'))
       return
     }
+    const settings = await loadCurrentSettings().catch(() => null)
+    const tiandituToken = primaryTiandituToken(settings)
+    const sources = await getTileSourcesMerged(tiandituToken).catch(() => null)
+    if (!sources) { toast.error(t('download.toast.createError', { message: t('overlays.loadError') })); return }
+    const source = shared.mode === 'imagery' || shared.mode === 'wayback'
+      ? shared.selectedSourceByMode[shared.mode] ?? snapshot.source : snapshot.source
+    if (!sources[source] || (shared.mode === 'wayback' && snapshot.source !== source)) {
+      toast.error(t('batch.toast.missingParams')); return
+    }
+    const params = { ...snapshot, source, sourceName: sources[source].name,
+      sourceUrl: sources[source].url ?? sources[source].url_template ?? snapshot.sourceUrl }
+    const overlays = (shared.mode === 'imagery' || shared.mode === 'wayback') && params.format !== 'pbf'
+      ? enabledOverlayIds(shared.overlayLayersByMode[shared.mode] ?? [], sources, source) : []
 
     const policyDecision = await requestOsmDownloadApproval(
       params.source,
@@ -144,10 +161,8 @@ export function BatchDialog() {
     }
     if (!dir) return
 
-    const settings = await loadCurrentSettings().catch(() => null)
     const proxy =
       settings?.proxy_enabled && settings.proxy_url ? settings.proxy_url : null
-    const tiandituToken = primaryTiandituToken(settings)
 
     const indices = Array.from(selected).sort((a, b) => a - b)
     const ext =
@@ -209,6 +224,7 @@ export function BatchDialog() {
         compression: params.format === 'geotiff' ? params.compression : 'none',
         build_pyramid: params.format === 'geotiff' && params.buildPyramid,
         generate_sidecars: params.format === 'geotiff' && params.generateSidecars,
+        overlay_sources: overlays.length ? overlays : null,
       }
       try {
         await createDownloadTask(request, task.filename, params.sourceName || params.source)

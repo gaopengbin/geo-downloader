@@ -12,6 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { PanelSection } from '@/components/layout/panel-section'
 import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
+import { primaryTiandituToken } from '@/features/settings/tianditu-tokens'
+import { getTileSourcesMerged } from '@/features/sources/sources-api'
+import { enabledOverlayIds } from '@/features/sources/layer-selection'
+import { SharedOverlayPicker } from '@/features/sources/shared-overlay-picker'
 import { createDownloadTask } from '@/features/download/download-api'
 import { buildSelectionCropPolygon } from '@/features/download/crop-utils'
 import { useSelectionStore } from '@/store/selection-store'
@@ -44,7 +48,8 @@ export function EarthHistoryPage({ historySelector }: { historySelector?: ReactN
   const progressRef = useRef<HTMLDivElement>(null)
   const settings = useQuery({ queryKey: ['settings'], queryFn: getSettings })
   const proxyKey = settings.data?.proxy_enabled ? settings.data.proxy_url : null
-  const token = settings.data?.tianditu_token ?? null
+  const token = primaryTiandituToken(settings.data)
+  const overlaySources = useQuery({ queryKey: ['tile-sources-merged', token], queryFn: () => getTileSourcesMerged(token) })
   const viewKey = view ? keyholeViewKey(view) : ''
   useEffect(() => { const timer = setTimeout(() => setSettledView(useWaybackStore.getState().earthView), 350); return () => clearTimeout(timer) }, [viewKey])
   const dates = useQuery<KeyholeCatalog>({
@@ -80,6 +85,7 @@ export function EarthHistoryPage({ historySelector }: { historySelector?: ReactN
     onMutate: () => setDownloadTaskId(null),
     mutationFn: async () => {
       if (!preview || !bounds || preview.requestedDate !== selectedDate) throw new Error(t('wayback.errors.selectRegion'))
+      const overlays = enabledOverlayIds(useAppStore.getState().overlayLayersByMode.wayback ?? [], overlaySources.data ?? {}, preview.source.id)
       const date = selectedDate
       let destination = savePath.trim()
       if (!destination) {
@@ -91,7 +97,8 @@ export function EarthHistoryPage({ historySelector }: { historySelector?: ReactN
       const extension = format === 'geotiff' ? 'tif' : 'png'
       if (!destination.toLowerCase().endsWith(`.${extension}`)) destination = `${destination.replace(/[\\/]$/, '')}${destination.includes('\\') ? '\\' : '/'}Earth_${date}_z${zoom}_${Date.now()}.${extension}`
       return createDownloadTask({ source: preview.source.id, bounds, zoom, zoom_levels: [zoom], zoom_max: null,
-        format, save_path: destination, concurrency: 2, proxy: proxyKey ?? null, tianditu_token: null,
+        format, save_path: destination, concurrency: 2, proxy: proxyKey ?? null, tianditu_token: token,
+        overlay_sources: overlays.length ? overlays : null,
         crop_to_shape: true, polygon: buildSelectionCropPolygon(bounds, polygon, true), compression: 'lzw',
         build_pyramid: false, generate_sidecars: format === 'geotiff' }, `Google Earth ${date} z${zoom}`, preview.source.name)
     },
@@ -145,11 +152,14 @@ export function EarthHistoryPage({ historySelector }: { historySelector?: ReactN
         <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent><SelectItem value="geotiff">GeoTIFF (.tif)</SelectItem><SelectItem value="png">PNG (.png)</SelectItem></SelectContent>
       </Select>
+      <div className="space-y-2"><Label className="text-xs">{t('download.output.overlays')}</Label>
+        <SharedOverlayPicker mode="wayback" sources={overlaySources.data ?? {}} baseId={preview?.source.id}/>
+      </div>
       <Label htmlFor="earth-save-path" className="text-xs">{t('download.output.saveDirectory')}</Label>
       <div className="flex gap-2"><Input id="earth-save-path" value={savePath} onChange={(event) => setSavePath(event.target.value)} />
         <Button variant="outline" size="icon" title={t('download.output.chooseDirectory')} onClick={async () => { const result = await open({ directory: true }); if (result) setSavePath(result as string) }}><FolderOpen className="size-4" /></Button>
       </div>
-      <Button className="w-full" disabled={!preview || !bounds || download.isPending} onClick={() => download.mutate()} data-agent-target="earth-create-download">
+      <Button className="w-full" disabled={!preview || !bounds || download.isPending || !overlaySources.data} onClick={() => download.mutate()} data-agent-target="earth-create-download">
         {download.isPending ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}{t('download.output.create')}
       </Button>
       {downloadTask && <div ref={progressRef} className="space-y-1.5 rounded-md border px-3 py-2" data-agent-target="earth-download-progress" data-task-id={downloadTask.id} data-task-status={downloadTask.status}>

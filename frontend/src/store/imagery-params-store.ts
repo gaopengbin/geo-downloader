@@ -25,9 +25,6 @@ interface ImageryParamsState extends ImageryParamsSnapshot {
   /** 按 mode 记忆的缩放级别 */
   zoomLevelsByMode: Partial<Record<ImageryMode, number[]>>
   setZoomLevelsForMode: (mode: ImageryMode, levels: number[]) => void
-  /** 按 mode 记忆的叠加图层 */
-  overlaySourcesByMode: Partial<Record<ImageryMode, string[]>>
-  setOverlaySourcesForMode: (mode: ImageryMode, ids: string[]) => void
   /** 按 mode 记忆的保存目录 */
   savePathByMode: Partial<Record<ImageryMode, string>>
   setSavePathForMode: (mode: ImageryMode, path: string) => void
@@ -54,11 +51,6 @@ export const useImageryParamsStore = create<ImageryParamsState>()(
         set((s) => ({
           zoomLevelsByMode: { ...s.zoomLevelsByMode, [mode]: levels },
         })),
-      overlaySourcesByMode: {},
-      setOverlaySourcesForMode: (mode, ids) =>
-        set((s) => ({
-          overlaySourcesByMode: { ...s.overlaySourcesByMode, [mode]: ids },
-        })),
       savePathByMode: {},
       setSavePathForMode: (mode, path) =>
         set((s) => ({
@@ -78,7 +70,6 @@ export const useImageryParamsStore = create<ImageryParamsState>()(
         cropToShape: state.cropToShape,
         concurrency: state.concurrency,
         zoomLevelsByMode: state.zoomLevelsByMode,
-        overlaySourcesByMode: state.overlaySourcesByMode,
         savePathByMode: state.savePathByMode,
       }),
     },

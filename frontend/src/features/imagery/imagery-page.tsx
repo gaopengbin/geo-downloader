@@ -34,7 +34,8 @@ import {
 import { RegionSelector } from '@/features/region/region-selector'
 import { getSettings } from '@/features/settings/settings-api'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
-import { OverlayPicker } from '@/features/sources/overlay-picker'
+import { SharedOverlayPicker } from '@/features/sources/shared-overlay-picker'
+import { enabledOverlayIds, EMPTY_OVERLAY_SELECTION } from '@/features/sources/layer-selection'
 import { validOverlayIds } from '@/features/sources/overlay-sources'
 import { historicalSourceInfo, historicalZoomLevels, sourceMatchesHistoryContext, type HistoricalProvider } from '@/features/sources/historical-source-info'
 import {
@@ -354,7 +355,7 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
         ? 'pbf'
         : (persisted.format as DownloadFormValues['format']) ?? 'geotiff'
     const rememberedZooms = persisted.zoomLevelsByMode?.[mode]
-    const rememberedOverlays = persisted.overlaySourcesByMode?.[mode]
+    const rememberedOverlays = useAppStore.getState().overlayLayersByMode[mode]?.filter((entry) => entry.visible).map((entry) => entry.sourceId)
     return {
       ...DEFAULT_VALUES,
       source: initialSource,
@@ -471,12 +472,12 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
 
   const selectedSourceInMode = useAppStore((state) => state.selectedSourceByMode[mode])
   useEffect(() => {
-    if (historyProvider && selectedSourceInMode && selectedSourceInMode !== source
+    if (selectedSourceInMode && selectedSourceInMode !== form.getValues('source')
       && sourceMatchesHistoryContext(selectedSourceInMode, historyProvider)
       && sourceList.some((entry) => (entry.id ?? entry.key) === selectedSourceInMode)) {
       setValue('source', selectedSourceInMode, { shouldValidate: true })
     }
-  }, [historyProvider, selectedSourceInMode, source, sourceList, setValue])
+  }, [historyProvider, selectedSourceInMode, sourceList, setValue, form])
   useEffect(() => {
     if (historyProvider && sourceMatchesHistoryContext(source, historyProvider)) {
       useWaybackStore.getState().rememberSource(historyProvider, source)
@@ -499,8 +500,14 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
   const compression = useWatch({ control, name: 'compression' })
   const buildPyramid = useWatch({ control, name: 'build_pyramid' })
   const generateSidecars = useWatch({ control, name: 'generate_sidecars' })
-  const watchedOverlaySources = useWatch({ control, name: 'overlay_sources' })
-  const overlaySources = useMemo(() => watchedOverlaySources ?? [], [watchedOverlaySources])
+  const overlaySelection = useAppStore((state) => state.overlayLayersByMode[mode]) ?? EMPTY_OVERLAY_SELECTION
+  const overlaySources = useMemo(() => enabledOverlayIds(overlaySelection, sourcesQuery.data ?? {}, source), [overlaySelection, sourcesQuery.data, source])
+  useEffect(() => {
+    const current = form.getValues('overlay_sources')
+    if (current.length !== overlaySources.length || current.some((id, index) => id !== overlaySources[index])) {
+      setValue('overlay_sources', overlaySources)
+    }
+  }, [overlaySources, form, setValue])
   const concurrency = useWatch({ control, name: 'concurrency' })
 
   const [estimate, setEstimate] = useState<DownloadEstimate | null>(null)
@@ -638,7 +645,13 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
     },
   })
 
-  const onSubmit = handleSubmit(async (v) => {
+  const onSubmit = handleSubmit(async (values) => {
+    // Capture one authoritative layer composition before async probes/dialogs or
+    // per-feature dispatch; later map changes cannot alter already queued tasks.
+    const shared = useAppStore.getState()
+    const chosen = shared.selectedSourceByMode[mode]
+    const source = chosen && sourceList.some((entry) => (entry.id ?? entry.key) === chosen) ? chosen : values.source
+    const v = { ...values, source, overlay_sources: enabledOverlayIds(shared.overlayLayersByMode[mode] ?? [], sourcesQuery.data ?? {}, source) }
     try {
       await dispatchCtx.runSubmit(async (perFeatureName) => {
         if (perFeatureName == null) {
@@ -765,15 +778,11 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
     concurrency,
   ])
 
-  // 按 mode 持久化 zoom_levels / overlay_sources，供下次启动恢复。
+  // 图层由 app-store 统一持久化；这里只保存下载参数。
   useEffect(() => {
     if (zoomLevels.length === 0) return
     useImageryParamsStore.getState().setZoomLevelsForMode(mode, zoomLevels)
   }, [mode, zoomLevels])
-  useEffect(() => {
-    if (isDemMode || isMvtMode) return
-    useImageryParamsStore.getState().setOverlaySourcesForMode(mode, overlaySources)
-  }, [mode, isDemMode, isMvtMode, overlaySources])
   // 保存目录按 mode 持久化（submit 时会自动 appendTimestamp，不会覆盖以前的下载）。
   const savePath = useWatch({ control, name: 'save_path' }) ?? ''
   useEffect(() => {
@@ -1135,9 +1144,8 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
         {!isMvtMode && !isDemMode && format !== 'pbf' && (
           <div className="space-y-2">
             <Label className="text-xs">{t('download.output.overlays')}</Label>
-            <OverlayPicker sources={sourcesQuery.data ?? {}} value={overlaySources} baseId={source}
-              onChange={(ids) => setValue('overlay_sources', ids, { shouldDirty: true })}/>
-            {overlaySources.length > 0 && <p className="text-xs text-muted-foreground">
+            <SharedOverlayPicker mode={mode} sources={sourcesQuery.data ?? {}} baseId={source}/>
+            {overlaySelection.length > 0 && <p className="text-xs text-muted-foreground">
               {t('download.output.overlaysSelected', { count: validOverlayIds(overlaySources, sourcesQuery.data ?? {}, source).length })}
             </p>}
           </div>

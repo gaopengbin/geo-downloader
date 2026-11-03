@@ -29,8 +29,10 @@ import { getSettings } from '@/features/settings/settings-api'
 import { probeTile } from '@/features/download/download-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
-import { OverlayPicker } from '@/features/sources/overlay-picker'
-import { rememberedOverlayIds, validOverlayIds } from '@/features/sources/overlay-sources'
+import { SharedOverlayPicker } from '@/features/sources/shared-overlay-picker'
+import { enabledOverlayIds, EMPTY_OVERLAY_SELECTION } from '@/features/sources/layer-selection'
+import { validOverlayIds } from '@/features/sources/overlay-sources'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -115,9 +117,20 @@ function installClickPinnedLayersControl(
   L.DomEvent.disableClickPropagation(container)
   L.DomEvent.disableScrollPropagation(container)
 
+  const fitPanel = () => {
+    const list = container.querySelector<HTMLElement>('.leaflet-control-layers-list')
+    const map = container.closest<HTMLElement>('.leaflet-container')
+    if (!list || !map || !container.classList.contains('leaflet-control-layers-expanded')) return
+    const bottom = Math.min(map.getBoundingClientRect().bottom, window.innerHeight)
+    list.style.maxHeight = `${Math.max(40, bottom - list.getBoundingClientRect().top - 12)}px`
+    list.style.overflowY = 'auto'
+    list.style.overscrollBehavior = 'contain'
+  }
+
   const expand = () => {
     L.DomUtil.addClass(container, 'leaflet-control-layers-expanded')
     onExpand?.()
+    fitPanel()
   }
   const collapse = () => {
     L.DomUtil.removeClass(container, 'leaflet-control-layers-expanded')
@@ -151,6 +164,9 @@ function installClickPinnedLayersControl(
   }
   document.addEventListener('pointerdown', onDocumentPointerDown, true)
   document.addEventListener('keydown', onEscape, true)
+  const map = container.closest('.leaflet-container')
+  const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fitPanel)
+  if (map) observer?.observe(map)
 
   return () => {
     if (toggle) {
@@ -159,6 +175,7 @@ function installClickPinnedLayersControl(
     }
     document.removeEventListener('pointerdown', onDocumentPointerDown, true)
     document.removeEventListener('keydown', onEscape, true)
+    observer?.disconnect()
     collapse()
   }
 }
@@ -501,8 +518,8 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   const mode = useAppStore((s) => s.mode)
   const selectedSourceByMode = useAppStore((s) => s.selectedSourceByMode)
   const setSelectedSourceForMode = useAppStore((s) => s.setSelectedSourceForMode)
-  const overlayVisibilityByMode = useAppStore((s) => s.overlayVisibilityByMode)
-  const setOverlaySources = useAppStore((s) => s.setOverlaySources)
+  const overlaySelection = useAppStore((s) => s.overlayLayersByMode[mode]) ?? EMPTY_OVERLAY_SELECTION
+  const setOverlayVisibility = useAppStore((s) => s.setOverlayVisibility)
   const graticuleVisible = useAppStore((s) => s.graticuleVisible)
   const setGraticuleVisible = useAppStore((s) => s.setGraticuleVisible)
   const graticuleInterval = useAppStore((s) => s.graticuleInterval)
@@ -1047,7 +1064,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   }, [ascendingWaybackVersions, waybackProxyBaseUrl])
 
   const mapBaseId = desiredBaseKey?.startsWith('src:') ? desiredBaseKey.slice(4) : null
-  const mapOverlayIds = useMemo(() => rememberedOverlayIds(overlayVisibilityByMode[mode]), [overlayVisibilityByMode, mode])
+  const mapOverlayIds = useMemo(() => enabledOverlayIds(overlaySelection, sourcesQuery.data ?? {}, mapBaseId), [overlaySelection, sourcesQuery.data, mapBaseId])
 
   // Separate overlay instances from base layers: switching a base must not
   // remove an overlay, nor recreate unchanged overlays when toggling visibility.
@@ -1246,6 +1263,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       const cache = baseLayersRef.current
       const keys = Object.keys(sources).filter((id) => sourceMatchesHistoryContext(id,
         mode === 'wayback' && historyProvider !== 'esri' ? historyProvider : undefined))
+        .filter((id) => mode !== 'imagery' || !(id === 'dem_terrarium' || id.startsWith('dem_')))
         .filter((id) => historyProvider !== 'earth' || mode !== 'wayback' || id === earthPreview?.source.id).sort((a, b) =>
         ((sources[a] as { name?: string }).name || '').localeCompare(
           (sources[b] as { name?: string }).name || '',
@@ -1345,12 +1363,12 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   }, [waybackPreviewId])
 
   useEffect(() => {
-    if (mode !== 'wayback' || historyProvider === 'esri') return
+    if (esriHistoryMode) return
     const container = customControlRef.current?.getContainer()
-    container?.querySelectorAll<HTMLInputElement>('input[name="base-layer-wayback"]').forEach((radio) => {
-      radio.checked = radio.value === selectedSourceByMode.wayback
+    container?.querySelectorAll<HTMLInputElement>(`input[name="base-layer-${mode}"]`).forEach((radio) => {
+      radio.checked = radio.value === selectedSourceByMode[mode]
     })
-  }, [mode, historyProvider, selectedSourceByMode])
+  }, [mode, esriHistoryMode, selectedSourceByMode])
 
   // 同步当前期望底图 key → 切换地图上的 base layer
   useEffect(() => {
@@ -1508,20 +1526,29 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0" />
-      {overlayControlContainer && createPortal(
+      {overlayControlContainer && createPortal(<div className="max-w-64 space-y-1" data-map-overlay-controls>
+        {overlaySelection.length > 0 && <><p className="px-1 pt-1 text-xs font-medium">{t('download.output.overlays')}</p>
+          {overlaySelection.map((entry) => <label key={entry.sourceId} className="flex cursor-pointer items-center gap-2 px-1 py-1 text-xs">
+            <Checkbox checked={entry.visible} disabled={!validOverlayIds([entry.sourceId], sourcesQuery.data ?? {}, mapBaseId).length}
+              onChange={(event) => setOverlayVisibility(mode, entry.sourceId, event.target.checked)}/>
+            <span className="min-w-0 break-words">{sourcesQuery.data?.[entry.sourceId]?.name ?? entry.sourceId}</span>
+          </label>)}</>}
         <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start gap-1 text-xs"
-          onClick={() => setOverlayDialogOpen(true)}><Layers className="size-3.5"/>{t('overlays.configure')}</Button>, overlayControlContainer)}
+          onClick={() => setOverlayDialogOpen(true)}><Layers className="size-3.5"/>{t('overlays.configure')}</Button>
+      </div>, overlayControlContainer)}
       <Dialog open={overlayDialogOpen} onOpenChange={setOverlayDialogOpen}>
-        <DialogContent>
+        <DialogContent onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          customControlRef.current?.getContainer()?.querySelector<HTMLElement>('.leaflet-control-layers-toggle')?.focus()
+        }}>
           <DialogHeader><DialogTitle>{t('overlays.configure')}</DialogTitle>
-            <DialogDescription>{t('overlays.previewHint')}</DialogDescription></DialogHeader>
+            <DialogDescription>{t(mode === 'imagery' || mode === 'wayback' ? 'overlays.previewHint' : 'overlays.previewOnlyHint')}</DialogDescription></DialogHeader>
           {sourcesQuery.isError ? <div className="space-y-2">
             <p role="alert" className="text-sm text-destructive">{t('overlays.loadError')}</p>
             <Button type="button" variant="outline" size="sm" onClick={() => void sourcesQuery.refetch()} disabled={sourcesQuery.isFetching}>{t('overlays.retry')}</Button>
           </div>
             : sourcesQuery.isLoading ? <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
-            : <OverlayPicker target="preview" sources={sourcesQuery.data ?? {}} value={mapOverlayIds} baseId={mapBaseId}
-                onChange={(ids) => setOverlaySources(mode, ids)}/>}
+            : <SharedOverlayPicker target="preview" mode={mode} sources={sourcesQuery.data ?? {}} baseId={mapBaseId}/>}
         </DialogContent>
       </Dialog>
       {mode === 'wayback' && historyProvider === 'earth' && !earthPreview && (
