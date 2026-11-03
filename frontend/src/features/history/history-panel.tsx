@@ -35,6 +35,7 @@ import { readLogFile } from '@/features/tasks/tasks-api'
 import { getActiveTasks } from '@/features/tasks/tasks-api'
 import { historyWithoutVisibleTasks } from '@/features/tasks/task-results'
 import { OutputLocation } from '@/features/tasks/output-location'
+import { TaskCardHeading } from '@/features/tasks/task-card-heading'
 import { serveLocalTiles } from '@/features/tiles3d/tiles3d-api'
 import { MvtPreview } from '@/features/mvt/mvt-preview'
 import type { DownloadHistoryRecord, TaskLog } from '@/types/api'
@@ -106,7 +107,7 @@ function HistoryLogPanel({ logFile }: { logFile: string }) {
   }, [logs, t])
 
   return (
-    <div className="mt-2 rounded-md border bg-muted/30">
+    <div className="mt-2 min-w-0 rounded-md border bg-muted/30">
       <div className="flex items-center justify-between border-b px-2 py-1">
         <span className="text-xs text-muted-foreground">
           {t('tasks.logs.title')} {logs ? `(${logs.length})` : ''}
@@ -124,7 +125,7 @@ function HistoryLogPanel({ logFile }: { logFile: string }) {
       </div>
       <div
         ref={scrollRef}
-        className="max-h-48 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed"
+        className="max-h-48 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed [overflow-wrap:anywhere]"
       >
         {error && (
           <p className="text-destructive">{t('tasks.logs.readError', { message: error })}</p>
@@ -235,39 +236,15 @@ function HistoryCard({
   })()
 
   return (
-    <div role="group" aria-label={record.name} data-history-id={id} className="rounded-md border p-2.5 text-sm">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="truncate font-medium" title={record.name}>
-          {record.name}
-        </span>
-        <Badge variant={isFailed ? 'destructive' : 'default'} className="text-xs">
-          {isFailed ? t('history.status.failed') : t('history.status.completed')}
-        </Badge>
-        {hasPyramid && (
-          <Badge variant="outline" className="text-xs font-normal">
-            pyramid
-          </Badge>
-        )}
-        {record.log_truncated && (
-          <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
-            {t('history.labels.truncated')}
-          </Badge>
-        )}
-        {record.source_name && (
-          <Badge variant="outline" className="text-xs font-normal">
-            {String(record.source_name)}
-          </Badge>
-        )}
-        {typeof record.zoom === 'number' && record.zoom > 0 && (
-          <Badge variant="outline" className="text-xs font-normal">
-            z{record.zoom}
-          </Badge>
-        )}
-      </div>
+    <div role="group" aria-label={record.name} data-history-id={id} className="min-w-0 space-y-2 rounded-md border p-3 text-sm">
+      <TaskCardHeading title={record.name} source={record.source_name ? String(record.source_name) : undefined}
+        zoom={typeof record.zoom === 'number' ? record.zoom : undefined}
+        statusTitle={t(isFailed ? 'history.status.failed' : 'history.status.completed')}
+        status={<Badge variant={isFailed ? 'destructive' : 'default'}>{t(isFailed ? 'history.status.failed' : 'history.status.completed')}</Badge>}/>
 
-      <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
         {typeof record.tile_count === 'number' && record.tile_count > 0 && (
-          <span>
+          <span className="whitespace-nowrap">
             {record.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language)}{' '}
             {typeof record.zoom === 'number' && record.zoom > 0
               ? t('history.labels.tiles')
@@ -275,24 +252,29 @@ function HistoryCard({
           </span>
         )}
         {typeof record.file_size === 'number' && record.file_size > 0 && (
-          <span>{formatBytes(record.file_size)}</span>
+          <span className="whitespace-nowrap">{formatBytes(record.file_size)}</span>
         )}
-        {duration && <span>{t('history.labels.duration', { duration })}</span>}
-        <span>{formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}</span>
+        {duration && <span className="whitespace-nowrap">{t('history.labels.duration', { duration })}</span>}
+        {hasPyramid && <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[11px] font-normal">{t('history.labels.pyramid')}</Badge>}
+        {record.log_truncated && <Badge variant="outline" className="px-1.5 py-0 text-[11px] font-normal">{t('history.labels.truncated')}</Badge>}
       </div>
+      {record.created_at && <p className="truncate text-xs tabular-nums text-muted-foreground" title={formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}>
+        {formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}
+      </p>}
 
-      {isFailed && record.error && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-destructive">{String(record.error)}</p>}
+      {isFailed && record.error && <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]">{String(record.error)}</p>}
       {filePath && <OutputLocation path={filePath} saved={!isFailed}
         strictFile={record.source === 'osm_vector' || String(record.format) === 'geojson'}/>}
 
-      <div className="mt-2 flex flex-wrap items-center gap-1">
+      <div data-task-card-actions className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t pt-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {canBuildPyramid && (
           <Button
             size="sm"
             variant="outline"
             onClick={() => pyramidMutation.mutate()}
             disabled={pyramidMutation.isPending}
-            className="h-7 gap-1 text-xs"
+            className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
           >
             <Layers className="size-3" />
             {pyramidLabel}
@@ -304,7 +286,7 @@ function HistoryCard({
             variant="outline"
             onClick={() => mvtPreviewMutation.mutate()}
             disabled={mvtPreviewMutation.isPending}
-            className="h-7 gap-1 text-xs"
+            className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
           >
             <MapIcon className="size-3" />
             {mvtPreviewMutation.isPending
@@ -317,21 +299,22 @@ function HistoryCard({
             size="sm"
             variant="outline"
             onClick={() => setShowLogs((v) => !v)}
-            className="h-7 gap-1 text-xs"
+            className="h-7 gap-1 px-2 text-xs"
           >
             {showLogs ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
             {t('history.actions.logs')}
           </Button>
         )}
+        </div>
         <Button
-          size="sm"
+          size="icon"
           variant="ghost"
           onClick={() => deleteMutation.mutate()}
           disabled={deleteMutation.isPending}
-          className="ml-auto h-7 gap-1 text-xs text-destructive hover:text-destructive"
+          className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+          title={t('history.actions.delete')} aria-label={t('history.actions.delete')}
         >
           <Trash2 className="size-3" />
-          {t('history.actions.delete')}
         </Button>
       </div>
 

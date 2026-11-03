@@ -21,16 +21,15 @@ export function OutputLocation({ path, saved, strictFile = false }: { path: stri
     catch { report('copy_path', 'failed'); toast.error(t('tasks.output.copyError')) }
   }
   if (!path) return null
-  return <div className="mt-2 min-w-0 space-y-2 rounded-md border bg-muted/20 p-2.5">
-    <p className="text-xs font-medium">{t(saved ? 'tasks.output.savedPath' : 'tasks.output.plannedPath')}</p>
-    <p data-output-path className="whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground select-text" title={path}>{path}</p>
-    <div className="flex flex-wrap gap-1">
-      {saved && <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => open.mutate()} disabled={open.isPending}>
-        <FolderOpen className="size-3"/>{t('history.actions.openFolder')}
-      </Button>}
-      <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={copy}>
-        <ClipboardCopy className="size-3"/>{t('tasks.output.copyPath')}
-      </Button>
+  return <div data-output-location className="min-w-0 space-y-2 rounded-md border bg-muted/20 p-2.5">
+    <div className="flex min-w-0 items-start gap-2">
+      <p className="min-w-0 flex-1 pt-1 text-xs font-medium">{t(saved ? 'tasks.output.savedPath' : 'tasks.output.plannedPath')}</p>
+      <Button size="icon" variant="ghost" className="size-7 shrink-0" onClick={copy}
+        title={t('tasks.output.copyPath')} aria-label={t('tasks.output.copyPath')}><ClipboardCopy className="size-3.5"/></Button>
     </div>
+    <p data-output-path className="max-h-24 min-w-0 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-4 text-muted-foreground select-text" title={path}>{path}</p>
+    {saved && <Button size="sm" variant="outline" className="h-7 w-full min-w-0 justify-start gap-1.5 px-2 text-xs" onClick={() => open.mutate()} disabled={open.isPending}>
+        <FolderOpen className="size-3"/>{t('history.actions.openFolder')}
+    </Button>}
   </div>
 }

@@ -18,6 +18,8 @@ import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { TaskCardHeading } from './task-card-heading'
 import { isTauriRuntime } from '@/lib/tauri'
 import {
   cancelTask,
@@ -189,7 +191,7 @@ function TaskLogPanel({ taskId }: { taskId: string }) {
   }, [logs, t])
 
   return (
-    <div className="mt-2 rounded-md border bg-muted/30">
+    <div className="mt-2 min-w-0 rounded-md border bg-muted/30">
       <div className="flex items-center justify-between border-b px-2 py-1">
         <span className="text-xs text-muted-foreground">
           {t('tasks.logs.title')} ({logs.length})
@@ -207,7 +209,7 @@ function TaskLogPanel({ taskId }: { taskId: string }) {
       </div>
       <div
         ref={scrollRef}
-        className="max-h-48 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed"
+        className="max-h-48 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed [overflow-wrap:anywhere]"
       >
         {logs.length === 0 ? (
           <p className="text-muted-foreground">{t('tasks.logs.empty')}</p>
@@ -330,145 +332,17 @@ function TaskRow({
   const showGapBadge = isCompletedWithGaps(status) && failedCount > 0
 
   return (
-    <div role="group" aria-label={task.name} data-task-id={task.id} className="rounded-md border p-2.5 text-sm">
-      <div className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={(e) => onSelectedChange(e.currentTarget.checked)}
-          disabled={selectionDisabled}
-          aria-label={t('tasks.labels.select', { name: task.name })}
-          className="mt-1 size-4 rounded border-border accent-primary"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="truncate font-medium" title={task.name}>
-              {task.name}
-            </span>
-            <Badge variant={statusVariant(status)} className="text-xs">
-              {statusKey ? t(statusKey) : status}
-            </Badge>
-            {showGapBadge && (
-              <Badge
-                variant="outline"
-                className={`text-xs ${gapBadgeClasses(gapsRatio)}`}
-                title={t('tasks.labels.gaps', { failed: failedCount, total })}
-              >
-                {t('tasks.labels.gapsPercent', {
-                  percent: (gapsRatio * 100).toFixed(gapsRatio < 0.01 ? 2 : 1),
-                })}
-              </Badge>
-            )}
-            {task.source_name && (
-              <Badge variant="outline" className="text-xs font-normal">
-                {task.source_name}
-              </Badge>
-            )}
-            {typeof task.zoom === 'number' && task.zoom > 0 && (
-              <Badge variant="outline" className="text-xs font-normal">
-                z{task.zoom}
-              </Badge>
-            )}
-            <span className="text-xs text-muted-foreground" title={t('tasks.labels.elapsed')}>
-              {formatElapsed(elapsed)}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-0.5">
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => setShowLogs((v) => !v)}
-            className="size-7"
-            title={showLogs ? t('tasks.actions.hideLogs') : t('tasks.actions.viewLogs')}
-          >
-            {showLogs ? (
-              <ChevronDown className="size-3.5" />
-            ) : (
-              <ChevronRight className="size-3.5" />
-            )}
-          </Button>
-          {isActive(status) && (
-            <>
-              {(status === 'pending' || status === 'preparing' || status === 'downloading' || status === 'paused') && (
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => pauseMutation.mutate()}
-                  disabled={pauseMutation.isPending}
-                  className="size-7"
-                  title={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
-                >
-                  {status === 'paused' ? (
-                    <Play className="size-3.5" />
-                  ) : (
-                    <Pause className="size-3.5" />
-                  )}
-                </Button>
-              )}
-              {/* Issue #31：待决策态加「补漏重试」入口（仅下载缺失瓦片） */}
-              {status === 'pending_decision' && (
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => resumeMutation.mutate()}
-                  disabled={resumeMutation.isPending}
-                  className="size-7"
-                  title={t('tasks.actions.retryMissing')}
-                >
-                  <RefreshCw className="size-3.5" />
-                </Button>
-              )}
-              {/* Issue #31：暂停 / 待决策态加「强制按现状导出」入口 */}
-              {(status === 'paused' || status === 'pending_decision') && !task.preparation && (
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => exportPartialMutation.mutate()}
-                  disabled={exportPartialMutation.isPending}
-                  className="size-7"
-                  title={t('tasks.actions.exportPartial')}
-                >
-                  <Download className="size-3.5" />
-                </Button>
-              )}
-            </>
-          )}
-          {isCompletedWithGaps(status) && (
-            <>
-              {/* Issue #31：补漏重导（resume_task 增量下载缺失瓦片） */}
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => resumeMutation.mutate()}
-                disabled={resumeMutation.isPending}
-                className="size-7"
-                title={t('tasks.actions.retryAndReplace')}
-              >
-                <RefreshCw className="size-3.5" />
-              </Button>
-            </>
-          )}
-          {(isActive(status) || isCompletedWithGaps(status) || isFinished(status)) && (
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
-              className="size-7 text-muted-foreground hover:text-destructive"
-              title={t('tasks.actions.deleteTask')}
-            >
-              <Trash2 className="size-3.5" />
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-2 space-y-1 pl-6">
+    <div role="group" aria-label={task.name} data-task-id={task.id} className="min-w-0 rounded-md border p-3 text-sm">
+      <TaskCardHeading title={task.name} source={task.source_name} zoom={task.zoom}
+        statusTitle={statusKey ? t(statusKey) : status}
+        status={<Badge variant={statusVariant(status)}>{statusKey ? t(statusKey) : status}</Badge>}
+        selection={<Checkbox checked={selected} onChange={(event) => onSelectedChange(event.currentTarget.checked)}
+          disabled={selectionDisabled} aria-label={t('tasks.labels.select', { name: task.name })}/>}/>
+      <div className="mt-2 space-y-2">
         <ProgressBar value={progress} />
-        <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-          <span>{progress.toFixed(1)}%</span>
-          {total > 0 && <span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+          <span className="whitespace-nowrap">{progress.toFixed(1)}%</span>
+          {total > 0 && <span className="whitespace-nowrap">
             {completed.toLocaleString(locale)} / {total.toLocaleString(locale)}
           </span>}
           {typeof task.failed_count === 'number' && task.failed_count > 0 && (
@@ -477,23 +351,120 @@ function TaskRow({
             </span>
           )}
           {task.file_size != null && task.file_size > 0 && (
-            <span>{formatBytes(task.file_size)}</span>
+            <span className="whitespace-nowrap">{formatBytes(task.file_size)}</span>
           )}
+          <span className="whitespace-nowrap" title={t('tasks.labels.elapsed')}>{t('tasks.labels.elapsed')} {formatElapsed(elapsed)}</span>
+          {showGapBadge && <Badge variant="outline" className={`px-1.5 py-0 text-[11px] ${gapBadgeClasses(gapsRatio)}`}
+            title={t('tasks.labels.gaps', { failed: failedCount, total })}>{t('tasks.labels.gapsPercent', { percent: (gapsRatio * 100).toFixed(gapsRatio < 0.01 ? 2 : 1) })}</Badge>}
         </div>
         {task.message && (status !== 'failed' || !task.error) && (
-          <p className="truncate text-xs text-muted-foreground" title={getTaskMessage(task, t)}>
+          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]" title={getTaskMessage(task, t)}>
             {getTaskMessage(task, t)}
           </p>
         )}
         {task.error && (
-          <p className="whitespace-pre-wrap break-words text-xs text-destructive" title={task.error}>
+          <p className="max-h-32 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={task.error}>
             {task.error}
           </p>
         )}
         {task.save_path && <OutputLocation path={task.save_path}
           saved={status === 'completed' || status === 'completed_with_gaps'} strictFile={task.source === 'osm_vector'}/>}
       </div>
+      <div data-task-card-actions className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-t pt-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setShowLogs((v) => !v)}
+            className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
+            title={showLogs ? t('tasks.actions.hideLogs') : t('tasks.actions.viewLogs')}
+          >
+            {showLogs ? (
+              <ChevronDown className="size-3.5" />
+            ) : (
+              <ChevronRight className="size-3.5" />
+            )}
+            {t('history.actions.logs')}
+          </Button>
+          {isActive(status) && (
+            <>
+              {(status === 'pending' || status === 'preparing' || status === 'downloading' || status === 'paused') && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => pauseMutation.mutate()}
+                  disabled={pauseMutation.isPending}
+                  className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
+                  title={status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
+                >
+                  {status === 'paused' ? (
+                    <Play className="size-3.5" />
+                  ) : (
+                    <Pause className="size-3.5" />
+                  )}
+                  {status === 'paused' ? t('tasks.actions.resume') : t('tasks.actions.pause')}
+                </Button>
+              )}
+              {/* Issue #31：待决策态加「补漏重试」入口（仅下载缺失瓦片） */}
+              {status === 'pending_decision' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => resumeMutation.mutate()}
+                  disabled={resumeMutation.isPending}
+                  className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
+                  title={t('tasks.actions.retryMissing')}
+                >
+                  <RefreshCw className="size-3.5" />{t('tasks.actions.retryMissing')}
+                </Button>
+              )}
+              {/* Issue #31：暂停 / 待决策态加「强制按现状导出」入口 */}
+              {(status === 'paused' || status === 'pending_decision') && !task.preparation && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => exportPartialMutation.mutate()}
+                  disabled={exportPartialMutation.isPending}
+                  className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
+                  title={t('tasks.actions.exportPartial')}
+                >
+                  <Download className="size-3.5" />{t('tasks.actions.exportPartial')}
+                </Button>
+              )}
+            </>
+          )}
+          {isCompletedWithGaps(status) && (
+            <>
+              {/* Issue #31：补漏重导（resume_task 增量下载缺失瓦片） */}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => resumeMutation.mutate()}
+                disabled={resumeMutation.isPending}
+                className="h-auto min-h-7 min-w-0 max-w-full gap-1 whitespace-normal px-2 py-1 text-xs"
+                title={t('tasks.actions.retryAndReplace')}
+              >
+                <RefreshCw className="size-3.5" />{t('tasks.actions.retryAndReplace')}
+              </Button>
+            </>
+          )}
 
+        </div>
+        <div className="shrink-0">
+          {(isActive(status) || isCompletedWithGaps(status) || isFinished(status)) && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+              title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
       {showLogs && <TaskLogPanel taskId={task.id} />}
     </div>
   )
@@ -548,69 +519,22 @@ function ResumableRow({
   })
 
   return (
-    <div className="rounded-md border p-2.5 text-sm">
-      <div className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={(e) => onSelectedChange(e.currentTarget.checked)}
-          disabled={selectionDisabled}
-          aria-label={t('tasks.labels.select', { name: task.task_name })}
-          className="mt-1 size-4 rounded border-border accent-primary"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="truncate font-medium" title={task.task_name}>
-              {task.task_name}
-            </span>
-            <Badge
-              variant="outline"
-              className="border-amber-500/50 text-xs text-amber-600 dark:text-amber-400"
-            >
-              {t('tasks.labels.interrupted')}
-            </Badge>
-            {task.source_name && (
-              <Badge variant="outline" className="text-xs font-normal">
-                {task.source_name}
-              </Badge>
-            )}
-            {typeof task.request?.zoom === 'number' && (
-              <Badge variant="outline" className="text-xs font-normal">
-                z{task.request.zoom}
-              </Badge>
-            )}
-          </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-            <span>
-              {t('tasks.labels.tiles', {
-                count: task.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language),
-              })}
-            </span>
-            {task.created_at && <span>{task.created_at}</span>}
-          </div>
-        </div>
-        <div className="flex items-center gap-0.5">
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => resumeMutation.mutate()}
-            disabled={resumeMutation.isPending}
-            className="size-7"
-            title={t('tasks.actions.continue')}
-          >
-            <Play className="size-3.5" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => discardMutation.mutate()}
-            disabled={discardMutation.isPending}
-            className="size-7 text-muted-foreground hover:text-destructive"
-            title={t('tasks.actions.deleteTask')}
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
-        </div>
+    <div role="group" aria-label={task.task_name} data-resumable-id={task.task_id} className="min-w-0 rounded-md border p-3 text-sm">
+      <TaskCardHeading title={task.task_name} source={task.source_name} zoom={task.request?.zoom}
+        statusTitle={t('tasks.labels.interrupted')}
+        status={<Badge variant="outline" className="border-amber-500/50 text-amber-600 dark:text-amber-400">{t('tasks.labels.interrupted')}</Badge>}
+        selection={<Checkbox checked={selected} onChange={(event) => onSelectedChange(event.currentTarget.checked)}
+          disabled={selectionDisabled} aria-label={t('tasks.labels.select', { name: task.task_name })}/>}/>
+      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+        <span className="whitespace-nowrap">{t('tasks.labels.tiles', { count: task.tile_count.toLocaleString(i18n.resolvedLanguage ?? i18n.language) })}</span>
+        {task.created_at && <span className="max-w-full truncate" title={task.created_at}>{task.created_at}</span>}
+      </div>
+      <div data-task-card-actions className="mt-2 flex items-center justify-between gap-2 border-t pt-2">
+        <Button size="sm" variant="outline" className="h-7 min-w-0 gap-1.5 px-2 text-xs" onClick={() => resumeMutation.mutate()}
+          disabled={resumeMutation.isPending}><Play className="size-3.5"/>{t('tasks.actions.continue')}</Button>
+        <Button size="icon" variant="ghost" className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+          onClick={() => discardMutation.mutate()} disabled={discardMutation.isPending}
+          title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}><Trash2 className="size-3.5"/></Button>
       </div>
     </div>
   )
@@ -861,8 +785,8 @@ export function TasksPanel() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span className="flex flex-wrap items-center gap-x-1">
+      <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-1">
           <span>{t('tasks.summary.total', { total: allTaskIds.length })}</span>
           <span>·</span>
           <span>{t('tasks.summary.running', { count: runningCount })}</span>
@@ -904,14 +828,15 @@ export function TasksPanel() {
 
       <div className="space-y-2">
         {allTaskIds.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-medium text-muted-foreground">
+          <div data-task-toolbar className="space-y-2">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="min-w-0 text-xs font-medium text-muted-foreground">
               {t('tasks.summary.selection', {
                 selected: selectedTaskCount,
                 total: allTaskIds.length,
               })}
             </div>
-            <div className="flex flex-wrap items-center gap-1">
+            <div className="flex shrink-0 items-center gap-0.5">
               <Button
                 size="sm"
                 variant="ghost"
@@ -930,37 +855,40 @@ export function TasksPanel() {
               >
                 {t('tasks.selection.invert')}
               </Button>
+            </div>
+            </div>
+            {selectedTaskCount > 0 && <div data-task-bulk-actions className="grid min-w-0 grid-cols-3 gap-1.5">
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => pauseSelectedMutation.mutate()}
                 disabled={isBatching || selectedPausableCount === 0}
-                className="h-7 text-xs"
+                className="h-8 min-w-0 gap-1 px-1.5 text-xs"
               >
                 <Pause className="mr-1 size-3" />
-                {t('tasks.actions.pause')}
+                <span className="truncate">{t('tasks.actions.pause')}</span>
               </Button>
               <Button
                 size="sm"
                 variant="default"
                 onClick={() => continueSelectedMutation.mutate()}
                 disabled={isBatching || selectedContinuableCount === 0}
-                className="h-7 text-xs"
+                className="h-8 min-w-0 gap-1 px-1.5 text-xs"
               >
                 <Play className="mr-1 size-3" />
-                {t('tasks.actions.continue')}
+                <span className="truncate">{t('tasks.actions.continue')}</span>
               </Button>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => deleteSelectedMutation.mutate()}
                 disabled={isBatching || selectedTaskCount === 0}
-                className="h-7 text-xs text-muted-foreground hover:text-destructive"
+                className="h-8 min-w-0 gap-1 px-1.5 text-xs text-muted-foreground hover:text-destructive"
               >
                 <Trash2 className="mr-1 size-3" />
-                {t('tasks.actions.delete')}
+                <span className="truncate">{t('tasks.actions.delete')}</span>
               </Button>
-            </div>
+            </div>}
           </div>
         )}
         {tasksQuery.isLoading && <p className="text-xs text-muted-foreground">{t('tasks.loading')}</p>}

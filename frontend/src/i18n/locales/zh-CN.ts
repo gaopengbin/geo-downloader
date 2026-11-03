@@ -309,7 +309,7 @@ const zhCN = {
       paused: '暂停 {{count}}',
       interrupted: '中断 {{count}}',
       history: '历史 {{count}}',
-      selection: '任务列表 · 已选 {{selected}} / {{total}}',
+      selection: '已选 {{selected}} / {{total}}',
       dialog: '活动 {{active}} · 已结束 {{finished}} · 总计 {{total}}',
     },
     selection: {
@@ -331,6 +331,7 @@ const zhCN = {
   history: {
     status: { completed: '完成', failed: '失败' },
     labels: {
+      pyramid: '已含金字塔',
       truncated: '日志已截断',
       tiles: '瓦片',
       nodes: '节点',

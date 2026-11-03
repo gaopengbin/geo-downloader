@@ -309,7 +309,7 @@ const enUS = {
       paused: 'Paused {{count}}',
       interrupted: 'Interrupted {{count}}',
       history: 'History {{count}}',
-      selection: 'Task list · {{selected}} / {{total}} selected',
+      selection: 'Selected {{selected}} / {{total}}',
       dialog: 'Active {{active}} · Finished {{finished}} · Total {{total}}',
     },
     selection: {
@@ -331,6 +331,7 @@ const enUS = {
   history: {
     status: { completed: 'Completed', failed: 'Failed' },
     labels: {
+      pyramid: 'Pyramid built',
       truncated: 'Log truncated',
       tiles: 'tiles',
       nodes: 'nodes',
