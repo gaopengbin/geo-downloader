@@ -2261,10 +2261,13 @@ pub async fn probe_tile(
         crate::tianditu_tokens::TiandituTokens::for_task(tianditu_token.as_deref(), Arc::new(|_| {})));
     let mut probe_attempt = 0;
     let (resp, probe_used_public_token, _probe_permit) = loop {
-        let permit = crate::tile_requests::acquire(&url).await;
         let selected = token_pool.as_ref().map(|pool| pool.current()).transpose()?;
         let used_public_token = selected.as_ref().is_some_and(|selected| selected.token == config::TIANDITU_DEFAULT_TOKEN);
         let request_url = selected.as_ref().map(|selected| crate::tianditu_tokens::token_url(&url, &selected.token));
+        let permit = crate::tile_requests::acquire(request_url.as_deref().unwrap_or(&url)).await;
+        if let (Some(pool), Some(used)) = (&token_pool, selected.as_ref()) {
+            if pool.current()?.token != used.token { continue; }
+        }
         let resp = client.get(request_url.as_deref().unwrap_or(&url)).headers(headers.clone())
             .send().await.map_err(|e| format!("请求失败: {}", e.without_url()))?;
         if let (Some(pool), Some(selected)) = (&token_pool, selected.as_ref()) {

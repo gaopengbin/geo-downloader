@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use futures::stream::{self, StreamExt};
 use tokio_util::sync::CancellationToken;
 use crate::{tile_payload, tile_policy};
@@ -40,6 +41,10 @@ impl RateLimitGate {
         let mut current = self.0.lock().unwrap();
         *current = Some(current.map_or(until, |value| value.max(until)));
     }
+
+    fn remaining(&self) -> Option<Duration> {
+        self.0.lock().unwrap().and_then(|until| until.checked_duration_since(tokio::time::Instant::now()))
+    }
 }
 
 pub(crate) fn retry_after(headers: &reqwest::header::HeaderMap, attempt: u32) -> Duration {
@@ -49,9 +54,14 @@ pub(crate) fn retry_after(headers: &reqwest::header::HeaderMap, attempt: u32) ->
             chrono::DateTime::parse_from_rfc2822(v).ok().map(|date| {
                 (date.with_timezone(&chrono::Utc) - chrono::Utc::now()).num_seconds().max(0) as u64
             })
-        }))
-        .unwrap_or(1u64 << attempt.min(5));
-    Duration::from_secs(seconds.min(86_400)).max(Duration::from_millis(250))
+        }));
+    if let Some(seconds) = seconds {
+        // Retry-After is a minimum, never shorten it with jitter.
+        Duration::from_secs(seconds.min(86_400)).max(Duration::from_millis(250))
+    } else {
+        let cap_ms = 1000u64 << attempt.min(5);
+        Duration::from_millis(rand::thread_rng().gen_range(cap_ms / 2..=cap_ms))
+    }
 }
 
 // Error bodies can contain credentials/URLs. Only a bounded numeric service
@@ -403,6 +413,18 @@ impl TileDownloader {
         (key, info)
     }
 
+    fn scheduling_status(&self, retrying: u32) -> String {
+        let selected = self.tianditu_tokens.as_ref().and_then(|pool| pool.current().ok());
+        let url = selected.filter(|_| tianditu_tokens::is_tianditu_url(&self.source.url))
+            .map(|used| tianditu_tokens::token_url(&self.source.url, &used.token));
+        let remaining = crate::tile_requests::cooldown_remaining(url.as_deref().unwrap_or(&self.source.url))
+            .or_else(|| self.rate_limit.remaining());
+        if let Some(delay) = remaining {
+            format!("服务限流，自动冷却约 {} 秒后继续下载", delay.as_secs().saturating_add(1))
+        } else if retrying > 0 { format!("下载中，{} 个瓦片正在重试", retrying) }
+        else { "downloading".into() }
+    }
+
     /// 下载单个瓦片（带重试）
     async fn download_one_tile(
         client: &Client,
@@ -444,12 +466,15 @@ impl TileDownloader {
 
         let mut attempt = 0;
         loop {
-            rate_limit.wait().await;
-            // Shared across subdomains/tasks/layers, including retries/preflight.
-            let provider_permit = crate::tile_requests::acquire(url).await;
             let selected = tokens.map(TiandituTokens::current).transpose()?;
             let request_url = selected.as_ref().map(|selected| tianditu_tokens::token_url(url, &selected.token));
             let url = request_url.as_deref().unwrap_or(url);
+            // Schedule the credential actually being sent, including backups.
+            let provider_permit = crate::tile_requests::acquire(url).await;
+            if provider_permit.is_none() { rate_limit.wait().await; }
+            if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) {
+                if pool.current()?.token != used.token { continue; }
+            }
             let req_fut = async {
                 if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_request(used); }
                 let request = crate::geovis::request(client, url).map_err(|e| (e, false))?;
@@ -487,13 +512,16 @@ impl TileDownloader {
                             Ok(())
                         } else if status.as_u16() == 429 || status.as_u16() == 503 {
                             let delay = retry_after(resp.headers(), attempt);
-                            rate_limit.defer(delay);
                             if let Some(permit) = &provider_permit { permit.limited(delay); }
+                            else { rate_limit.defer(delay); }
                             if status.as_u16() == 429 {
                                 if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_rate_limit(used); }
                             }
                             let detail = service_error_detail(resp).await;
-                            if delay > Duration::from_secs(60) || attempt >= retry_times {
+                            if delay > Duration::from_secs(60) {
+                                return Err((format!("TILE_RATE_LIMITED: RETRY_AFTER_EXCEEDED: {}{detail}；服务要求等待 {} 秒，已有任务数据保留，请稍后恢复任务", Self::http_error_message(url, status), delay.as_secs()), false));
+                            }
+                            if attempt >= retry_times {
                                 return Err((format!("TILE_RATE_LIMITED: {}{detail}；服务暂时限制请求，已有任务数据保留，请稍后恢复任务", Self::http_error_message(url, status)), false));
                             }
                             Err((Self::http_error_message(url, status), true))
@@ -831,6 +859,7 @@ impl TileDownloader {
         });
 
         let mut tile_stream = stream::iter(all_futures).buffer_unordered(concurrency);
+        let mut last_good_tile = std::time::Instant::now();
         let mut stall_timer = tokio::time::interval(Duration::from_secs(3));
         stall_timer.tick().await; // 跳过第一个立即触发的 tick
         let mut no_data_count = 0u32;
@@ -851,6 +880,7 @@ impl TileDownloader {
                         _ = cancellation.cancelled() => return Err("任务已取消".into()),
                         _ = pc.wait_if_paused() => {},
                     }
+                    last_good_tile = std::time::Instant::now();
                     progress_callback(DownloadProgress {
                         total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: "downloading".to_string(),
                     });
@@ -862,10 +892,12 @@ impl TileDownloader {
                     match result {
                         Some((tile, Ok(path))) => {
                             tile_files.insert((tile.x, tile.y), path);
+                            last_good_tile = std::time::Instant::now();
                             completed += 1;
                         }
                         Some((_tile, Err(e))) => {
-                            if tile_policy::is_terminal_download_error(&e) { return Err(e); }
+                            if tile_policy::is_terminal_download_error(&e)
+                                && !can_defer_rate_limited_tile(&e, tile_files.len(), last_good_tile.elapsed()) { return Err(e); }
                             if e == "no_data" {
                                 no_data_count += 1;
                                 completed += 1;
@@ -911,11 +943,7 @@ impl TileDownloader {
                     if report_progress_now(total, completed + failed, last_progress_report.elapsed()) {
                         last_progress_report = std::time::Instant::now();
                         let retrying = retrying_counter.load(Ordering::Relaxed);
-                        let status = if retrying > 0 {
-                            format!("下载中，{} 个瓦片正在重试", retrying)
-                        } else {
-                            "downloading".to_string()
-                        };
+                        let status = self.scheduling_status(retrying);
                         progress_callback(DownloadProgress {
                             total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status,
                         });
@@ -942,7 +970,7 @@ impl TileDownloader {
                     let retrying = retrying_counter.load(Ordering::Relaxed);
                     progress_callback(DownloadProgress {
                         total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
-                        status: if retrying > 0 { format!("下载中，{} 个瓦片正在重试", retrying) } else { "downloading".into() },
+                        status: self.scheduling_status(retrying),
                     });
                 }
             }
@@ -982,6 +1010,8 @@ impl TileDownloader {
                 _ = tokio::time::sleep(Duration::from_secs(wait_secs)) => {},
             }
 
+            // Intentional pause/backoff is not a period of failed progress.
+            last_good_tile = std::time::Instant::now();
             progress_callback(DownloadProgress {
                 total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32,
                 status: format!("重试第{}轮: 开始重试 {} 个瓦片，并发 {}", round + 1, retry_count, retry_concurrencies[round]),
@@ -1002,7 +1032,7 @@ impl TileDownloader {
                 let pfc = put_fail_count.clone();
 
                 async move {
-                    let file_path = td.join(format!("{}_{}.png", tile.x, tile.y));
+                    let file_path = td.join(tile.x.to_string()).join(format!("{}.png", tile.y));
                     let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
 
                     // 重试命中同样落盘，不累计压缩字节
@@ -1058,11 +1088,13 @@ impl TileDownloader {
                 match result {
                     Ok(path) => {
                         tile_files.insert((tile.x, tile.y), path);
+                        last_good_tile = std::time::Instant::now();
                         completed += 1;
                         failed -= 1;
                     }
                     Err(e) => {
-                        if tile_policy::is_terminal_download_error(&e) { return Err(e); }
+                        if tile_policy::is_terminal_download_error(&e)
+                            && !can_defer_rate_limited_tile(&e, tile_files.len(), last_good_tile.elapsed()) { return Err(e); }
                         if e == "no_data" {
                             no_data_count += 1;
                             completed += 1;
@@ -1219,11 +1251,92 @@ fn restore_cached_batch(
     Ok(restored)
 }
 
+// Keep an isolated rate-limited tile in the existing retry queue while useful
+// tiles are still arriving. An empty preflight, explicit long server wait, or
+// 90 seconds without any usable progress remains terminal and preserves data.
+fn can_defer_rate_limited_tile(error: &str, usable_tiles: usize, since_success: Duration) -> bool {
+    error.starts_with("TILE_RATE_LIMITED:") && !error.contains("RETRY_AFTER_EXCEEDED:")
+        && usable_tiles > 0 && since_success < Duration::from_secs(90)
+}
+
 fn report_progress_now(total:u32,finished:u32,since_last:Duration)->bool {total<=50 || finished>=total || since_last>=Duration::from_millis(100)}
+
+#[cfg(test)]
+#[path = "download_scheduler_tests.rs"]
+mod scheduler_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn isolated_rate_limited_tiles_require_recent_usable_progress() {
+        let rate = "TILE_RATE_LIMITED: HTTP 429";
+        assert!(can_defer_rate_limited_tile(rate, 10, Duration::from_secs(89)));
+        assert!(!can_defer_rate_limited_tile(rate, 0, Duration::ZERO));
+        assert!(!can_defer_rate_limited_tile(rate, 10, Duration::from_secs(90)));
+        assert!(!can_defer_rate_limited_tile("TILE_ACCESS_DENIED: HTTP 403", 10, Duration::ZERO));
+        assert!(!can_defer_rate_limited_tile("TILE_RATE_LIMITED: RETRY_AFTER_EXCEEDED: HTTP 429", 10, Duration::ZERO));
+    }
+
+    #[tokio::test]
+    async fn one_limited_tile_is_retried_without_losing_other_tiles_and_resume_reuses_it() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _lock = tcache::CACHE_TEST_LOCK.lock().unwrap();
+        let old = tcache::get_config();
+        struct Restore(tcache::CacheConfig);
+        impl Drop for Restore { fn drop(&mut self) { tcache::set_config(self.0.clone()); } }
+        let _restore = Restore(old);
+        let dir = tempfile::tempdir().unwrap();
+        tcache::set_config(tcache::CacheConfig { enabled: false, root_dir: dir.path().join("cache"), max_total_bytes: 0 });
+        let mut data = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(256, 256).write_to(&mut data, image::ImageFormat::Png).unwrap();
+        let bytes = data.into_inner();
+        std::fs::create_dir_all(dir.path().join("1")).unwrap();
+        std::fs::write(dir.path().join("1/0.png"), &bytes).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicU32::new(0)); let received = requests.clone();
+        let server = tokio::spawn(async move {
+            let mut limited = false;
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192]; let n = socket.read(&mut request).await.unwrap();
+                let text = String::from_utf8_lossy(&request[..n]);
+                received.fetch_add(1, Ordering::SeqCst);
+                let reject = text.contains("x=2&") && !limited;
+                if reject { limited = true; }
+                let response = if reject { wire("429 Too Many Requests", "Retry-After: 0\r\n", b"limited") }
+                    else { wire("200 OK", "Content-Type: image/png\r\n", &bytes) };
+                socket.write_all(&response).await.unwrap(); socket.shutdown().await.unwrap();
+            }
+        });
+        let mut downloader = TileDownloader::new(custom_source(&format!("http://{address}/tile?x={{x}}&y={{y}}&z={{z}}")), None).unwrap();
+        downloader.client = Client::builder().no_proxy().build().unwrap(); downloader.retry_times = 0;
+        let tiles: Vec<_> = (1..=3).map(|x| TileCoord { x, y: 0, z: 2 }).collect();
+        let mut progress = Vec::new();
+        let result = downloader.download_tiles(tiles.clone(), 1, dir.path(), None, None, |p| progress.push(p)).await.unwrap();
+        assert_eq!(result.len(), 3);
+        assert!(progress.iter().any(|p| p.failed > 0));
+        assert_eq!(progress.last().unwrap().failed, 0);
+        assert_eq!(progress.last().unwrap().status, "completed");
+        assert!(dir.path().join("2/0.png").is_file());
+        assert!(!dir.path().join("2_0.png").exists());
+        let before = requests.load(Ordering::SeqCst); assert_eq!(before, 3);
+        let resumed = downloader.download_tiles(tiles, 1, dir.path(), None, None, |_| {}).await.unwrap();
+        assert_eq!(resumed.len(), 3); assert_eq!(requests.load(Ordering::SeqCst), before);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn empty_preflight_with_rate_limit_still_stops_without_bulk_retry_queue() {
+        let (url, count, server) = mock_tile_server(wire("429 Too Many Requests", "Retry-After: 0\r\n", b"limited")).await;
+        let mut downloader = TileDownloader::new(custom_source(&url), None).unwrap();
+        downloader.client = Client::builder().no_proxy().build().unwrap(); downloader.retry_times = 0;
+        let dir = tempfile::tempdir().unwrap();
+        let result = downloader.download_tiles(vec![TileCoord { x: 0, y: 0, z: 1 }], 1, dir.path(), None, None, |_| {}).await;
+        assert!(result.unwrap_err().starts_with("TILE_RATE_LIMITED:"));
+        assert_eq!(count.load(Ordering::SeqCst), 1); server.abort();
+    }
     #[tokio::test]
     async fn custom_headers_reach_downloads_and_block_cross_origin_redirects() {
         let server = crate::source_headers::tests::auth_server();
@@ -1614,8 +1727,12 @@ mod tests {
         assert_eq!(service_error_code(br#"{"code":"private-secret"}"#), "");
         assert_eq!(service_error_code(b"<html>tk=private-secret</html>"), "");
         let mut headers = reqwest::header::HeaderMap::new();
-        assert_eq!(retry_after(&headers, 0), Duration::from_secs(1));
-        assert_eq!(retry_after(&headers, 2), Duration::from_secs(4));
+        for _ in 0..64 {
+            assert!((Duration::from_millis(500)..=Duration::from_secs(1)).contains(&retry_after(&headers, 0)));
+            assert!((Duration::from_secs(2)..=Duration::from_secs(4)).contains(&retry_after(&headers, 2)));
+        }
+        headers.insert(reqwest::header::RETRY_AFTER, "7".parse().unwrap());
+        assert_eq!(retry_after(&headers, 3), Duration::from_secs(7));
         headers.insert(reqwest::header::RETRY_AFTER, "18446744073709551615".parse().unwrap());
         assert_eq!(retry_after(&headers, 0), Duration::from_secs(86_400));
     }

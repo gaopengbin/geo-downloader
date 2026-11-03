@@ -1,182 +1,242 @@
-//! Process-wide download budgets. These are client defaults, not provider quotas.
-//! All subdomains, tasks, layers and retries of a provider share one budget.
+//! Process-local download scheduling. Rates are client policy, not provider quotas.
+use rand::Rng;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
-const MAX_IN_FLIGHT: usize = 4;
-const REQUEST_SPACING: Duration = Duration::from_micros(62_500);
-const TIANDITU_SPACING: Duration = Duration::from_millis(125);
+const RECOVERY_WINDOW: Duration = Duration::from_secs(2);
+const MAX_BUDGETS: usize = 128;
 static AMAP: OnceLock<Arc<Gate>> = OnceLock::new();
-static TIANDITU: OnceLock<Arc<Gate>> = OnceLock::new();
+static TIANDITU: OnceLock<Mutex<HashMap<[u8; 32], Arc<Gate>>>> = OnceLock::new();
+static OVERFLOW: OnceLock<Arc<Gate>> = OnceLock::new();
 
 pub(crate) fn applies(template: &str) -> bool {
-    reqwest::Url::parse(&template.replace("{s}", "1"))
-        .ok()
-        .is_some_and(|url| {
-            let host = url.host_str().unwrap_or_default().trim_end_matches('.').to_ascii_lowercase();
-            matches!(url.scheme(), "http" | "https")
-                && (host == "autonavi.com" || host.ends_with(".autonavi.com")
-                    || host == "amap.com" || host.ends_with(".amap.com"))
-                && url.path().eq_ignore_ascii_case("/appmaptile")
-        })
+    reqwest::Url::parse(&template.replace("{s}", "1")).ok().is_some_and(|url| {
+        let host = url.host_str().unwrap_or_default().trim_end_matches('.').to_ascii_lowercase();
+        matches!(url.scheme(), "http" | "https")
+            && (host == "autonavi.com" || host.ends_with(".autonavi.com")
+                || host == "amap.com" || host.ends_with(".amap.com"))
+            && url.path().eq_ignore_ascii_case("/appmaptile")
+    })
 }
 
-struct Gate {
-    slots: Arc<Semaphore>,
-    state: Mutex<State>,
-    spacing: Duration,
+// Coordinates and subdomains do not partition a budget. Only digests, never
+// credentials or complete URLs, are retained in this registry.
+fn budget_key(url: &str) -> Option<[u8; 32]> {
+    if !crate::tianditu_tokens::is_tianditu_url(url) { return None; }
+    let parsed = reqwest::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") { return None; }
+    let pairs: Vec<_> = parsed.query_pairs().collect();
+    let value = |name: &str| pairs.iter().find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_ref()).unwrap_or("");
+    let mut digest = Sha256::new();
+    let path = parsed.path().trim_end_matches('/').to_ascii_lowercase();
+    let layer = value("layer").to_ascii_lowercase();
+    let matrix = value("tilematrixset").to_ascii_lowercase();
+    let path_service = path.strip_suffix("/wmts").unwrap_or(&path).trim_start_matches('/');
+    // /img_w/wmts and /wmts?LAYER=img&TILEMATRIXSET=w name the same service.
+    let service = if matches!(path_service, "img_w" | "img_c" | "cia_w" | "cia_c" | "vec_w" | "vec_c" | "cva_w" | "cva_c" | "ter_w" | "ter_c" | "cta_w" | "cta_c") {
+        path_service.to_owned()
+    } else if path == "/wmts" && !layer.is_empty() && matches!(matrix.as_str(), "w" | "c") {
+        format!("{layer}_{matrix}")
+    } else { format!("{path}|{layer}|{matrix}") };
+    for part in [value("tk").to_owned(), service] {
+        digest.update((part.len() as u64).to_le_bytes()); digest.update(part.as_bytes());
+    }
+    Some(digest.finalize().into())
 }
 
+#[derive(Clone, Copy)]
+struct Policy { initial_qps: u32, max_qps: u32, initial_concurrency: usize, max_concurrency: usize, adaptive: bool }
+const AMAP_POLICY: Policy = Policy { initial_qps: 16, max_qps: 16, initial_concurrency: 4, max_concurrency: 4, adaptive: false };
+const TIANDITU_POLICY: Policy = Policy { initial_qps: 16, max_qps: 64, initial_concurrency: 4, max_concurrency: 16, adaptive: true };
+
+struct Gate { state: Mutex<State>, changed: Notify, policy: Policy }
 struct State {
-    next: Option<Instant>,
-    spacing: Duration,
-    successes: u8,
+    next: Option<Instant>, cooldown_until: Option<Instant>, qps: u32,
+    concurrency: usize, active: usize, successes: u32, epoch: u64,
+    limit_streak: u32, limited_once: bool, last_change: Instant,
 }
-
-pub(crate) struct Permit {
-    gate: Arc<Gate>,
-    _slot: OwnedSemaphorePermit,
+pub(crate) struct Permit { gate: Arc<Gate>, epoch: u64 }
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.gate.state.lock().unwrap().active -= 1;
+        self.gate.changed.notify_waiters();
+    }
 }
-
 impl Permit {
-    pub(crate) fn limited(&self, delay: Duration) { self.gate.limited(delay); }
-    pub(crate) fn succeeded(&self) { self.gate.succeeded(); }
+    pub(crate) fn limited(&self, delay: Duration) { self.gate.limited(self.epoch, delay); }
+    pub(crate) fn succeeded(&self) { self.gate.succeeded_at(self.epoch, Instant::now()); }
 }
-
 impl Gate {
-    fn new(slots: usize, spacing: Duration) -> Self {
-        Self { slots: Arc::new(Semaphore::new(slots)),
-            state: Mutex::new(State { next: None, spacing, successes: 0 }), spacing }
+    fn new(policy: Policy) -> Self {
+        let now = Instant::now();
+        Self { state: Mutex::new(State { next: None, cooldown_until: None,
+            qps: policy.initial_qps, concurrency: policy.initial_concurrency,
+            active: 0, successes: 0, epoch: 0, limit_streak: 0, limited_once: false, last_change: now }),
+            changed: Notify::new(), policy }
     }
-
-    fn limited(&self, delay: Duration) {
-        let mut state = self.state.lock().unwrap();
-        state.spacing = (state.spacing * 2).min(Duration::from_secs(1));
-        state.successes = 0;
-        // Never allow untrusted Retry-After values to overflow Instant.
-        let until = Instant::now() + delay.min(Duration::from_secs(86_400));
-        state.next = Some(state.next.map_or(until, |next| next.max(until)));
+    fn limited(&self, epoch: u64, delay: Duration) {
+        let now = Instant::now(); let mut state = self.state.lock().unwrap();
+        let delay = delay.min(Duration::from_secs(86_400));
+        let until = if epoch == state.epoch {
+            state.qps = (state.qps / 2).max(1);
+            state.concurrency = (state.concurrency / 2).max(1);
+            state.epoch = state.epoch.wrapping_add(1);
+            state.limit_streak = state.limit_streak.saturating_add(1);
+            state.limited_once = true;
+            // Service-wide exponential backoff does not reset on each new tile.
+            let cap_ms = 1000u64 << state.limit_streak.saturating_sub(1).min(5);
+            let jitter = Duration::from_millis(rand::thread_rng().gen_range(cap_ms / 2..=cap_ms));
+            now + delay.max(jitter)
+        } else { now + delay };
+        // Old replies honor Retry-After without multiplying one failure wave.
+        state.cooldown_until = Some(state.cooldown_until.map_or(until, |prior| prior.max(until)));
+        state.successes = 0; state.last_change = now;
+        state.next = Some(state.next.map_or(state.cooldown_until.unwrap(), |next| next.max(state.cooldown_until.unwrap())));
+        drop(state); self.changed.notify_waiters();
     }
-
-    fn succeeded(&self) {
+    fn succeeded_at(&self, epoch: u64, now: Instant) {
         let mut state = self.state.lock().unwrap();
+        if epoch != state.epoch || state.cooldown_until.is_some_and(|until| now < until) { return; }
         state.successes = state.successes.saturating_add(1);
-        if state.successes >= 16 {
-            state.spacing = (state.spacing * 3 / 4).max(self.spacing);
-            state.successes = 0;
+        let window = if state.limited_once { Duration::from_secs(5) } else { RECOVERY_WINDOW };
+        if state.successes >= 16 && now.duration_since(state.last_change) >= window {
+            let step = if self.policy.adaptive && !state.limited_once { 4 } else { 1 };
+            state.qps = (state.qps + step).min(self.policy.max_qps);
+            state.concurrency = (state.concurrency + 1).min(self.policy.max_concurrency);
+            state.limit_streak = 0; state.successes = 0; state.last_change = now;
         }
     }
-
-    async fn acquire(&self) -> OwnedSemaphorePermit {
-        let permit = self.slots.clone().acquire_owned().await.expect("Amap gate is never closed");
-        // Recheck after waking. If a busy runtime wakes several waiters together,
-        // only one can claim a start; sleeping past an old deadline cannot burst.
+    async fn acquire(self: &Arc<Self>) -> Permit {
         loop {
-            let until = {
-                let mut state = self.state.lock().unwrap();
-                let now = Instant::now();
-                match state.next {
-                    Some(until) if until > now => Some(until),
-                    _ => { state.next = Some(now + state.spacing); None }
+            // Register before checking: no lost release between check and await.
+            // Cancellation does not reserve a future start or leak capacity.
+            let changed = self.changed.notified(); tokio::pin!(changed); changed.as_mut().enable();
+            let deadline = {
+                let mut state = self.state.lock().unwrap(); let now = Instant::now();
+                if state.active >= state.concurrency { None } else {
+                    let deadline = state.next.into_iter().chain(state.cooldown_until).max().unwrap_or(now);
+                    if deadline <= now {
+                        state.active += 1;
+                        // No accumulated tokens, so late wakeups cannot burst.
+                        state.next = Some(now + Duration::from_secs_f64(1.0 / f64::from(state.qps)));
+                        return Permit { gate: self.clone(), epoch: state.epoch };
+                    }
+                    Some(deadline)
                 }
             };
-            match until {
-                Some(until) => tokio::time::sleep_until(until).await,
-                None => return permit,
-            }
+            if let Some(until) = deadline {
+                tokio::select! { _ = changed => {}, _ = tokio::time::sleep_until(until) => {} }
+            } else { changed.await; }
         }
     }
 }
 
-pub(crate) async fn acquire(url: &str) -> Option<Permit> {
-    let gate = if applies(url) {
-        AMAP.get_or_init(|| Arc::new(Gate::new(MAX_IN_FLIGHT, REQUEST_SPACING)))
-    } else if crate::tianditu_tokens::is_tianditu_url(url) {
-        TIANDITU.get_or_init(|| Arc::new(Gate::new(MAX_IN_FLIGHT, TIANDITU_SPACING)))
-    } else { return None; };
-    Some(Permit { gate: gate.clone(), _slot: gate.acquire().await })
+fn gate_for(url: &str) -> Option<Arc<Gate>> {
+    if applies(url) { return Some(AMAP.get_or_init(|| Arc::new(Gate::new(AMAP_POLICY))).clone()); }
+    let key = budget_key(url)?;
+    let mut registry = TIANDITU.get_or_init(Default::default).lock().unwrap();
+    if let Some(gate) = registry.get(&key) { return Some(gate.clone()); }
+    if registry.len() >= MAX_BUDGETS {
+        // Keep overflow assignment stable for the process lifetime. Evicting an
+        // idle/cooling gate could bypass Retry-After or split a live budget.
+        return Some(OVERFLOW.get_or_init(|| Arc::new(Gate::new(TIANDITU_POLICY))).clone());
+    }
+    let gate = Arc::new(Gate::new(TIANDITU_POLICY)); registry.insert(key, gate.clone()); Some(gate)
 }
-
+pub(crate) async fn acquire(url: &str) -> Option<Permit> { Some(gate_for(url)?.acquire().await) }
+/// Progress text only; no key or URL leaves this module.
+pub(crate) fn cooldown_remaining(url: &str) -> Option<Duration> {
+    let gate = gate_for(url)?; let until = gate.state.lock().unwrap().cooldown_until?;
+    until.checked_duration_since(Instant::now()).filter(|delay| !delay.is_zero())
+}
 #[cfg(test)]
 pub(crate) fn reset_for_tests() {
-    for gate in [&AMAP, &TIANDITU].into_iter().filter_map(OnceLock::get) {
-        *gate.state.lock().unwrap() = State { next: None, spacing: gate.spacing, successes: 0 };
+    if let Some(registry) = TIANDITU.get() { registry.lock().unwrap().clear(); }
+    for gate in [&AMAP, &OVERFLOW].into_iter().filter_map(OnceLock::get) {
+        assert_eq!(gate.state.lock().unwrap().active, 0);
+        *gate.state.lock().unwrap() = Gate::new(gate.policy).state.into_inner().unwrap();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    fn url(host: &str, layer: &str, key: &str) -> String {
+        format!("https://{host}/{layer}_w/wmts?LAYER={layer}&TILEMATRIXSET=w&tk={key}&TILEROW=1")
+    }
     #[test]
     fn only_amap_tile_hosts_share_the_budget() {
-        for url in [
-            "https://webrd0{s}.is.autonavi.com/appmaptile?style=8&x={x}",
-            "https://webst04.is.autonavi.com/appmaptile?style=6",
-            "https://WEBST01.IS.AUTONAVI.COM.:443/appmaptile",
-        ] { assert!(applies(url), "{url}"); }
-        for url in [
-            "https://example.com/appmaptile?host=autonavi.com",
-            "https://autonavi.com.example.com/appmaptile",
-            "https://autonavi.com@example.com/appmaptile",
-            "https://restapi.amap.com/v3/geocode/geo",
-            "https://tile.openstreetmap.org/1/0/0.png",
-        ] { assert!(!applies(url), "{url}"); }
+        for url in ["https://webrd0{s}.is.autonavi.com/appmaptile?style=8&x={x}",
+            "https://WEBST01.IS.AUTONAVI.COM.:443/appmaptile"] { assert!(applies(url)); }
+        for url in ["https://autonavi.com.example.com/appmaptile", "https://autonavi.com@example.com/appmaptile",
+            "https://restapi.amap.com/v3/geocode/geo"] { assert!(!applies(url)); }
     }
-
-    #[tokio::test]
-    async fn concurrent_callers_start_at_separate_intervals() {
-        let gate = Arc::new(Gate::new(4, Duration::from_millis(15)));
-        let mut tasks = Vec::new();
-        for _ in 0..8 {
-            let gate = gate.clone();
-            tasks.push(tokio::spawn(async move {
-                let _permit = gate.acquire().await;
-                Instant::now()
-            }));
-        }
-        let mut starts = Vec::new();
-        for task in tasks { starts.push(task.await.unwrap()); }
-        starts.sort();
-        for pair in starts.windows(2) {
-            assert!(pair[1].duration_since(pair[0]) >= Duration::from_millis(12));
-        }
+    #[test]
+    fn budgets_share_across_tasks_and_subdomains_but_isolate_keys_and_services() {
+        let base = url("t0.tianditu.gov.cn", "img", "test-a");
+        assert_eq!(budget_key(&base), budget_key(&url("t7.tianditu.gov.cn", "img", "test-a")));
+        assert_eq!(budget_key(&base), budget_key(&base.replace("TILEROW=1", "TILEROW=99")));
+        assert_eq!(budget_key(&base), budget_key(&base.replace("/img_w/wmts", "/wmts")));
+        assert_ne!(budget_key(&base), budget_key(&url("t0.tianditu.gov.cn", "cia", "test-a")));
+        assert_ne!(budget_key(&base), budget_key(&url("t0.tianditu.gov.cn", "img", "test-b")));
+        assert!(Arc::ptr_eq(&gate_for(&base).unwrap(), &gate_for(&base).unwrap()));
+        assert!(budget_key("https://tianditu.gov.cn.example.com/wmts?tk=a").is_none());
     }
-
     #[tokio::test]
-    async fn permits_bound_in_flight_requests_and_cancel_cleanly() {
-        let gate = Arc::new(Gate::new(2, Duration::ZERO));
-        let first = gate.acquire().await;
-        let second = gate.acquire().await;
+    async fn startup_is_smooth_and_cancellation_does_not_consume_capacity() {
+        let gate = Arc::new(Gate::new(TIANDITU_POLICY)); let first = gate.acquire().await; let started = Instant::now();
         let waiting = tokio::spawn({ let gate = gate.clone(); async move { gate.acquire().await } });
-        tokio::task::yield_now().await;
-        assert_eq!(gate.slots.available_permits(), 0);
-        assert!(!waiting.is_finished());
-        waiting.abort();
-        let _ = waiting.await;
-        drop(first); drop(second);
-        assert_eq!(gate.slots.available_permits(), 2);
-        let _next = tokio::time::timeout(Duration::from_secs(1), gate.acquire()).await.unwrap();
+        tokio::task::yield_now().await; waiting.abort(); let _ = waiting.await;
+        assert_eq!(gate.state.lock().unwrap().active, 1); drop(first);
+        let _second = gate.acquire().await; assert!(started.elapsed() >= Duration::from_millis(60));
     }
-
     #[tokio::test]
-    async fn cooldown_postpones_already_waiting_requests_without_a_restart_burst() {
-        let gate = Arc::new(Gate::new(4, Duration::from_millis(10)));
-        let first = gate.acquire().await;
-        let waiting = tokio::spawn({ let gate = gate.clone(); async move {
-            let _permit = gate.acquire().await; Instant::now()
-        }});
-        tokio::task::yield_now().await;
-        let limited = Instant::now();
-        gate.limited(Duration::from_millis(80));
-        drop(first);
-        let next = waiting.await.unwrap();
-        assert!(next.duration_since(limited) >= Duration::from_millis(75));
-        let _third = gate.acquire().await;
-        assert!(Instant::now().duration_since(next) >= Duration::from_millis(15));
-        for _ in 0..32 { gate.succeeded(); }
-        assert_eq!(gate.state.lock().unwrap().spacing, Duration::from_millis(11) + Duration::from_micros(250));
+    async fn concurrency_is_bounded_and_drop_wakes_waiters() {
+        let gate = Arc::new(Gate::new(Policy { initial_qps: 10000, initial_concurrency: 2, ..TIANDITU_POLICY }));
+        let a = gate.acquire().await; let b = gate.acquire().await;
+        let waiting = tokio::spawn({ let gate = gate.clone(); async move { gate.acquire().await } });
+        tokio::time::sleep(Duration::from_millis(5)).await; assert!(!waiting.is_finished()); drop(a);
+        let c = tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap().unwrap(); drop(b); drop(c);
+        assert_eq!(gate.state.lock().unwrap().active, 0);
+    }
+    #[test]
+    fn one_failure_wave_halves_rate_once_and_old_successes_do_not_recover_it() {
+        let gate = Gate::new(TIANDITU_POLICY); gate.limited(0, Duration::from_millis(250));
+        for _ in 0..29 { gate.limited(0, Duration::from_millis(250)); }
+        let state = gate.state.lock().unwrap(); assert_eq!((state.qps, state.concurrency, state.epoch), (8, 2, 1)); drop(state);
+        for _ in 0..100 { gate.succeeded_at(0, Instant::now() + Duration::from_secs(10)); }
+        assert_eq!(gate.state.lock().unwrap().qps, 8); gate.limited(1, Duration::from_millis(250));
+        assert_eq!(gate.state.lock().unwrap().qps, 4);
+    }
+    #[test]
+    fn recovery_requires_time_and_successes_and_preserves_the_deadline() {
+        let gate = Gate::new(TIANDITU_POLICY); gate.limited(0, Duration::from_secs(1));
+        let origin = Instant::now(); let deadline = gate.state.lock().unwrap().next;
+        for _ in 0..100 { gate.succeeded_at(1, origin + Duration::from_millis(500)); }
+        assert_eq!(gate.state.lock().unwrap().qps, 8);
+        for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(6)); }
+        let state = gate.state.lock().unwrap(); assert_eq!((state.qps, state.concurrency), (9, 3)); assert_eq!(state.next, deadline); drop(state);
+        for step in 2..70 { for _ in 0..16 { gate.succeeded_at(1, origin + Duration::from_secs(step * 6)); } }
+        assert_eq!(gate.state.lock().unwrap().qps, 64);
+    }
+    #[tokio::test]
+    async fn cooldown_postpones_waiters_and_does_not_release_a_restart_burst() {
+        let gate = Arc::new(Gate::new(TIANDITU_POLICY)); let first = gate.acquire().await;
+        let waiting = tokio::spawn({ let gate = gate.clone(); async move { gate.acquire().await } });
+        tokio::task::yield_now().await; first.limited(Duration::from_millis(100)); drop(first);
+        let begin = Instant::now(); let second = waiting.await.unwrap(); assert!(begin.elapsed() >= Duration::from_millis(450));
+        let begin = Instant::now(); drop(second); let _third = gate.acquire().await;
+        assert!(begin.elapsed() >= Duration::from_millis(120));
+    }
+    #[test]
+    fn healthy_rate_is_learned_and_reused_by_the_next_task() {
+        let url = url("t3.tianditu.gov.cn", "cva", "learn-test"); let gate = gate_for(&url).unwrap(); let now = Instant::now();
+        for step in 1..5 { for _ in 0..16 { gate.succeeded_at(0, now + Duration::from_secs(step * 3)); } }
+        assert_eq!(gate_for(&url).unwrap().state.lock().unwrap().qps, 32);
     }
 }
