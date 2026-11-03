@@ -219,6 +219,16 @@ const enUS = {
     manageSources: 'Add / edit sources', loadError: 'Could not load sources. Please retry.', retry: 'Reload sources',
   },
   tasks: {
+    osm: {
+      queued: 'Waiting in the OSM request queue…',
+      request: 'Requesting OSM service {{current}} / {{total}} ({{host}})',
+      fallback: 'Service unavailable. Switching to backup {{current}} / {{total}}…',
+      wait: 'Service rate limited. Waiting {{seconds}} seconds before trying a backup…',
+      recovering: 'The OSM request failed. Checking backup services…',
+      unavailable: 'OSM services are unavailable. No output was created. Check your network or proxy, or retry later. The failure record is retained.',
+      incomplete: 'The OSM query returned incomplete data. No output was created. Retry with a smaller area.',
+      rejected: 'The OSM service rejected this query. Check the download conditions or network settings and retry. See logs for details.',
+    },
     output: {
       savedPath: 'Saved output', plannedPath: 'Planned location (output not confirmed)',
       copyPath: 'Copy path', copied: 'Output path copied', copyError: 'Could not copy the path',

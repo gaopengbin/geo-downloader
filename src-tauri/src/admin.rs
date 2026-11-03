@@ -315,6 +315,19 @@ pub async fn download_osm_features(
     proxy: Option<&str>,
     polygon: Option<&[(f64, f64)]>,
 ) -> Result<serde_json::Value, String> {
+    download_osm_features_with_progress(south, west, north, east, feature_type, proxy, polygon, |_| {}).await
+}
+
+pub async fn download_osm_features_with_progress(
+    south: f64,
+    west: f64,
+    north: f64,
+    east: f64,
+    feature_type: &str,
+    proxy: Option<&str>,
+    polygon: Option<&[(f64, f64)]>,
+    progress: impl FnMut(String),
+) -> Result<serde_json::Value, String> {
     // 生成区域过滤字符串：优先使用多边形，否则使用边界框
     let area_filter = if let Some(poly) = polygon {
         if poly.len() >= 3 {
@@ -425,42 +438,7 @@ pub async fn download_osm_features(
         ),
     };
 
-    // 使用 Overpass API
-    let overpass_url = "https://overpass-api.de/api/interpreter";
-    
-    let client_builder = Client::builder()
-        .timeout(Duration::from_secs(120));
-    
-    let client = if let Some(proxy_url) = proxy {
-        if !proxy_url.is_empty() {
-            client_builder
-                .proxy(reqwest::Proxy::all(proxy_url).map_err(|e| format!("代理设置失败: {}", e))?)
-                .build()
-                .map_err(|e| e.to_string())?
-        } else {
-            client_builder.build().map_err(|e| e.to_string())?
-        }
-    } else {
-        client_builder.build().map_err(|e| e.to_string())?
-    };
-
-    let response = client
-        .post(overpass_url)
-        .header("User-Agent", "GeoDownloader/1.0")
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!("data={}", urlencoding::encode(&query)))
-        .send()
-        .await
-        .map_err(|e| format!("Overpass API 请求失败: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Overpass API 返回 HTTP {}", response.status()));
-    }
-
-    let osm_data: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("OSM 数据解析失败: {}", e))?;
+    let osm_data = crate::overpass::query(&query, proxy, progress).await?;
     
     // 输出元素数量用于调试
     if let Some(elements) = osm_data.get("elements").and_then(|e| e.as_array()) {

@@ -3345,9 +3345,18 @@ pub async fn create_osm_download_task(
             let geojson = tokio::select! {
                 biased;
                 _ = cancel_token.cancelled() => return Err("已取消".into()),
-                result = crate::admin::download_osm_features(
+                result = crate::admin::download_osm_features_with_progress(
                     bounds.south, bounds.west, bounds.north, bounds.east,
                     &feature_type, proxy.as_deref(), coordinates.as_deref(),
+                    |message| {
+                        let level = if message.starts_with("OVERPASS_ERROR:") { "WARN" } else { "INFO" };
+                        task_log(&app, &tm, &tid, level, &message);
+                        tm.update_progress(&tid, TaskStatus::Downloading, 20.0, 0, 0, Some(message.clone()));
+                        let _ = app.emit(&event_name, TaskProgressPayload {
+                            task_id: tid.clone(), status: "downloading".into(), progress: 20.0,
+                            completed: 0, total: 0, message: Some(message),
+                        });
+                    },
                 ) => result?,
             };
             if cancel_token.is_cancelled() { return Err("已取消".into()); }

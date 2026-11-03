@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { ask as askDialog } from '@tauri-apps/plugin-dialog'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { getTaskErrorMessage } from '@/features/tasks/task-copy'
 import {
   ChevronDown,
   ChevronRight,
@@ -262,7 +263,7 @@ function HistoryCard({
         {formatDate(record.created_at, i18n.resolvedLanguage ?? i18n.language)}
       </p>}
 
-      {isFailed && record.error && <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={String(record.error)}>{String(record.error)}</p>}
+      {isFailed && record.error && <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={String(record.error)}>{getTaskErrorMessage(String(record.error), t)}</p>}
       {filePath && <OutputLocation path={filePath} saved={!isFailed}
         strictFile={record.source === 'osm_vector' || String(record.format) === 'geojson'}/>}
 

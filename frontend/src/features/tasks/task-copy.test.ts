@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { getTaskStatusKey } from './task-copy.ts'
+import { getTaskErrorMessage, getTaskMessage, getTaskStatusKey } from './task-copy.ts'
+import type { TaskInfo } from '@/types/api'
 
 test('maps every known task state to a translation key', () => {
   assert.equal(getTaskStatusKey('pending'), 'tasks.status.pending')
@@ -11,4 +12,25 @@ test('maps every known task state to a translation key', () => {
 
 test('preserves unknown backend states for forward compatibility', () => {
   assert.equal(getTaskStatusKey('future_state'), null)
+})
+
+test('OSM recovery progress is localized without hiding unknown backend messages', () => {
+  const translate = (key: string, values?: Record<string, string | number>) => JSON.stringify({ key, values })
+  const task = (message: string, source = 'osm_vector') => ({ source, status: 'downloading', message } as TaskInfo)
+  assert.equal(getTaskMessage(task('OVERPASS_REQUEST:2:3:overpass.private.coffee'), translate),
+    translate('tasks.osm.request', { current: 2, total: 3, host: 'overpass.private.coffee' }))
+  assert.equal(getTaskMessage(task('OVERPASS_WAIT:30'), translate), translate('tasks.osm.wait', { seconds: 30 }))
+  assert.equal(getTaskMessage(task('OVERPASS_FALLBACK:3:3'), translate), translate('tasks.osm.fallback', { current: 3, total: 3 }))
+  assert.equal(getTaskMessage(task('OVERPASS_QUEUED'), translate), translate('tasks.osm.queued'))
+  assert.equal(getTaskMessage(task('OVERPASS_ERROR: server disconnected'), translate), translate('tasks.osm.recovering'))
+  assert.equal(getTaskMessage(task('future protocol'), translate), 'future protocol')
+  assert.equal(getTaskMessage(task('OVERPASS_WAIT:30', 'other'), translate), 'OVERPASS_WAIT:30')
+})
+
+test('OSM failures distinguish unavailability, incomplete data and rejected queries', () => {
+  const translate = (key: string) => key
+  assert.equal(getTaskErrorMessage('OSM_SERVICE_UNAVAILABLE: connection failed', translate), 'tasks.osm.unavailable')
+  assert.equal(getTaskErrorMessage('OSM_QUERY_INCOMPLETE: timeout with partial elements', translate), 'tasks.osm.incomplete')
+  assert.equal(getTaskErrorMessage('OSM_REQUEST_REJECTED: HTTP 400', translate), 'tasks.osm.rejected')
+  assert.equal(getTaskErrorMessage('HTTP 429 from a different provider', translate), 'HTTP 429 from a different provider')
 })

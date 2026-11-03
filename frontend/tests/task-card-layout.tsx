@@ -32,6 +32,11 @@ let tasks: TaskInfo[] = query.has('stress') ? [
   { id:'paused',name:'影像下载已暂停_一个很长但仍应可读的任务标题',source:'tianditu_satellite',source_name:'天地图 卫星',zoom:17,status:'paused',progress:30,total:1000,completed:300,message:'任务已暂停，可继续下载或按现状导出。'},
   { id:'gaps',name:'Google Earth 影像已导出_存在缺块待补漏重导',source:'earth_keyhole_fixture',source_name:'Google Earth 历史影像 2013-10-16',zoom:14,status:'completed_with_gaps',progress:100,total:1000,completed:900,failed_count:100,file_size:123412341,save_path:output},
 ] : []
+if(query.has('osm')) tasks = [
+  {id:'osm-request',name:'OSM 道路下载',source:'osm_vector',source_name:'OSM Overpass',status:'downloading',progress:20,message:'OVERPASS_REQUEST:2:3:overpass.private.coffee',total:0,completed:0},
+  {id:'osm-wait',name:'OSM 建筑下载',source:'osm_vector',source_name:'OSM Overpass',status:'downloading',progress:20,message:'OVERPASS_WAIT:30',total:0,completed:0},
+  {id:'osm-failed',name:'OSM 道路：服务连接失败',source:'osm_vector',source_name:'OSM Overpass',status:'failed',progress:20,error:'OSM_SERVICE_UNAVAILABLE: overpass-api.de: 无法连接服务；备用服务: HTTP 503。本次未生成输出文件。',save_path:output.replace('.tif','.geojson'),total:0,completed:0},
+]
 let records: DownloadHistoryRecord[] = [
   {id:'complete',name:'Google Earth 2026-07-14 z17',source:'earth_keyhole_fixture',source_name:'Google Earth 历史影像 2026-07-14',zoom:17,format:'geotiff',status:'completed',file_path:output,file_size:170000,tile_count:4,created_at:'2026-10-27T21:13:43+08:00',log_file:'fixture.log',has_pyramid:false},
   {id:'long',name:'Google Earth 2013-10-16 z14_超长文件名_一个非常长的测试任务名称',source:'earth_keyhole_fixture',source_name:'Google Earth 历史影像 2013-10-16',zoom:14,format:'geotiff',status:'completed',file_path:longPath,file_size:32010000,tile_count:285,duration_secs:186,created_at:'2026-10-27T17:37:57+08:00',log_file:'fixture-long.log',has_pyramid:true,log_truncated:true},
@@ -84,7 +89,7 @@ createRoot(document.getElementById('root')!).render(<StrictMode><QueryClientProv
  <div className="fixed inset-0 flex flex-col">
   <header className="flex shrink-0 flex-wrap items-center gap-4 border-b p-3 text-xs">
    <span>下载卡片布局验证 · 模拟任务与路径，不操作真实文件</span>
-   <a href="?">常规样例</a><a href="?stress">压力样例</a><a href="?stress&en&dark">English / Dark</a><a href="?resize&stress">拖拽宽度验证</a>
+   <a href="?">常规样例</a><a href="?stress">压力样例</a><a href="?stress&en&dark">English / Dark</a><a href="?resize&stress">拖拽宽度验证</a><a href="?resize&osm">OSM 恢复提示</a>
   </header>
   {query.has('resize')?<ResizeExample/>:<main className="min-h-0 flex-1 overflow-auto"><div className="flex items-start gap-4 p-4">
    {(query.has('single')?[Number(query.get('single'))]:[380,480]).map(width=><section key={width} data-panel-width={width} className="shrink-0 space-y-3" style={{width}}>

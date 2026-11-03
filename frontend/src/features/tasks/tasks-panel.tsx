@@ -32,7 +32,7 @@ import {
   resumeTask,
   togglePauseTask,
 } from '@/features/tasks/tasks-api'
-import { getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
+import { getTaskErrorMessage, getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
 import { useTaskUpdates } from '@/features/tasks/use-task-updates'
 import { isTaskResultVisible } from './task-results'
 import { OutputLocation } from './output-location'
@@ -364,7 +364,7 @@ function TaskRow({
         )}
         {task.error && (
           <p className="line-clamp-2 whitespace-pre-wrap text-xs leading-relaxed text-destructive [overflow-wrap:anywhere]" title={task.error}>
-            {task.error}
+            {getTaskErrorMessage(task.error, t)}
           </p>
         )}
         {task.save_path && <OutputLocation path={task.save_path}

@@ -4,6 +4,7 @@ pub mod tile;
 pub mod downloader;
 mod update_download;
 mod osm_output;
+mod overpass;
 mod tile_requests;
 pub mod tianditu_tokens;
 pub mod acquisition_diagnostic;

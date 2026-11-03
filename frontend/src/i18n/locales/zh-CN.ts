@@ -219,6 +219,16 @@ const zhCN = {
     manageSources: '新增 / 编辑图源', loadError: '图源读取失败，请重试。', retry: '重新加载',
   },
   tasks: {
+    osm: {
+      queued: '等待 OSM 请求队列…',
+      request: '正在请求 OSM 服务 {{current}} / {{total}}（{{host}}）',
+      fallback: '当前服务不可用，正在切换备用服务 {{current}} / {{total}}…',
+      wait: '服务暂时限流，等待 {{seconds}} 秒后继续尝试备用服务…',
+      recovering: '当前 OSM 请求未成功，正在检查备用服务…',
+      unavailable: 'OSM 服务暂不可用，本次未生成输出文件。请检查网络或代理，或稍后重试；失败记录已保留。',
+      incomplete: 'OSM 查询未完整返回，本次未生成输出文件。请缩小下载范围后重试。',
+      rejected: 'OSM 服务拒绝了本次查询。请检查下载条件或网络设置后重试；详细原因见日志。',
+    },
     output: {
       savedPath: '保存位置', plannedPath: '计划保存位置（尚未确认生成文件）',
       copyPath: '复制路径', copied: '保存路径已复制', copyError: '复制路径失败',
