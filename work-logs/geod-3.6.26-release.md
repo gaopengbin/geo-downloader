@@ -15,3 +15,13 @@
 GitHub 最新正式版及国内镜像发布前均核对为 v3.6.25。部署使用腾讯云已有路径与固定主机密钥，不使用遗留的关闭 host-key 校验的镜像 workflow，也不让生产服务器下载 GitHub 资源。应用内额外消息通知不在本次请求中自行发布。
 
 构建 run、安装包哈希、发布/镜像/官网验证及回滚路径保存在 `G:/code/tif-downloader/artifacts/geod-3.6.26-release/`。实际公开结果完成后补充下方交付记录。
+
+## 已验证交付
+
+- 桌面源码及不可变 tag：`e930fc1debd3331eef440e98569f8564a00a4d5e` / `v3.6.26`。Release run `41636117805` 四个平台构建通过，包含两种 macOS 架构签名验证。
+- 正式发布页：https://github.com/gaopengbin/geo-downloader/releases/tag/v3.6.26 。公开 stable/latest 元数据、canonical 页面 HTTP 200、五个安装包和 SHA256SUMS 附件均核对完成。Windows 安装包内嵌文件/产品版本均为 3.6.26，归档完整性检查通过；未执行安装器。
+- 五个包本地与服务端校验后，国内镜像原子切换为 `/srv/laogao/packages/v3.6.26`；随后从公网完整读取五个包，大小和 SHA-256 均匹配正式附件。更新清单路径、版本、五个文件名和哈希通过同步器兼容性检查。
+- Windows 旧更新路径重定向到经过完整哈希和 Range 校验的 `download.laogao.xyz` 不可变对象。Agent 更新索引字节未变。Nginx 备份为 `/srv/laogao/backups/geod-legacy-cdn-20261103-131641/portfolio-direct.conf`，镜像回滚为 `/srv/laogao/packages/v3.6.25`。
+- 官网桌面入口源码 `374023b7f07c06fda470240c83b281b29c187ef6`，Cloudflare Pages run `41644632534` 成功。腾讯云四个桌面主页/历史路由已显示 3.6.26，浏览器核对五个平台下载链接；40 个非桌面文档哈希保持不变。官网回滚为 `/srv/laogao/releases/geod-website/geod-website-desktop-3625-20261102`。
+- 本地首次 GitHub 大包下载受网络影响，保留已有字节及有效分段，从官方签名地址续传后通过正式摘要验证；未让生产服务器获取任何 GitHub 文件。GitHub 页面直连校验超时后使用本机已有代理取得 HTTP 200，国内文件回读仍走直接路径。
+- 本次不修改采集服务或数据库，不推送额外应用内消息，不推断用户已安装或已收到通知。既有开发服务保持运行；独立回归服务器及浏览器页已关闭。
