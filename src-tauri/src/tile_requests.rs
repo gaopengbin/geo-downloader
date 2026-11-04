@@ -101,6 +101,7 @@ impl Drop for Permit {
     }
 }
 impl Permit {
+    pub(crate) fn policy_snapshot(&self) -> (u32, usize) { let s=self.gate.state.lock().unwrap(); (s.qps,s.concurrency) }
     pub(crate) fn limited(&self, delay: Duration) { self.gate.limited(self.epoch, delay); }
     pub(crate) fn succeeded(&self) { self.gate.succeeded_at(self.epoch, Instant::now()); }
 }

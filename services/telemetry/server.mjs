@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { openTelemetryDatabase, TIME_ZONE } from './database.mjs'
 import {validateDownloadDiagnostic}from './download-diagnostic.mjs'
+import {validateExecutionDiagnostic}from './execution-diagnostic.mjs'
 import { FEATURE_EVENT_NAMES, validateFeatureTelemetry } from './feature-events.mjs'
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -122,13 +123,15 @@ function validateProperties(eventName, properties) {
     const extra = ['diagnostic_version',...Object.keys(enums),...counters,'http_status','last_rejection_status','tokens_exhausted']
     const hasDiagnostics = properties.diagnostic_version !== undefined
     const detailed=Object.hasOwn(properties,'diagnostic')
-    if (!exactKeys(properties, [...base,...(hasDiagnostics?extra:[]),...(detailed?['diagnostic']:[])].sort()) || !UUID_PATTERN.test(properties.attempt_id) ||
+    const execution=Object.hasOwn(properties,'execution')
+    if (!exactKeys(properties, [...base,...(hasDiagnostics?extra:[]),...(detailed?['diagnostic']:[]),...(execution?['execution']:[])].sort()) || !UUID_PATTERN.test(properties.attempt_id) ||
         !['started','completed','completed_with_gaps','failed','cancelled'].includes(properties.state) ||
         !['unknown','under_10s','10-60s','1-5m','5-30m','30m+'].includes(properties.duration) ||
         !['none','cancelled','network','auth','disk','permission','missing_tiles','unknown'].includes(properties.reason)) {
       throw invalid('download_task_state properties are invalid')
     }
     const safe = { attempt_id: properties.attempt_id, state: properties.state, duration: properties.duration, reason: properties.reason }
+    if(execution){try{safe.execution=validateExecutionDiagnostic(properties.execution)}catch{throw invalid('download execution diagnostic is invalid')}}
     if(detailed){try{safe.diagnostic=validateDownloadDiagnostic(properties.diagnostic)}catch{throw invalid('download acquisition diagnostic is invalid')}}
     if (hasDiagnostics) {
       if (properties.diagnostic_version !== 1 || typeof properties.tokens_exhausted !== 'boolean' ||

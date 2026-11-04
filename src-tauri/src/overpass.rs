@@ -3,6 +3,12 @@ use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::{sync::Semaphore, time::Instant};
+use crate::execution_diagnostic::{millis,ExecutionDiagnostic,OverpassDiagnostic,OverpassAttempt};
+
+fn diagnostic(progress:&mut impl FnMut(String), value:&OverpassDiagnostic) {
+    let value=ExecutionDiagnostic {version:1,scheduler:None,overpass:Some(value.clone())};
+    if let Ok(json)=serde_json::to_string(&value) { progress(format!("OVERPASS_DIAGNOSTIC:{json}")); }
+}
 
 const ENDPOINTS: &[&str] = &[
     "https://overpass-api.de/api/interpreter",
@@ -68,20 +74,28 @@ pub async fn query(
         .build()
         .map_err(|_| "OSM_SERVICE_UNAVAILABLE: 无法创建网络客户端。")?;
     progress("OVERPASS_QUEUED".into());
+    diagnostic(&mut progress,&OverpassDiagnostic::default());
+    let queued=Instant::now();
     let _slot = REQUEST_SLOT
         .acquire()
         .await
         .map_err(|_| "OSM_SERVICE_UNAVAILABLE: 请求队列已关闭。")?;
-    query_with_client(query, &client, ENDPOINTS, Policy::default(), progress).await
+    query_diagnosed(query, &client, ENDPOINTS, Policy::default(), millis(queued.elapsed()), progress).await
 }
 
+#[cfg(test)]
 async fn query_with_client(
     query: &str,
     client: &Client,
     endpoints: &[&str],
     policy: Policy,
-    mut progress: impl FnMut(String),
+    progress: impl FnMut(String),
 ) -> Result<Value, String> {
+    query_diagnosed(query,client,endpoints,policy,0,progress).await
+}
+
+async fn query_diagnosed(query:&str,client:&Client,endpoints:&[&str],policy:Policy,queue_wait_ms:u64,mut progress:impl FnMut(String)) -> Result<Value,String> {
+    let mut observed=OverpassDiagnostic {queue_wait_ms:Some(queue_wait_ms),..Default::default()};
     let deadline = Instant::now() + policy.total;
     let mut failures = Vec::new();
     for (index, endpoint) in endpoints.iter().enumerate() {
@@ -98,6 +112,13 @@ async fn query_with_client(
             index + 1,
             endpoints.len()
         ));
+        let started=Instant::now();
+        let endpoint_id=match reqwest::Url::parse(endpoint).ok().and_then(|u|u.host_str().map(str::to_owned)).as_deref() {
+            Some("overpass-api.de")=>"de",Some("maps.mail.ru")=>"mailru",Some("overpass.private.coffee")=>"privatecoffee",_=>"other"};
+        let mut observation=OverpassAttempt {endpoint:endpoint_id.into(),outcome:"requesting".into(),http_status:None,elapsed_ms:0,backoff_ms:0};
+        observed.attempts.push(observation.clone());
+        observed.fallback_count=index as u32;
+        diagnostic(&mut progress,&observed);
         let result = tokio::time::timeout_at(
             deadline,
             attempt(
@@ -106,10 +127,15 @@ async fn query_with_client(
                 query,
                 policy.request.min(remaining),
                 policy.rate_limit_wait,
+                &mut observation,
             ),
         )
         .await
         .unwrap_or_else(|_| Err(Failure::unavailable("请求总时限已到")));
+        observation.elapsed_ms=millis(started.elapsed());
+        if observation.outcome=="requesting" {observation.outcome="deadline".into();}
+        *observed.attempts.last_mut().unwrap()=observation;
+        diagnostic(&mut progress,&observed);
         match result {
             Ok(value) => return Ok(value),
             Err(error) => {
@@ -127,7 +153,10 @@ async fn query_with_client(
                         break;
                     }
                     progress(format!("OVERPASS_WAIT:{}", error.wait.as_secs().max(1)));
+                    let waiting=Instant::now();
                     tokio::time::sleep(error.wait).await;
+                    observed.wait_ms=observed.wait_ms.saturating_add(millis(waiting.elapsed()));
+                    diagnostic(&mut progress,&observed);
                 }
                 if Instant::now() < deadline {
                     progress(format!(
@@ -151,6 +180,7 @@ async fn attempt(
     query: &str,
     timeout: Duration,
     rate_limit_wait: Duration,
+    observation: &mut OverpassAttempt,
 ) -> Result<Value, Failure> {
     let response = client
         .post(endpoint)
@@ -159,9 +189,11 @@ async fn attempt(
         .body(format!("data={}", urlencoding::encode(query)))
         .send()
         .await
-        .map_err(transport_failure)?;
+        .map_err(|error| {observation.outcome=transport_outcome(&error).into();transport_failure(error)})?;
     let status = response.status();
+    observation.http_status=Some(status.as_u16());
     if !status.is_success() {
+        observation.outcome="http_error".into();
         let retryable = status.is_server_error() || matches!(status.as_u16(), 408 | 429 | 406);
         let wait = if matches!(status.as_u16(), 429 | 406) {
             let specified = response
@@ -174,6 +206,7 @@ async fn attempt(
         } else {
             Duration::ZERO
         };
+        observation.backoff_ms=millis(wait);
         return Err(Failure {
             message: format!("HTTP {status}"),
             retryable,
@@ -185,15 +218,16 @@ async fn attempt(
             },
         });
     }
-    let bytes = response.bytes().await.map_err(transport_failure)?;
+    let bytes = response.bytes().await.map_err(|error|{observation.outcome=if error.is_timeout(){"timeout"}else{"body_error"}.into();transport_failure(error)})?;
     let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| Failure::unavailable("服务返回的数据不是有效 JSON"))?;
+        .map_err(|_| {observation.outcome="invalid_json".into();Failure::unavailable("服务返回的数据不是有效 JSON")})?;
     // Overpass may return HTTP 200 with both partial elements and a runtime remark.
     if let Some(remark) = value
         .get("remark")
         .and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty())
     {
+        observation.outcome="incomplete".into();
         return Err(Failure {
             message: format!(
                 "服务端未完整执行查询：{}；请缩小范围后重试",
@@ -205,9 +239,15 @@ async fn attempt(
         });
     }
     if !value.get("elements").is_some_and(Value::is_array) {
+        observation.outcome="invalid_response".into();
         return Err(Failure::unavailable("服务返回的数据缺少 elements 数组"));
     }
+    observation.outcome="success".into();
     Ok(value)
+}
+
+fn transport_outcome(error:&reqwest::Error)->&'static str {
+    if error.is_timeout(){"timeout"}else if error.is_connect(){"connect_error"}else if error.is_body(){"body_error"}else{"request_error"}
 }
 
 fn transport_failure(error: reqwest::Error) -> Failure {

@@ -30,6 +30,8 @@ mod tile_requests;
 mod download_scheduling;
 #[path = "../../../src-tauri/src/acquisition_diagnostic.rs"]
 pub mod acquisition_diagnostic;
+#[path = "../../../src-tauri/src/execution_diagnostic.rs"]
+pub mod execution_diagnostic;
 #[path = "../../../src-tauri/src/tianditu_tokens.rs"]
 pub mod tianditu_tokens;
 #[path = "../../../src-tauri/src/tile_policy.rs"]

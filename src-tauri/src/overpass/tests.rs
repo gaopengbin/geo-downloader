@@ -8,6 +8,33 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const VALID: &str = r#"{"elements":[{"type":"node","id":1,"lat":52.5,"lon":13.3}]}"#;
 const QUERY: &str =
     "[out:json];way[\"highway\"](52.516,13.376,52.518,13.380);out body;>;out skel qt;";
+
+#[tokio::test]
+async fn execution_records_real_attempt_status_fallback_wait_and_body_failure() {
+    let a=mock(Reply::RateLimited("0")).await;
+    let b=mock(Reply::Truncated).await;
+    let c=mock(Reply::Json(200,VALID)).await;
+    let mut values=Vec::new();
+    query_with_client(QUERY,&client(),&[&a.url,&b.url,&c.url],policy(),|message|{
+        if let Some(raw)=message.strip_prefix("OVERPASS_DIAGNOSTIC:"){values.push(serde_json::from_str::<ExecutionDiagnostic>(raw).unwrap());}
+    }).await.unwrap();
+    let value=values.last().unwrap();let d=value.overpass.as_ref().unwrap();
+    assert_eq!(d.fallback_count,2);assert!(d.wait_ms>=20);
+    assert_eq!(d.attempts.iter().map(|a|a.http_status).collect::<Vec<_>>(),vec![Some(429),Some(200),Some(200)]);
+    assert_eq!(d.attempts.iter().map(|a|a.outcome.as_str()).collect::<Vec<_>>(),vec!["http_error","body_error","success"]);
+    let raw=serde_json::to_string(value).unwrap();for secret in [QUERY,"52.516","highway","http://"]{assert!(!raw.contains(secret));}
+    if let Ok(dir)=std::env::var("GEOD_EXECUTION_DIAGNOSTIC_FIXTURES"){std::fs::create_dir_all(&dir).unwrap();std::fs::write(std::path::Path::new(&dir).join("overpass.json"),raw).unwrap();}
+}
+
+#[tokio::test]
+async fn incomplete_success_status_is_distinguished_from_success_and_not_retried() {
+    let a=mock(Reply::Json(200,r#"{"elements":[],"remark":"private query timeout"}"#)).await;
+    let b=mock(Reply::Json(200,VALID)).await;let mut last=None;
+    assert!(query_with_client(QUERY,&client(),&[&a.url,&b.url],policy(),|message|{
+        if let Some(raw)=message.strip_prefix("OVERPASS_DIAGNOSTIC:"){last=Some(serde_json::from_str::<ExecutionDiagnostic>(raw).unwrap());}
+    }).await.is_err());
+    let d=last.unwrap().overpass.unwrap();assert_eq!(d.attempts[0].outcome,"incomplete");assert_eq!(d.attempts[0].http_status,Some(200));assert_eq!(b.count.load(Ordering::SeqCst),0);
+}
 enum Reply {
     Json(u16, &'static str),
     RateLimited(&'static str),

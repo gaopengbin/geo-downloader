@@ -6,6 +6,7 @@ import {sanitizeAcquisitionDiagnostic,type AcquisitionDiagnostic}from './acquisi
 import type { DownloadLifecycleEvent } from './download-lifecycle'
 import { runtimePolicy } from '@/lib/runtime-policy'
 import { validateFeatureTelemetry, type FeatureTelemetryEventMap } from './feature-events.mjs'
+import {validateExecutionDiagnostic,type ExecutionDiagnostic}from './execution-diagnostic.mjs'
 
 interface TelemetryEventMap extends FeatureTelemetryEventMap {
   download_task_state: DownloadLifecycleEvent
@@ -121,7 +122,7 @@ interface QueuedTelemetryEvent {
   session_id: string
   app_version: string
   platform: 'windows' | 'macos' | 'linux' | 'web' | 'unknown'
-  properties: Record<string, boolean | number | string | null | AcquisitionDiagnostic>
+  properties: Record<string, boolean | number | string | null | AcquisitionDiagnostic | ExecutionDiagnostic>
 }
 
 const QUEUE_STORAGE_KEY = 'geo-downloader:telemetry-queue'
@@ -207,7 +208,7 @@ async function getAppVersion() {
 function sanitizeProperties<TName extends TelemetryEventName>(
   event: TName,
   properties: TelemetryEventMap[TName],
-): Record<string, boolean | number | string | null | AcquisitionDiagnostic> {
+): Record<string, boolean | number | string | null | AcquisitionDiagnostic | ExecutionDiagnostic> {
   switch (event) {
     case 'overlay_configuration':
     case 'output_location_action':
@@ -247,7 +248,7 @@ function sanitizeProperties<TName extends TelemetryEventName>(
     }
     case 'download_task_state': {
       const value = properties as DownloadLifecycleEvent
-      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason, ...sanitizeDownloadDiagnostics(value),...(value.diagnostic!==undefined?{diagnostic:sanitizeAcquisitionDiagnostic(value.diagnostic)}:{}) }
+      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason, ...sanitizeDownloadDiagnostics(value),...(value.diagnostic!==undefined?{diagnostic:sanitizeAcquisitionDiagnostic(value.diagnostic)}:{}),...(value.execution!==undefined?{execution:validateExecutionDiagnostic(value.execution)}:{}) }
     }
     case 'bookmark_action':
     case 'task_action':

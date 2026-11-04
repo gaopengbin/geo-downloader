@@ -1,0 +1,25 @@
+# 下载执行诊断 v1
+
+生命周期事件 `download_task_state` 新增可选 `execution` 字段。旧事件继续被接受，原有 acquisition v1 结构不变。客户端与采集端使用相同的闭合字段校验；不记录 URL、请求头、Key、OSM 查询、坐标、保存路径或原始错误文本。
+
+## 天地图瓦片调度
+
+只累计当前原生任务执行实例中天地图的请求，固定标记 provider=tianditu，混合图层中的其他服务不计入。原生下载器在实际发出 HTTP 请求时累计 `requests`，收到响应时累计 `responses` 及 404/429/503；发送/连接错误、超时分别累计。`peak_qps` 是单个任务滚动一秒内实际发出的最大请求数，`observed_ms` 是从首次进入调度等待至快照的观察时长。缓存命中不制造 HTTP 请求记录。
+
+`target_qps`、`target_concurrency` 为最近观察到的服务共享预算，包括限流后的降档；`user_rate`、`user_batch_size`、`user_batch_pause_ms` 记录用户配置。它们与任务的实际请求数分开，不能当成提供商配额。
+
+`gate_wait_ms` 累计各请求线程进入调度到获准发出的实际等待，含原有冷却、用户节奏和排队；并发等待求和可能超过墙钟时间。`waiting_requests` 含正在等待的线程，取消等待时保留已经发生的时长，不虚构请求。`retry_wait_ms` 为已完成的本地重试停顿。`last_backoff_ms`、`max_backoff_ms` 为最近/最大有效服务冷却安排，可能与其他任务的等待重叠，不代表已经实际睡满这些时间。
+
+## OSM / Overpass
+
+`queue_wait_ms=null` 表示仍等待 OSM 请求槽，获准后记录队列等待时长。每次实际端点尝试记录固定端点类别、HTTP 状态、耗时、冷却安排和结果：成功、HTTP 拒绝、连接失败、超时、响应中断、无效 JSON、无效结构、不完整查询等。`fallback_count` 只在下一次端点请求实际开始时增加，最多三次尝试。`wait_ms` 为已经完成的服务冷却等待。
+
+端点只记录 `de`、`mailru`、`privatecoffee` 或测试用 `other`。HTTP 200 不等于查询成功：含 Overpass remark 的部分结果标记为 `incomplete`，不生成假成功文件。取消会保留最新已观察快照，不将尚未完成的网络请求算成功。
+
+## 链路与上线顺序
+
+原生任务保存快照，前端开始/终态事件保留 `execution`，采集端验证后按现有事件机制持久化。终态任务另存 `<task-id>.execution.json`，保持已有 acquisition 文件格式。HTTP 指标按当前原生诊断实例累计，遥测 `attempt_id` 区分恢复尝试；分析时取对应终态快照，不把开始、进度与终态快照的累计计数相加。
+
+发布下一版桌面客户端前，必须先部署支持可选 `execution` 的采集服务。当前已发布的 3.6.27 不会产生这些新字段；历史失败缺失的信息无法补回。此改动不修改限速、备用服务顺序、重试或下载判定策略。
+
+验证包括：真实 loopback HTTP 429 冷却后成功、OSM 429 → 响应中断 → 备用成功、不完整 HTTP 200 拒绝、任务终态快照和本地侧录、原生 JSON 跨前端/采集端校验，以及真实本地 HTTP 入库/幂等读取。原生夹具可通过 `GEOD_EXECUTION_DIAGNOSTIC_FIXTURES` 输出，Node 跨层测试读取同一目录；未指定时显式跳过跨层夹具项。

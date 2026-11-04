@@ -71,6 +71,8 @@ pub fn token_url(url: &str, token: &str) -> String {
 /// Only bounded counters and fixed categories cross the IPC boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenDiagnostics {
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub execution: Option<crate::execution_diagnostic::ExecutionDiagnostic>,
     pub diagnostic_version: u8,
     pub provider: String,
     pub phase: String,
@@ -84,6 +86,12 @@ pub struct TokenDiagnostics {
     pub tokens_exhausted: bool,
     #[serde(default)]
     pub acquisition: crate::acquisition_diagnostic::AcquisitionDiagnostic,
+}
+
+impl TokenDiagnostics {
+    pub fn execution_only(execution: crate::execution_diagnostic::ExecutionDiagnostic) -> Self {
+        Self {execution:Some(execution),diagnostic_version:1,provider:"other".into(),phase:"prepare".into(),token_source:"user".into(),configured_tokens:0,used_tokens:0,token_switches:0,recovered_switches:0,settings_updates:0,last_rejection_status:0,tokens_exhausted:false,acquisition:Default::default()}
+    }
 }
 
 struct State {
@@ -111,6 +119,7 @@ pub struct Selection {
 }
 
 pub struct TiandituTokens {
+    pub(crate) execution: crate::execution_diagnostic::Tracker,
     state: Mutex<State>,
     logger: Logger,
 }
@@ -118,6 +127,7 @@ pub struct TiandituTokens {
 impl TiandituTokens {
     pub fn new(tokens: Vec<String>, logger: Logger) -> Self {
         Self {
+            execution: Default::default(),
             state: Mutex::new(State {
                 tokens,
                 active: 0,
@@ -201,6 +211,7 @@ impl TiandituTokens {
         let state = self.state.lock().unwrap();
         let relevant=state.acquisition.sources.is_empty()||state.provider=="tianditu"||!state.used_tokens.is_empty()||state.acquisition.sources.iter().any(|s|s.provider=="tianditu");
         TokenDiagnostics {
+            execution: self.execution.snapshot(),
             diagnostic_version: 1, provider: state.provider.clone(), phase: state.phase.clone(),
             token_source: if state.tokens.len() == 1 && state.tokens[0] == crate::config::TIANDITU_DEFAULT_TOKEN { "builtin" } else { "user" }.into(),
             configured_tokens: if relevant{state.tokens.len().min(65535) as u32}else{0},

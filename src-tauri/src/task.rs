@@ -140,6 +140,9 @@ impl TaskManager {
                 if id.len()<=96&&id.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'){
                     let folder=self.log_dir.join("diagnostics");
                     if std::fs::create_dir_all(&folder).is_ok(){if let Ok(bytes)=serde_json::to_vec_pretty(&value.acquisition){let _=crate::fs_util::atomic_write(&folder.join(format!("{id}.json")),&bytes);}}
+                    if let Some(execution)=value.execution.as_ref() {
+                        if let Ok(bytes)=serde_json::to_vec_pretty(execution) {let _=crate::fs_util::atomic_write(&folder.join(format!("{id}.execution.json")),&bytes);}
+                    }
                 }
             }
         }
@@ -415,6 +418,14 @@ impl TaskManager {
         }
     }
 
+    pub fn set_execution_diagnostic(&self,id:&str,diagnostic:crate::execution_diagnostic::ExecutionDiagnostic) {
+        if let Some(entry)=self.tasks.lock().unwrap().get_mut(id) {
+            if !matches!(entry.info.status,TaskStatus::Completed|TaskStatus::CompletedWithGaps|TaskStatus::Failed|TaskStatus::Cancelled) {
+                entry.info.download_diagnostics=Some(crate::tianditu_tokens::TokenDiagnostics::execution_only(diagnostic));
+            }
+        }
+    }
+
     pub fn get_all_tasks(&self) -> Vec<TaskInfo> {
         self.tasks
             .lock()
@@ -543,6 +554,26 @@ impl TaskManager {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod execution_snapshot_tests {
+    use super::*;
+    #[test]
+    fn osm_terminal_snapshot_and_sidecar_keep_execution_without_claiming_token_exhaustion() {
+        let dir=tempfile::tempdir().unwrap();let manager=TaskManager::new_with_log_dir(dir.path().into());
+        manager.create_task("exec-task".into(),"OSM".into(),"osm_vector".into(),"OSM".into(),0,"geojson".into(),"out.geojson".into(),0);
+        let value=crate::execution_diagnostic::ExecutionDiagnostic {version:1,scheduler:None,overpass:Some(crate::execution_diagnostic::OverpassDiagnostic {queue_wait_ms:Some(30),..Default::default()})};
+        manager.set_execution_diagnostic("exec-task",value.clone());
+        manager.fail_task("exec-task","OSM_SERVICE_UNAVAILABLE: network".into());
+        let d=manager.get_all_tasks().remove(0).download_diagnostics.unwrap();
+        assert!(!d.tokens_exhausted);assert_eq!(d.configured_tokens,0);
+        assert_eq!(d.execution.unwrap().overpass.unwrap().queue_wait_ms,Some(30));
+        assert!(dir.path().join("diagnostics/exec-task.execution.json").is_file());
+        let mut late=value;late.overpass.as_mut().unwrap().queue_wait_ms=Some(99);
+        manager.set_execution_diagnostic("exec-task",late);
+        assert_eq!(manager.get_all_tasks().remove(0).download_diagnostics.unwrap().execution.unwrap().overpass.unwrap().queue_wait_ms,Some(30));
     }
 }
 

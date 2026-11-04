@@ -9,6 +9,7 @@ mod tile_requests;
 mod download_scheduling;
 pub mod tianditu_tokens;
 pub mod acquisition_diagnostic;
+pub mod execution_diagnostic;
 #[cfg(test)]mod acquisition_live_acceptance;
 #[cfg(test)]mod layer_access_tests;
 mod acquisition_storage;

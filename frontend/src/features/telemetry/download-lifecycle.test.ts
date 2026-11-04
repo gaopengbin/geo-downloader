@@ -2,6 +2,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DownloadLifecycleTracker, reasonBucket } from './download-lifecycle.ts'
 
+test('OSM execution diagnostics survive start, failure and lifecycle tracking without credentials',()=>{
+ const execution={version:1,scheduler:null,overpass:{queue_wait_ms:10,fallback_count:0,wait_ms:0,attempts:[{endpoint:'de',outcome:'connect_error',http_status:null,elapsed_ms:100,backoff_ms:0}]}};
+ let id=0;const tracker=new DownloadLifecycleTracker(()=>`attempt-${++id}`,()=>1000);
+ tracker.observe([]);
+ const start=tracker.observe([{id:'osm',status:'downloading',download_diagnostics:{execution}}]);
+ assert.deepEqual(start[0].execution,execution);
+ const end=tracker.observe([{id:'osm',status:'failed',error:'OSM_SERVICE_UNAVAILABLE: network',download_diagnostics:{execution}}]);
+ assert.deepEqual(end[0].execution,execution);
+ assert.equal(end[0].reason,'network');
+ assert.equal(tracker.observe([{id:'osm',status:'failed',download_diagnostics:{execution}}]).length,0);
+});
+
 test('stable download codes classify access, quota, rate limits, source data and storage errors', () => {
   const cases = [
     ['TILE_ACCESS_DENIED: HTTP 403; 请检查权限', 'auth'],

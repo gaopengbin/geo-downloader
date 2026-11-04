@@ -458,6 +458,9 @@ impl TileDownloader {
             };
         }
         let observer = tokens;
+        // Keep Tianditu rate measurements separate from a mixed task's other
+        // providers; a fast base layer must not inflate an annotation's QPS.
+        let execution_observer=observer.filter(|_|tianditu_tokens::is_tianditu_url(url));
         let tokens = tokens.filter(|_| tianditu_tokens::is_tianditu_url(url));
         let mut last_error: String;
         if let Some(parent) = file_path.parent() {
@@ -474,8 +477,11 @@ impl TileDownloader {
             // Schedule the credential actually being sent, including backups.
             // A settings change may add a shared gate while this downloader is
             // already cooling. Never discard that older Retry-After deadline.
+            let gate_wait = execution_observer.map(|o| {o.execution.gate_wait(Duration::ZERO,None,crate::download_scheduling::current());o.execution.waiting()});
             rate_limit.wait().await;
             let provider_permit = crate::tile_requests::acquire_download(url).await;
+            if let Some(observer)=execution_observer { observer.execution.gate_wait(Duration::ZERO,provider_permit.as_ref().map(|p|p.policy_snapshot()),crate::download_scheduling::current()); }
+            drop(gate_wait);
             if rate_limit.remaining().is_some() { drop(provider_permit); continue; }
             if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) {
                 if pool.current()?.token != used.token { continue; }
@@ -483,9 +489,11 @@ impl TileDownloader {
             let req_fut = async {
                 if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_request(used); }
                 let request = crate::geovis::request(client, url).map_err(|e| (e, false))?;
+                let _request_observation=execution_observer.map(|o|o.execution.request());
                 match request.headers(headers.clone()).send().await {
                     Ok(resp) => {
                         let status = resp.status();
+                        if let Some(observer)=execution_observer { observer.execution.response(status.as_u16()); }
                         if let Some(observer)=observer{observer.observe_http(resp.url().host_str().unwrap_or_default(),status.as_u16());}
                         if status.is_success() {
                             let content_type = resp.headers().get(reqwest::header::CONTENT_TYPE)
@@ -519,6 +527,7 @@ impl TileDownloader {
                             let delay = retry_after(resp.headers(), attempt);
                             if let Some(permit) = &provider_permit { permit.limited(delay); }
                             else { rate_limit.defer(delay); }
+                            if let Some(observer)=execution_observer { observer.execution.backoff(crate::tile_requests::cooldown_remaining(url).unwrap_or(delay),provider_permit.as_ref().map(|p|p.policy_snapshot())); }
                             if status.as_u16() == 429 {
                                 if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_rate_limit(used); }
                             }
@@ -539,7 +548,7 @@ impl TileDownloader {
                     }
                     Err(e) if e.is_redirect() => Err((
                         "TILE_REDIRECT_DENIED: 下载重定向被拒绝（公共 OSM 瓦片或重定向过多），请切换图源".into(), false)),
-                    Err(e) => Err((e.without_url().to_string(), false)),
+                    Err(e) => { if let Some(observer)=execution_observer {observer.execution.error(e.is_timeout());} Err((e.without_url().to_string(), false)) },
                 }
             };
 
@@ -561,19 +570,24 @@ impl TileDownloader {
                             counter.fetch_add(1, Ordering::Relaxed);
                         }
                         let delay = if rate_limited { 0 } else { 300 * (attempt as u64 + 1) };
+                        let retry_started = tokio::time::Instant::now();
                         tokio::time::sleep(Duration::from_millis(delay)).await;
+                        if let Some(observer)=execution_observer {observer.execution.retry_wait(retry_started.elapsed());}
                         if let Some(counter) = retrying_count {
                             counter.fetch_sub(1, Ordering::Relaxed);
                         }
                     }
                 }
                 Err(_) => {
+                    if let Some(observer)=execution_observer {observer.execution.error(true);}
                     last_error = "请求超时".to_string();
                     if attempt < retry_times {
                         if let Some(counter) = retrying_count {
                             counter.fetch_add(1, Ordering::Relaxed);
                         }
+                        let retry_started=tokio::time::Instant::now();
                         tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                        if let Some(observer)=execution_observer {observer.execution.retry_wait(retry_started.elapsed());}
                         if let Some(counter) = retrying_count {
                             counter.fetch_sub(1, Ordering::Relaxed);
                         }
@@ -1357,7 +1371,7 @@ mod tests {
             let file = directory.path().join(format!("{route}.png"));
             let result = TileDownloader::download_one_tile(downloader.client(),&downloader.get_tile_url(&tile),
                 &downloader.get_headers(),&file,0,None,&RateLimitGate::default(),None).await;
-            assert_eq!(result.is_ok(),success);
+            assert_eq!(result.is_ok(),success,"header route {route}: {result:?}");
             if success { assert!(image::open(file).is_ok()); }
         }
         source.headers = Default::default(); source.url = format!("{}/tile/{{z}}/{{x}}/{{y}}.png",server.url);
@@ -1794,6 +1808,13 @@ mod tests {
             assert_eq!(pool.current().unwrap().token, "private-a");
             assert!(!pool.diagnostics().tokens_exhausted);
             assert_eq!(pool.diagnostics().token_switches, 0);
+            if tianditu_tokens::is_tianditu_url(&url) {
+                let observed=pool.diagnostics().execution.unwrap().scheduler.unwrap();
+                assert_eq!((observed.requests,observed.responses,observed.http_429),(2,2,1));
+                assert!(observed.max_backoff_ms>=900);
+                assert!(observed.gate_wait_ms>=900);
+                assert!(observed.target_qps.unwrap()>0);
+            } else {assert!(pool.diagnostics().execution.is_none());}
         }
         crate::tile_requests::reset_for_tests();
     }

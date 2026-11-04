@@ -3350,6 +3350,12 @@ pub async fn create_osm_download_task(
                     bounds.south, bounds.west, bounds.north, bounds.east,
                     &feature_type, proxy.as_deref(), coordinates.as_deref(),
                     |message| {
+                        if let Some(json)=message.strip_prefix("OVERPASS_DIAGNOSTIC:") {
+                            if let Ok(diagnostic)=serde_json::from_str::<crate::execution_diagnostic::ExecutionDiagnostic>(json) {
+                                tm.set_execution_diagnostic(&tid,diagnostic);
+                            }
+                            return;
+                        }
                         let level = if message.starts_with("OVERPASS_ERROR:") { "WARN" } else { "INFO" };
                         task_log(&app, &tm, &tid, level, &message);
                         tm.update_progress(&tid, TaskStatus::Downloading, 20.0, 0, 0, Some(message.clone()));
