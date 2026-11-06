@@ -5,17 +5,17 @@ use std::sync::{
 };
 use tokio::io::AsyncReadExt;
 
-enum Reply {
+pub(super) enum Reply {
     Pages,
     Repeat,
     Empty,
     Malformed,
     Slow,
 }
-struct Mock {
-    source: Source,
-    cache: tempfile::TempDir,
-    count: Arc<AtomicUsize>,
+pub(super) struct Mock {
+    pub(super) source: Source,
+    pub(super) cache: tempfile::TempDir,
+    pub(super) count: Arc<AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Mock {
@@ -23,7 +23,7 @@ impl Drop for Mock {
         self.task.abort();
     }
 }
-async fn mock(reply: Reply) -> Mock {
+pub(super) async fn mock(reply: Reply) -> Mock {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/wfs", listener.local_addr().unwrap());
     let count = Arc::new(AtomicUsize::new(0));
@@ -283,6 +283,27 @@ async fn serve_ui_bridge() {
                 let mut source = Source::new(None)?;
                 source.cache = output.join("ui-cache");
                 source.cache_read = !args["refresh"].as_bool().unwrap_or(false);
+                if path == "/raster" {
+                    let config: raster::RasterConfig =
+                        serde_json::from_value(args["config"].clone())
+                            .map_err(|_| "bad raster config")?;
+                    let z = args["z"]
+                        .as_u64()
+                        .and_then(|v| u8::try_from(v).ok())
+                        .ok_or("bad zoom")?;
+                    let x = args["x"]
+                        .as_u64()
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or("bad x")?;
+                    let y = args["y"]
+                        .as_u64()
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or("bad y")?;
+                    return Ok(serde_json::to_value(
+                        raster::tile(source, config, z, x, y, &cancel).await?,
+                    )
+                    .unwrap());
+                }
                 let bounds: Bounds =
                     serde_json::from_value(args["bounds"].clone()).map_err(|_| "bad bounds")?;
                 if path == "/preview" {

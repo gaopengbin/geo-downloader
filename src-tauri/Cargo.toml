@@ -87,6 +87,10 @@ base64 = "0.22"
 # Shell commands
 open = "5"
 
+# Native reference image tiles (system fonts, no embedded CJK font package)
+tiny-skia = "0.11.4"
+ttf-parser = "0.25.1"
+
 [features]
 default = []
 geotiff = ["gdal"]

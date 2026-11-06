@@ -62,6 +62,7 @@ export function FoundationControls({
   const exported = useFoundationStore((s) => s.exportState)
   const setExport = useFoundationStore((s) => s.setExport)
   const visible = FOUNDATION_IDS.filter((id) => settings.layers[id].visible)
+  const rasterStatus = visible.length ? records[visible[0]] : null
   const exportId = exported?.id
   const exportPhase = exported?.phase
   useEffect(() => {
@@ -173,14 +174,9 @@ export function FoundationControls({
               <span className="min-w-0 flex-1 truncate text-xs">
                 {t(`foundation.layers.${id}`)}
               </span>
-              {style.visible && record.phase === 'loading' ? (
+              {style.visible && record.phase === 'loading' && (
                 <Loader2 className="size-3 shrink-0 animate-spin" />
-              ) : style.visible && record.data ? (
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                  {record.data.feature_count}
-                  {record.data.truncated ? '+' : ''}
-                </span>
-              ) : null}
+              )}
             </div>
             {details && (
               <div className="flex items-center gap-2">
@@ -242,38 +238,43 @@ export function FoundationControls({
                 </label>
               </div>
             )}
-            {style.visible && record.phase === 'zoom' && (
+            {!embedded && style.visible && record.phase === 'zoom' && (
               <p className="text-xs text-muted-foreground">
                 {t('foundation.zoomHint', { zoom: MIN_FOUNDATION_ZOOM })}
               </p>
             )}
-            {style.visible && record.error && (
+            {!embedded && style.visible && record.error && (
               <p role="alert" className="break-words text-xs text-destructive">
                 {t(`foundation.${record.error}`)}
               </p>
             )}
-            {!compact &&
-              style.visible &&
-              record.phase === 'ready' &&
-              record.data &&
-              (!embedded ||
-                record.data.truncated ||
-                record.data.feature_count === 0) && (
-                <p className="text-xs text-muted-foreground">
-                  {record.data.truncated
-                    ? t('foundation.partial')
-                    : record.data.feature_count === 0
-                      ? t('foundation.empty')
-                      : t(
-                          record.data.network_pages === 0
-                            ? 'foundation.cached'
-                            : 'foundation.loaded',
-                        )}
-                </p>
-              )}
           </div>
         )
       })}
+      {embedded && rasterStatus && (
+        <>
+          {rasterStatus.phase === 'loading' && (
+            <p role="status" className="text-xs text-muted-foreground">
+              {t('foundation.rasterLoading')}
+            </p>
+          )}
+          {rasterStatus.phase === 'ready' && (
+            <p role="status" className="text-xs text-muted-foreground">
+              {t('foundation.rasterLoaded', { count: rasterStatus.tiles ?? 0 })}
+            </p>
+          )}
+          {rasterStatus.phase === 'zoom' && (
+            <p className="text-xs text-muted-foreground">
+              {t('foundation.zoomHint', { zoom: MIN_FOUNDATION_ZOOM })}
+            </p>
+          )}
+          {rasterStatus.error && (
+            <p role="alert" className="text-xs text-destructive">
+              {t('foundation.' + rasterStatus.error)}
+            </p>
+          )}
+        </>
+      )}
       {embedded && (
         <div className="flex items-center justify-between gap-2 border-t pt-2">
           <Button

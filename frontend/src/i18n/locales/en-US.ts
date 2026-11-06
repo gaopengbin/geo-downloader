@@ -1,5 +1,9 @@
 const enUS = {
   foundation: {
+    rasterLoading: 'Loading image tiles…',
+    rasterLoaded: 'Loaded {{count}} image tiles',
+    fontMissing: 'No system CJK font is available. Install one and restart GeoD to display names.',
+    dense: 'This area is too dense. Zoom in and try again.',
     panelTitle: 'Reference layers',
     closePanel: 'Collapse reference layers',
     displaySettings: 'Display settings',
@@ -45,7 +49,7 @@ const enUS = {
     cancel: 'Cancel',
     cancelled: 'Export cancelled; the original file is preserved',
     scopeHint:
-      'Map reference overlay · separate GeoJSON export. Labels avoid overlap. Coordinate alignment can be set for custom basemaps.',
+      'Image tile overlays load with the map. Original vectors can be exported separately as GeoJSON. Coordinate alignment can be set for custom basemaps.',
     attribution:
       'Source: NGCC / Tianditu public geographic framework. Reference data, not a live detailed road network.',
     networkError:

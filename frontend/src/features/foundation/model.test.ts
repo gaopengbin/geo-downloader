@@ -4,7 +4,6 @@ import {
   foundationQueryBounds,
   normalizeFoundationSettings,
   shouldUseGcjCoordinates,
-  featureLabel,
 } from './model.ts'
 import { gcjToWgs, wgsToGcj } from './coordinates.ts'
 test('rounded viewport queries contain the requested area and reject ambiguous/date-line bounds', () => {
@@ -31,13 +30,13 @@ test('persisted settings are limited to recognized layers and valid styles', () 
     layers: { water: { visible: true, color: 'url(private)', width: -1 } },
   })
   assert.equal(s.fontSize, 22)
+  assert.equal(normalizeFoundationSettings({ fontSize: 13.8 }).fontSize, 14)
   assert.equal(s.layers.water.visible, true)
   assert.equal(s.layers.water.color, '#3185d6')
   assert.equal(s.layers.water.width, 2)
   assert.equal(s.layers.roads.visible, false)
   assert.equal(shouldUseGcjCoordinates('auto', 'amap_satellite'), true)
   assert.equal(shouldUseGcjCoordinates('auto', 'google_satellite'), false)
-  assert.equal(featureLabel({ NAME: ' 北京市 ' }), '北京市')
 })
 test('reference geometry can align with Amap without modifying exported WGS84 data', () => {
   const input: [number, number] = [116.397128, 39.916527]

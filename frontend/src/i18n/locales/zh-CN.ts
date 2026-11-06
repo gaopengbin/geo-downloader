@@ -1,5 +1,9 @@
 const zhCN = {
   foundation: {
+    rasterLoading: '正在加载图像瓦片…',
+    rasterLoaded: '已加载 {{count}} 片图像瓦片',
+    fontMissing: '系统缺少中文字体，名称暂未显示；请安装中文字体后重启 GeoD。',
+    dense: '当前区域要素过密，请放大地图后重试。',
     panelTitle: '参考图层',
     closePanel: '收起参考图层',
     displaySettings: '显示设置',
@@ -43,7 +47,7 @@ const zhCN = {
     cancel: '取消',
     cancelled: '已取消另存，原文件保留',
     scopeHint:
-      '地图参考叠加 · GeoJSON 单独另存。名称会自动避让；自定义底图可手动选择坐标对齐方式。',
+      '图像瓦片叠加，随地图自动加载；原始矢量可单独另存 GeoJSON。自定义底图可手动设置坐标对齐。',
     attribution:
       '来源：国家基础地理信息中心 / 天地图公众版基础框架，适合参考，不作为实时精细路网。',
     networkError: '基础要素读取失败，请检查网络或代理后重试。',

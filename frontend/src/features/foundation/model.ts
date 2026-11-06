@@ -1,5 +1,3 @@
-import type { FeatureCollection, Geometry, GeoJsonProperties } from 'geojson'
-
 export const FOUNDATION_IDS = [
   'water',
   'roads',
@@ -25,22 +23,12 @@ export interface FoundationSettings {
   fontSize: number
   coordinates: CoordinateMode
 }
-export interface FoundationPreview {
-  layer: FoundationId
-  bounds: FoundationBounds
-  geojson: FeatureCollection<Geometry, GeoJsonProperties>
-  feature_count: number
-  total_matched: number | null
-  truncated: boolean
-  cache_hits: number
-  network_pages: number
-  queried_at: string
-  source: string
-}
 export interface LayerRecord {
   phase: 'off' | 'zoom' | 'loading' | 'ready' | 'error'
-  data: FoundationPreview | null
   error: string | null
+  tiles?: number
+  pending?: number
+  cached?: number
 }
 export const MIN_FOUNDATION_ZOOM = 8
 export const FOUNDATION_DEFAULTS: FoundationSettings = {
@@ -55,7 +43,6 @@ export const FOUNDATION_DEFAULTS: FoundationSettings = {
 }
 export const emptyRecord = (): LayerRecord => ({
   phase: 'off',
-  data: null,
   error: null,
 })
 export const emptyRecords = (): Record<FoundationId, LayerRecord> =>
@@ -69,7 +56,9 @@ export function normalizeFoundationSettings(raw: unknown): FoundationSettings {
   ) as Partial<FoundationSettings>
   const font = Number(r.fontSize)
   return {
-    fontSize: Number.isFinite(font) ? Math.max(10, Math.min(22, font)) : 12,
+    fontSize: Number.isFinite(font)
+      ? Math.max(10, Math.min(22, Math.round(font)))
+      : 12,
     coordinates: ['auto', 'wgs84', 'gcj02'].includes(r.coordinates ?? '')
       ? r.coordinates!
       : 'auto',
@@ -118,8 +107,4 @@ export function boundsKey(b: FoundationBounds) {
 }
 export function shouldUseGcjCoordinates(mode: CoordinateMode, baseId: string) {
   return mode === 'gcj02' || (mode === 'auto' && baseId.startsWith('amap_'))
-}
-export function featureLabel(properties: GeoJsonProperties): string {
-  const name = properties?.NAME ?? properties?.name ?? properties?.RN
-  return typeof name === 'string' ? name.trim().slice(0, 80) : ''
 }

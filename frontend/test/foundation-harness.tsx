@@ -21,6 +21,7 @@ let settings: Record<string, unknown> = {
 }
 let callback = 0
 const callbacks = new Map<number, unknown>()
+const qaCalls: Record<string, number> = {}
 const originalWindow = window as unknown as Record<string, unknown>
 originalWindow.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
   unregisterListener: () => {},
@@ -32,6 +33,7 @@ originalWindow.__TAURI_INTERNALS__ = {
   },
   unregisterCallback: (id: number) => callbacks.delete(id),
   invoke: async (command: string, args: Record<string, unknown> = {}) => {
+    qaCalls[command] = (qaCalls[command] ?? 0) + 1
     if (command === 'get_settings') return settings
     if (command === 'save_settings') {
       settings = args.settings as Record<string, unknown>
@@ -54,6 +56,7 @@ originalWindow.__TAURI_INTERNALS__ = {
     const route = (
       {
         foundation_preview: 'preview',
+        foundation_raster_tile: 'raster',
         foundation_cancel: 'cancel',
         foundation_export: 'export',
       } as Record<string, string>
@@ -143,8 +146,14 @@ export function Harness() {
         <output className="block text-xs" data-qa-view>
           {view}
         </output>
-        <pre data-qa-perf className="max-h-36 overflow-auto whitespace-pre-wrap break-all text-xs">
+        <pre
+          data-qa-perf
+          className="max-h-36 overflow-auto whitespace-pre-wrap break-all text-xs"
+        >
           {JSON.stringify(measurements)}
+        </pre>
+        <pre data-qa-calls className="text-xs whitespace-pre-wrap break-all">
+          {JSON.stringify(qaCalls)}
         </pre>
         <pre
           className="max-h-44 overflow-auto whitespace-pre-wrap text-[10px]"
@@ -157,9 +166,10 @@ export function Harness() {
                   id,
                   {
                     phase: r.phase,
-                    count: r.data?.feature_count,
-                    cache: r.data?.cache_hits,
-                    bounds: r.data?.bounds,
+                    tiles: r.tiles,
+                    pending: r.pending,
+                    cached: r.cached,
+                    error: r.error,
                   },
                 ]),
               ),
@@ -198,7 +208,18 @@ export function Harness() {
             小步平移
           </Button>
           <Button onClick={() => setMeasurements([])}>清空性能记录</Button>
-          <Button onClick={()=>{map.current?.setView([35.95,114.63],8,{animate:false});setTimeout(()=>map.current?.setView([35.95,114.63],12,{animate:false}),420)}}>快速点位缩放</Button>
+          <Button
+            onClick={() => {
+              map.current?.setView([35.95, 114.63], 8, { animate: false })
+              setTimeout(
+                () =>
+                  map.current?.setView([35.95, 114.63], 12, { animate: false }),
+                420,
+              )
+            }}
+          >
+            快速点位缩放
+          </Button>
           <Button
             onClick={() => {
               map.current?.panBy([120, 0], { animate: false })

@@ -1,4 +1,5 @@
 //! National reference features: fixed public WFS, bounded previews and streamed exports.
+pub mod raster;
 use crate::tile::Bounds;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

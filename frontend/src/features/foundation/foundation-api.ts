@@ -1,25 +1,34 @@
 import { invokeCommand } from '@/lib/tauri'
 import { getSettings } from '@/features/settings/settings-api'
-import type { FoundationId, FoundationBounds, FoundationPreview } from './model'
+import type { FoundationId, FoundationBounds } from './model'
 
 export async function foundationProxy(): Promise<string | null> {
   const s = await getSettings()
   return s.proxy_enabled ? (s.proxy_url ?? null) : null
 }
-export function fetchFoundation(
+export interface RasterConfig {
+  layers: Array<{
+    layer: FoundationId
+    color: string
+    width: number
+    labels: boolean
+  }>
+  font_size: number
+  gcj: boolean
+  revision: number
+}
+export function fetchFoundationRaster(
   requestId: string,
-  layer: FoundationId,
-  bounds: FoundationBounds,
+  config: RasterConfig,
+  coords: { z: number; x: number; y: number },
   proxy: string | null,
-  refresh = false,
 ) {
-  return invokeCommand<FoundationPreview>('foundation_preview', {
-    requestId,
-    layer,
-    bounds,
-    proxy,
-    refresh,
-  })
+  return invokeCommand<{
+    data_url: string
+    font_available: boolean
+    empty: boolean
+    cache_hit: boolean
+  }>('foundation_raster_tile', { requestId, config, ...coords, proxy })
 }
 export function cancelFoundation(requestId: string) {
   return invokeCommand<void>('foundation_cancel', { requestId }).catch(() => {})
@@ -44,9 +53,11 @@ export function foundationErrorKey(error: unknown) {
       ? 'limited'
       : text.includes('STORAGE') || text.includes('OUTPUT')
         ? 'storageError'
-        : text.includes('BOUNDS')
-          ? 'boundsError'
-          : text.includes('RESPONSE') || text.includes('CRS')
-            ? 'responseError'
-            : 'networkError'
+        : text.includes('DENSITY')
+          ? 'dense'
+          : text.includes('BOUNDS')
+            ? 'boundsError'
+            : text.includes('RESPONSE') || text.includes('CRS')
+              ? 'responseError'
+              : 'networkError'
 }

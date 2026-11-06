@@ -216,6 +216,7 @@ pub fn run() {
             // 矢量数据
             commands::create_osm_download_task,
             foundation::foundation_preview,
+            foundation::raster::foundation_raster_tile,
             foundation::foundation_cancel,
             foundation::foundation_export,
             commands::download_osm_data,
