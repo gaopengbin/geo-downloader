@@ -21,6 +21,12 @@ test('download outcomes accept only random attempt IDs and categorical diagnosti
 const diagnostics = { diagnostic_version: 1, provider: 'tianditu', phase: 'overlay_download', token_source: 'user',
   configured_tokens: 3, used_tokens: 3, token_switches: 2, recovered_switches: 1, settings_updates: 0,
   last_rejection_status: 429, tokens_exhausted: true, error_code: 'all_tokens_unavailable', http_status: 429 }
+test('new transport categories are accepted alongside legacy diagnostic events',()=>{
+ for(const code of ['network_connect','network_timeout','network_body','network_request','invalid_request']){
+  const properties={attempt_id:crypto.randomUUID(),state:'failed',duration:'10-60s',reason:'network',...diagnostics,error_code:code,tokens_exhausted:false,http_status:0,last_rejection_status:0};
+  assert.equal(validateEnvelope({schema_version:1,events:[event({event:'download_task_state',properties})]})[0].properties.error_code,code);
+ }
+});
 test('accepts bounded failover categories and rejects credentials, raw errors and malformed diagnostics', () => {
   const properties = { attempt_id: crypto.randomUUID(), state: 'failed', duration: '30m+', reason: 'auth', ...diagnostics }
   assert.deepEqual(validateEnvelope({ schema_version: 1, events: [event({ event: 'download_task_state', properties })] })[0].properties, properties)

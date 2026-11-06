@@ -94,6 +94,22 @@ pub(crate) async fn service_error_detail(mut response: reqwest::Response) -> Str
 /// This also applies to decoded HTTP content (for example a gzip response).
 const MAX_TILE_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
+fn transport_error(error: &reqwest::Error, reading_body: bool) -> String {
+    // Fixed codes expose the failure stage without URL/query/proxy credentials.
+    let (code, message) = if error.is_timeout() {
+        ("TILE_NETWORK_TIMEOUT", "图源连接或读取超时，请检查网络或代理后恢复任务")
+    } else if reading_body {
+        ("TILE_NETWORK_BODY", "图源响应传输中断，请稍后恢复任务")
+    } else if error.is_connect() {
+        ("TILE_NETWORK_CONNECT", "无法连接图源，请检查网络、DNS、证书或代理后恢复任务")
+    } else if error.is_builder() {
+        ("TILE_REQUEST_INVALID", "无法构造图源请求，请检查图源地址和请求头配置")
+    } else {
+        ("TILE_NETWORK_REQUEST", "图源请求发送失败，请检查网络、代理及图源配置后恢复任务")
+    };
+    format!("{code}: {message}")
+}
+
 async fn bounded_tile_body(
     mut response: reqwest::Response,
     max_bytes: usize,
@@ -106,7 +122,7 @@ async fn bounded_tile_body(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|e| format!("读取失败: {}", e.without_url()))?
+        .map_err(|e| transport_error(&e, true))?
     {
         // Check before extending, including responses with no Content-Length or
         // chunked transfer encoding. Never reserve based on untrusted headers.
@@ -466,7 +482,7 @@ impl TileDownloader {
         if let Some(parent) = file_path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| format!("创建瓦片目录失败: {}", e))?;
+                .map_err(|e| format!("TILE_STORAGE_FAILED: 创建瓦片目录失败: {e}"))?;
         }
 
         let mut attempt = 0;
@@ -510,10 +526,18 @@ impl TileDownloader {
                                         if let Some(permit) = &provider_permit { permit.succeeded(); }
                                         Ok(())
                                     },
-                                    Err(e) => Err((format!("写入失败: {}", e), false)),
+                                    Err(e) => {
+                                        // A failed write may leave a truncated image. Never let
+                                        // a later resume count those bytes as a completed tile.
+                                        let _=tokio::fs::remove_file(file_path).await;
+                                        Err((format!("TILE_STORAGE_FAILED: 写入瓦片失败: {e}"), false))
+                                    },
                                     }
                                 }
-                                Err(e) => Err((e, false)),
+                                Err(e) => {
+                                    if e.starts_with("TILE_NETWORK_") {if let Some(observer)=execution_observer {observer.execution.error(e.starts_with("TILE_NETWORK_TIMEOUT:"));}}
+                                    Err((e, false))
+                                },
                             }
                         } else if tokens.is_some() && matches!(status.as_u16(), 401 | 403) {
                             let detail = service_error_detail(resp).await;
@@ -548,7 +572,7 @@ impl TileDownloader {
                     }
                     Err(e) if e.is_redirect() => Err((
                         "TILE_REDIRECT_DENIED: 下载重定向被拒绝（公共 OSM 瓦片或重定向过多），请切换图源".into(), false)),
-                    Err(e) => { if let Some(observer)=execution_observer {observer.execution.error(e.is_timeout());} Err((e.without_url().to_string(), false)) },
+                    Err(e) => { if let Some(observer)=execution_observer {observer.execution.error(e.is_timeout());} Err((transport_error(&e,false), false)) },
                 }
             };
 
@@ -580,7 +604,7 @@ impl TileDownloader {
                 }
                 Err(_) => {
                     if let Some(observer)=execution_observer {observer.execution.error(true);}
-                    last_error = "请求超时".to_string();
+                    last_error = "TILE_NETWORK_TIMEOUT: 图源连接或读取超时，请检查网络或代理后恢复任务".to_string();
                     if attempt < retry_times {
                         if let Some(counter) = retrying_count {
                             counter.fetch_add(1, Ordering::Relaxed);
@@ -1358,6 +1382,35 @@ mod tests {
         let result = downloader.download_tiles(vec![TileCoord { x: 0, y: 0, z: 1 }], 1, dir.path(), None, None, |_| {}).await;
         assert!(result.unwrap_err().starts_with("TILE_RATE_LIMITED:"));
         assert_eq!(count.load(Ordering::SeqCst), 1); server.abort();
+    }
+
+    #[tokio::test]
+    async fn transport_failures_have_stable_private_safe_codes() {
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();drop(listener);
+        let client=Client::builder().no_proxy().timeout(Duration::from_secs(2)).build().unwrap();
+        let error=client.get(format!("http://{address}/tile?tk=private-secret")).send().await.unwrap_err();
+        let message=transport_error(&error,false);
+        // Windows can time out a refused loopback connection before surfacing
+        // the socket error; both are transport failures, never UNKNOWN.
+        assert!(message.starts_with("TILE_NETWORK_CONNECT:")||message.starts_with("TILE_NETWORK_TIMEOUT:"),"{message}");assert!(!message.contains("private-secret"));
+        let invalid=client.get("not a URL").send().await.unwrap_err();
+        assert!(transport_error(&invalid,false).starts_with("TILE_REQUEST_INVALID:"));
+        assert!(tile_policy::is_terminal_download_error(&transport_error(&invalid,false)));
+        let (url,_,server)=mock_tile_server(b"HTTP/1.1 200 OK\r\nContent-Length: 9999\r\nConnection: close\r\n\r\npartial".to_vec()).await;
+        let response=client.get(url).send().await.unwrap();
+        assert!(bounded_tile_body(response,20000).await.unwrap_err().starts_with("TILE_NETWORK_BODY:"));server.abort();
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+        let stalled=tokio::spawn(async move {let (_socket,_)=listener.accept().await.unwrap();tokio::time::sleep(Duration::from_secs(10)).await;});
+        let error=client.get(format!("http://{address}/")).timeout(Duration::from_millis(40)).send().await.unwrap_err();
+        assert!(transport_error(&error,false).starts_with("TILE_NETWORK_TIMEOUT:"));stalled.abort();
+    }
+
+    #[tokio::test]
+    async fn unusable_local_parent_is_terminal_before_any_http_request() {
+        let dir=tempfile::tempdir().unwrap();let blocked=dir.path().join("file");std::fs::write(&blocked,b"preserve").unwrap();
+        let client=Client::builder().no_proxy().build().unwrap();
+        let error=TileDownloader::download_one_tile(&client,"http://127.0.0.1:1/tile",&Default::default(),&blocked.join("tile.png"),3,None,&RateLimitGate::default(),None).await.unwrap_err();
+        assert!(error.starts_with("TILE_STORAGE_FAILED:"));assert!(tile_policy::is_terminal_download_error(&error));assert_eq!(std::fs::read(blocked).unwrap(),b"preserve");
     }
     #[tokio::test]
     async fn custom_headers_reach_downloads_and_block_cross_origin_redirects() {

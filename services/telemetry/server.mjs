@@ -117,7 +117,7 @@ function validateProperties(eventName, properties) {
       provider: ['tianditu','other','unknown'],
       phase: ['prepare','base_download','overlay_download','composite','export','unknown'],
       token_source: ['builtin','user'],
-      error_code: ['none','cancelled','all_tokens_unavailable','access_denied','rate_limited','invalid_tile','tile_too_large','storage_failed','redirect_denied','offline_forbidden','missing_tiles','network','auth','permission','disk','unknown'],
+      error_code: ['network_connect','network_timeout','network_body','network_request','invalid_request','none','cancelled','all_tokens_unavailable','access_denied','rate_limited','invalid_tile','tile_too_large','storage_failed','redirect_denied','offline_forbidden','missing_tiles','network','auth','permission','disk','unknown'],
     }
     const counters = ['configured_tokens','used_tokens','token_switches','recovered_switches','settings_updates']
     const extra = ['diagnostic_version',...Object.keys(enums),...counters,'http_status','last_rejection_status','tokens_exhausted']

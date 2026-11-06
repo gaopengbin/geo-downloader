@@ -187,7 +187,7 @@ impl TiandituTokens {
     pub fn set_storage_diagnostics(&self,storage:Vec<crate::acquisition_diagnostic::StorageDiagnostic>){let mut state=self.state.lock().unwrap();state.acquisition.storage=storage;state.acquisition.storage_checked_at=Some(chrono::Utc::now().to_rfc3339());}
     pub fn record_failure(&self,message:&str){
         let mut state=self.state.lock().unwrap();
-        let code=["TILE_ACCESS_DENIED","TILE_TOKENS_EXHAUSTED","TILE_RATE_LIMITED","TILE_STORAGE_FAILED","TILE_REDIRECT_DENIED","INVALID_TILE","TILE_TOO_LARGE","OSM_OFFLINE_FORBIDDEN","CARTO_OFFLINE_FORBIDDEN"].into_iter().find(|code|message.contains(code)).unwrap_or(if message.contains("空间不足"){"DISK_INSUFFICIENT"}else{"UNKNOWN"});
+        let code=["TILE_NETWORK_CONNECT","TILE_NETWORK_TIMEOUT","TILE_NETWORK_BODY","TILE_NETWORK_REQUEST","TILE_REQUEST_INVALID","TILE_ACCESS_DENIED","TILE_TOKENS_EXHAUSTED","TILE_RATE_LIMITED","TILE_STORAGE_FAILED","TILE_REDIRECT_DENIED","INVALID_TILE","TILE_TOO_LARGE","OSM_OFFLINE_FORBIDDEN","CARTO_OFFLINE_FORBIDDEN"].into_iter().find(|code|message.contains(code)).unwrap_or(if message.contains("空间不足"){"DISK_INSUFFICIENT"}else{"UNKNOWN"});
         let index=if ["base_download","overlay_download"].contains(&state.acquisition.phase.as_str())&&code!="TILE_STORAGE_FAILED"{state.active_source}else{None};
         let status=crate::acquisition_diagnostic::http_status(message).or_else(||if code=="TILE_TOKENS_EXHAUSTED"&&state.last_status>0{Some(state.last_status)}else{None});
         state.acquisition.fail(code,index,status);if code=="TILE_STORAGE_FAILED"{state.acquisition.phase="cache".into();}

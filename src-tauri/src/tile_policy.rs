@@ -64,6 +64,7 @@ pub fn is_terminal_download_error(error: &str) -> bool {
         "EARTH_CACHE:",
         "TILE_TOO_LARGE:",
         "TILE_STORAGE_FAILED:",
+        "TILE_REQUEST_INVALID:",
         "磁盘空间不足：",
         "读取目标磁盘空间失败:",
     ]

@@ -24,6 +24,7 @@ export function reasonBucket(state: string, error?: string): DownloadReason {
   if (state === 'completed_with_gaps') return 'missing_tiles'
   if (state !== 'failed') return 'none'
   const text = error ?? ''
+  if (/\bTILE_NETWORK_(?:CONNECT|TIMEOUT|BODY|REQUEST):/.test(text)) return 'network'
   // Keep the wire schema unchanged. Match stable downloader codes before words
   // such as "denied", "permission" or "network" inside nested error messages.
   if (/\b(?:TILE_ACCESS_DENIED|TILE_TOKENS_EXHAUSTED):/.test(text)) return 'auth'

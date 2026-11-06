@@ -16,6 +16,10 @@ test('OSM execution diagnostics survive start, failure and lifecycle tracking wi
 
 test('stable download codes classify access, quota, rate limits, source data and storage errors', () => {
   const cases = [
+    ['TILE_NETWORK_CONNECT: private configuration', 'network'],
+    ['TILE_NETWORK_TIMEOUT: timeout', 'network'],
+    ['TILE_NETWORK_BODY: interrupted', 'network'],
+    ['TILE_NETWORK_REQUEST: send failed', 'network'],
     ['TILE_ACCESS_DENIED: HTTP 403; 请检查权限', 'auth'],
     ['任务失败: TILE_TOKENS_EXHAUSTED: 所有 Token 额度不足', 'auth'],
     ['TILE_RATE_LIMITED: HTTP 429', 'network'],

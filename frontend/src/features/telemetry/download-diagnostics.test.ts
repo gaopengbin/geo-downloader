@@ -6,6 +6,13 @@ import { DownloadLifecycleTracker } from './download-lifecycle.ts'
 const raw = { diagnostic_version: 1, provider: 'tianditu', phase: 'overlay_download', token_source: 'user',
   configured_tokens: 3, used_tokens: 3, token_switches: 2, recovered_switches: 1,
   settings_updates: 0, last_rejection_status: 429, tokens_exhausted: true }
+test('transport stages retain fixed codes without copying native error details',()=>{
+ for(const [native,code] of [['CONNECT','network_connect'],['TIMEOUT','network_timeout'],['BODY','network_body'],['REQUEST','network_request']]){
+  const d=taskDownloadDiagnostics(raw,'failed',`TILE_NETWORK_${native}: https://private/?token=secret`,'network')!;
+  assert.equal(d.error_code,code);assert.doesNotMatch(JSON.stringify(d),/private|secret/);
+ }
+ assert.equal(taskDownloadDiagnostics(raw,'failed','TILE_REQUEST_INVALID: bad URL','unknown')!.error_code,'invalid_request');
+});
 test('final exhaustion and last HTTP status survive without copying secrets or raw errors', () => {
   const tracker = new DownloadLifecycleTracker(() => crypto.randomUUID(), () => 0)
   tracker.observe([{ id: 'private-task', status: 'downloading', download_diagnostics: raw }])

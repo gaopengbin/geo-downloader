@@ -511,15 +511,22 @@ mod tests {
     async fn live_production_route_download_without_installation() {
         let out = PathBuf::from(std::env::var("GEOD_UPDATE_QA_OUTPUT").expect("Set isolated QA output directory"));
         fs::create_dir_all(&out).unwrap();
-        let s = Spec::new("https://laogao.xyz/packages/latest/GeoDownloader_3.6.26_windows_x64-setup.exe",
-            "3.6.26", "9ce801593e4331459e4972a9be6fc2595fcb653f46e6e4f65a417ce8976c3307", 10606568).unwrap();
+        let s = if let Ok(manifest) = std::env::var("GEOD_UPDATE_QA_MANIFEST") {
+            let data: serde_json::Value=serde_json::from_slice(&fs::read(manifest).unwrap()).unwrap();
+            let version=data["tag_name"].as_str().unwrap().strip_prefix('v').unwrap();
+            let asset=data["assets"].as_array().unwrap().iter().find(|asset|asset["name"].as_str().is_some_and(|name|name.ends_with("_windows_x64-setup.exe"))).unwrap();
+            Spec::new(asset["browser_download_url"].as_str().unwrap(),version,asset["sha256"].as_str().unwrap(),asset["size"].as_u64().unwrap()).unwrap()
+        } else {
+            Spec::new("https://laogao.xyz/packages/latest/GeoDownloader_3.6.26_windows_x64-setup.exe",
+                "3.6.26", "9ce801593e4331459e4972a9be6fc2595fcb653f46e6e4f65a417ce8976c3307", 10606568).unwrap()
+        };
         let dir = tempfile::tempdir().unwrap(); let mut events = vec![]; let started = Instant::now();
         let path = download(&s, dir.path(), |e| events.push(e)).await.unwrap();
         assert_eq!(fs::metadata(&path).unwrap().len(), s.size);
         assert_eq!(format!("{:x}", Sha256::digest(fs::read(&path).unwrap())), s.sha256);
         assert_eq!(events.last().unwrap().progress, 100);
         let receipt = serde_json::json!({"passed":true,"seconds":started.elapsed().as_secs_f64(),
-            "bytes":s.size,"sha256":s.sha256,"events":events,"installerLaunched":false,"globalProxyChanged":false});
+            "filename":s.filename,"bytes":s.size,"sha256":s.sha256,"events":events,"installerLaunched":false,"globalProxyChanged":false});
         println!("{}", receipt);
         fs::write(out.join("production-route.json"), serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
     }

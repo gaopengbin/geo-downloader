@@ -18,7 +18,7 @@ export const DIAGNOSTIC_ENUMS = {
   provider: ['tianditu', 'other', 'unknown'],
   phase: ['prepare', 'base_download', 'overlay_download', 'composite', 'export', 'unknown'],
   token_source: ['builtin', 'user'],
-  error_code: ['none', 'cancelled', 'all_tokens_unavailable', 'access_denied', 'rate_limited', 'invalid_tile', 'tile_too_large', 'storage_failed', 'redirect_denied', 'offline_forbidden', 'missing_tiles', 'network', 'auth', 'permission', 'disk', 'unknown'],
+  error_code: ['network_connect','network_timeout','network_body','network_request','invalid_request','none', 'cancelled', 'all_tokens_unavailable', 'access_denied', 'rate_limited', 'invalid_tile', 'tile_too_large', 'storage_failed', 'redirect_denied', 'offline_forbidden', 'missing_tiles', 'network', 'auth', 'permission', 'disk', 'unknown'],
 } as const
 const COUNTERS = ['configured_tokens', 'used_tokens', 'token_switches', 'recovered_switches', 'settings_updates'] as const
 
@@ -47,6 +47,9 @@ export function taskDownloadDiagnostics(raw: unknown, state: string, error?: str
   if (!raw || typeof raw !== 'object') return
   const value = raw as Record<string, unknown>
   const codes: [RegExp, string][] = [
+    [/\bTILE_NETWORK_CONNECT:/, 'network_connect'], [/\bTILE_NETWORK_TIMEOUT:/, 'network_timeout'],
+    [/\bTILE_NETWORK_BODY:/, 'network_body'], [/\bTILE_NETWORK_REQUEST:/, 'network_request'],
+    [/\bTILE_REQUEST_INVALID:/, 'invalid_request'],
     [/\bTILE_TOKENS_EXHAUSTED:/, 'all_tokens_unavailable'], [/\bTILE_ACCESS_DENIED:/, 'access_denied'],
     [/\bTILE_RATE_LIMITED:/, 'rate_limited'], [/\bINVALID_TILE:/, 'invalid_tile'],
     [/\bTILE_TOO_LARGE:/, 'tile_too_large'], [/\bTILE_STORAGE_FAILED:/, 'storage_failed'],
