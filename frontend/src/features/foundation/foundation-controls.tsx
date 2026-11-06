@@ -1,6 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Download, Loader2, RefreshCw, X, CheckCircle2 } from 'lucide-react'
+import {
+  Download,
+  Loader2,
+  RefreshCw,
+  X,
+  CheckCircle2,
+  Settings2,
+} from 'lucide-react'
 import { save } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { Button } from '@/components/ui/button'
@@ -36,8 +43,16 @@ const COLORS = [
   '#22a879',
   '#d0d8e2',
 ]
-export function FoundationControls({ compact = false }: { compact?: boolean }) {
+export function FoundationControls({
+  compact = false,
+  embedded = false,
+}: {
+  compact?: boolean
+  embedded?: boolean
+}) {
   const { t } = useTranslation()
+  const [styling, setStyling] = useState(false)
+  const details = !compact && (!embedded || styling)
   const settings = useFoundationStore((s) => s.settings)
   const records = useFoundationStore((s) => s.records)
   const setStyle = useFoundationStore((s) => s.setStyle)
@@ -53,14 +68,11 @@ export function FoundationControls({ compact = false }: { compact?: boolean }) {
     if (!exportId || exportPhase !== 'saving') return
     let stop: (() => void) | undefined,
       closed = false
-    void listen<{ features: number }>(
-      `foundation-export-${exportId}`,
-      (e) => {
-        const s = useFoundationStore.getState()
-        if (s.exportState?.id === exportId)
-          s.setExport({ ...s.exportState, features: e.payload.features })
-      },
-    )
+    void listen<{ features: number }>(`foundation-export-${exportId}`, (e) => {
+      const s = useFoundationStore.getState()
+      if (s.exportState?.id === exportId)
+        s.setExport({ ...s.exportState, features: e.payload.features })
+    })
       .then((fn) => {
         if (closed) fn()
         else stop = fn
@@ -112,25 +124,29 @@ export function FoundationControls({ compact = false }: { compact?: boolean }) {
   }
   return (
     <div
-      className="space-y-2 border-t border-border/60 pt-3"
+      className={
+        embedded ? 'space-y-2' : 'space-y-2 border-t border-border/60 pt-3'
+      }
       data-foundation-controls={compact ? 'compact' : 'full'}
     >
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium">{t('foundation.title')}</p>
-        <Tooltip content={t('foundation.retry')}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-6 shrink-0"
-            disabled={!visible.length}
-            aria-label={t('foundation.retry')}
-            onClick={retry}
-          >
-            <RefreshCw className="size-3" />
-          </Button>
-        </Tooltip>
-      </div>
+      {!embedded && (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium">{t('foundation.title')}</p>
+          <Tooltip content={t('foundation.retry')}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-6 shrink-0"
+              disabled={!visible.length}
+              aria-label={t('foundation.retry')}
+              onClick={retry}
+            >
+              <RefreshCw className="size-3" />
+            </Button>
+          </Tooltip>
+        </div>
+      )}
       {FOUNDATION_IDS.map((id: FoundationId) => {
         const style = settings.layers[id],
           record = records[id]
@@ -138,7 +154,9 @@ export function FoundationControls({ compact = false }: { compact?: boolean }) {
           <div
             key={id}
             className={
-              compact ? 'space-y-1' : 'space-y-1.5 rounded-md border p-2'
+              compact || embedded
+                ? 'space-y-1 py-1'
+                : 'space-y-1.5 rounded-md border p-2'
             }
             data-foundation-layer={id}
           >
@@ -164,7 +182,7 @@ export function FoundationControls({ compact = false }: { compact?: boolean }) {
                 </span>
               ) : null}
             </div>
-            {!compact && (
+            {details && (
               <div className="flex items-center gap-2">
                 <Select
                   value={style.color}
@@ -237,7 +255,10 @@ export function FoundationControls({ compact = false }: { compact?: boolean }) {
             {!compact &&
               style.visible &&
               record.phase === 'ready' &&
-              record.data && (
+              record.data &&
+              (!embedded ||
+                record.data.truncated ||
+                record.data.feature_count === 0) && (
                 <p className="text-xs text-muted-foreground">
                   {record.data.truncated
                     ? t('foundation.partial')
@@ -253,7 +274,35 @@ export function FoundationControls({ compact = false }: { compact?: boolean }) {
           </div>
         )
       })}
-      {!compact && (
+      {embedded && (
+        <div className="flex items-center justify-between gap-2 border-t pt-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 gap-1 px-1"
+            aria-expanded={styling}
+            onClick={() => setStyling((v) => !v)}
+          >
+            <Settings2 className="size-3.5" />
+            {t('foundation.displaySettings')}
+          </Button>
+          <Tooltip content={t('foundation.retry')}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              disabled={!visible.length}
+              aria-label={t('foundation.retry')}
+              onClick={retry}
+            >
+              <RefreshCw className="size-3.5" />
+            </Button>
+          </Tooltip>
+        </div>
+      )}
+      {details && (
         <>
           <div className="grid grid-cols-2 gap-2">
             <Select

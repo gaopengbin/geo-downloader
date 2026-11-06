@@ -530,16 +530,3 @@ body:has(.driver-active) {
   gap: 0.375rem;
   align-items: center;
 }
-
-.leaflet-tooltip.geod-foundation-label {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  color: #17212c;
-  font-weight: 600;
-  white-space: nowrap;
-  text-shadow: -1px -1px 1px #fff, 1px -1px 1px #fff, -1px 1px 1px #fff, 1px 1px 1px #fff;
-  pointer-events: none;
-}
-.leaflet-tooltip.geod-foundation-label::before { display: none; }

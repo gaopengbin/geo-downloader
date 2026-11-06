@@ -5,7 +5,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import '../src/index.css'
 import { initializeI18n, changeAppLanguage } from '../src/i18n'
-import { FoundationControls } from '../src/features/foundation/foundation-controls'
+import { FoundationMapPanel } from '../src/features/foundation/foundation-map-panel'
 import { installFoundationLayers } from '../src/features/foundation/foundation-map'
 import { useFoundationStore } from '../src/features/foundation/foundation-store'
 import { SourcesDialog } from '../src/features/sources/sources-dialog'
@@ -75,15 +75,23 @@ export function Harness() {
     map = useRef<L.Map | null>(null)
   const [view, setView] = useState('')
   const [dark, setDark] = useState(false)
+  const [measurements, setMeasurements] = useState<unknown[]>([])
   const state = useFoundationStore()
   useEffect(() => {
-    const m = L.map(ref.current!).setView([39.9, 116.4], 11)
+    const pointCase =
+      new URLSearchParams(location.search).get('case') === 'points'
+    const m = L.map(ref.current!).setView(
+      pointCase ? [35.95, 114.63] : [39.9, 116.4],
+      pointCase ? 12 : 11,
+    )
     map.current = m
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       { attribution: '© Esri' },
     ).addTo(m)
-    const remove = installFoundationLayers(m)
+    const remove = installFoundationLayers(m, (sample) =>
+      setMeasurements((v) => [...v.slice(-99), sample]),
+    )
     const report = () =>
       setView(
         `${m.getCenter().lat.toFixed(6)},${m.getCenter().lng.toFixed(6)} / z${m.getZoom()}`,
@@ -104,8 +112,8 @@ export function Harness() {
       style={{ display: 'grid', gridTemplateColumns: '400px minmax(0,1fr)' }}
     >
       <aside
-        className="space-y-3 overflow-y-auto border-r p-4"
-        aria-label="左侧基础要素"
+        className="min-w-0 space-y-3 overflow-y-auto border-r p-4"
+        aria-label="验收记录"
       >
         <h1 className="font-semibold">本地功能验收</h1>
         <p className="text-xs text-muted-foreground">
@@ -132,10 +140,12 @@ export function Harness() {
           </Button>
         </div>
         <SourcesDialog triggerLabel="图源管理" listenForActions={false} />
-        <FoundationControls />
         <output className="block text-xs" data-qa-view>
           {view}
         </output>
+        <pre data-qa-perf className="max-h-36 overflow-auto whitespace-pre-wrap break-all text-xs">
+          {JSON.stringify(measurements)}
+        </pre>
         <pre
           className="max-h-44 overflow-auto whitespace-pre-wrap text-[10px]"
           data-qa-state
@@ -162,12 +172,33 @@ export function Harness() {
       </aside>
       <section className="relative min-w-0">
         <div className="absolute inset-0" ref={ref} />
-        <div className="absolute bottom-5 left-4 z-[10] flex gap-2">
+        <div className="absolute bottom-5 left-4 right-4 z-[10] flex flex-wrap gap-2">
           <Button
             onClick={() => map.current?.panBy([180, 0], { animate: false })}
           >
             向东平移
           </Button>
+          <Button
+            onClick={() =>
+              map.current?.setView([35.95, 114.63], 8, { animate: false })
+            }
+          >
+            密集点位
+          </Button>
+          <Button
+            onClick={() =>
+              map.current?.setView([35.95, 114.63], 12, { animate: false })
+            }
+          >
+            用户点位
+          </Button>
+          <Button
+            onClick={() => map.current?.panBy([8, 0], { animate: false })}
+          >
+            小步平移
+          </Button>
+          <Button onClick={() => setMeasurements([])}>清空性能记录</Button>
+          <Button onClick={()=>{map.current?.setView([35.95,114.63],8,{animate:false});setTimeout(()=>map.current?.setView([35.95,114.63],12,{animate:false}),420)}}>快速点位缩放</Button>
           <Button
             onClick={() => {
               map.current?.panBy([120, 0], { animate: false })
@@ -180,12 +211,7 @@ export function Harness() {
             快速切换范围
           </Button>
         </div>
-        <section
-          className="absolute right-3 top-3 z-[10] w-52 rounded-md border bg-background p-3 shadow-md"
-          aria-label="地图基础要素"
-        >
-          <FoundationControls compact />
-        </section>
+        <FoundationMapPanel />
       </section>
       <Toaster />
     </main>

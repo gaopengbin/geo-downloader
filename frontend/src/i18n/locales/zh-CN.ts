@@ -1,5 +1,8 @@
 const zhCN = {
   foundation: {
+    panelTitle: '参考图层',
+    closePanel: '收起参考图层',
+    displaySettings: '显示设置',
     title: '基础地理参考要素',
     retry: '重新加载基础要素',
     layers: {

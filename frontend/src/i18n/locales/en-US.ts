@@ -1,5 +1,8 @@
 const enUS = {
   foundation: {
+    panelTitle: 'Reference layers',
+    closePanel: 'Collapse reference layers',
+    displaySettings: 'Display settings',
     title: 'National reference features',
     retry: 'Reload reference features',
     layers: {

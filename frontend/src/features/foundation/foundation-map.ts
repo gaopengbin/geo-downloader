@@ -7,9 +7,9 @@ import {
   MIN_FOUNDATION_ZOOM,
   boundsKey,
   foundationQueryBounds,
-  featureLabel,
   shouldUseGcjCoordinates,
   type FoundationId,
+  type FoundationPreview,
   type LayerStyle,
 } from './model'
 import { wgsToGcj, gcjBoundsToWgs } from './coordinates'
@@ -19,207 +19,287 @@ import {
   foundationProxy,
   foundationErrorKey,
 } from './foundation-api'
+import {
+  createFoundationLabels,
+  type LabelCandidate,
+} from './foundation-labels'
+import { forEachFrame } from './frame-batch'
 
-/** One owner per map. Data updates never fit bounds or move the camera. */
-export function installFoundationLayers(map: L.Map) {
+export interface FoundationRenderMeasurement {
+  durationMs: number
+  features: number
+  labels: number
+  kind?: 'geometry' | 'labels' | 'style' | 'clear'
+}
+const ATTRIBUTION =
+  '基础要素 © <a href="https://www.tianditu.gov.cn/" target="_blank" rel="noreferrer">国家基础地理信息中心 / 天地图</a>'
+const LABEL_ORDER: FoundationId[] = [
+  'settlements',
+  'railways',
+  'roads',
+  'water',
+]
+
+/** Geometry is retained across pans. Only new data is built, in cancellable frame batches. */
+export function installFoundationLayers(
+  map: L.Map,
+  onMeasure?: (sample: FoundationRenderMeasurement) => void,
+) {
   const pane =
     map.getPane('geod-foundation') ?? map.createPane('geod-foundation')
-  pane.style.zIndex = '395'
+  pane.style.zIndex = '450'
   pane.style.pointerEvents = 'none'
   const renderer = L.canvas({ pane: 'geod-foundation' })
-  const rendered = new Map<
-    FoundationId,
-    { layer: L.GeoJSON; labels: L.LayerGroup; data: unknown; style: string }
-  >()
-  const pending = new Map<FoundationId, { id: string; key: string }>()
-  const applied = new Map<FoundationId, string>()
-  let renderKey = ''
-  let timer: ReturnType<typeof setTimeout> | undefined,
-    closed = false
-  let refresh = useFoundationStore.getState().refresh
-  let attribution = false
-  const base = () => {
-    const s = useAppStore.getState()
-    return s.selectedSourceByMode[s.mode] ?? 'google_satellite'
-  }
-  const gcj = () =>
-    shouldUseGcjCoordinates(
-      useFoundationStore.getState().settings.coordinates,
-      base(),
-    )
   const labelPane =
     map.getPane('geod-foundation-labels') ??
     map.createPane('geod-foundation-labels')
-  labelPane.style.zIndex = '396'
+  labelPane.style.zIndex = '460'
   labelPane.style.pointerEvents = 'none'
-  function clear(id: FoundationId) {
-    const current = rendered.get(id)
-    if (current) {
-      current.labels.remove()
-      current.layer.remove()
-      rendered.delete(id)
+  const labelCanvas = createFoundationLabels(map, labelPane)
+  interface Prepared {
+    layer: L.GeoJSON
+    data: FoundationPreview
+    shifted: boolean
+    style: string
+    candidates: LabelCandidate[]
+  }
+  interface Job {
+    layer: L.GeoJSON
+    data: FoundationPreview
+    shifted: boolean
+    cancelled: boolean
+  }
+  const rendered = new Map<FoundationId, Prepared>()
+  const jobs = new Map<FoundationId, Job>()
+  const pending = new Map<FoundationId, { id: string; key: string }>()
+  const applied = new Map<FoundationId, string>()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let frame: number | undefined
+  let closed = false,
+    moving = false,
+    attribution = false
+  let refresh = useFoundationStore.getState().refresh
+  let labelKey = ''
+  let labelData: unknown[] = []
+  const gcj = () => {
+    const state = useAppStore.getState()
+    return shouldUseGcjCoordinates(
+      useFoundationStore.getState().settings.coordinates,
+      state.selectedSourceByMode[state.mode] ?? 'google_satellite',
+    )
+  }
+  const nextFrame = () =>
+    new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  const measure = (
+    started: number,
+    kind: FoundationRenderMeasurement['kind'],
+    features = 0,
+    labels = 0,
+  ) =>
+    onMeasure?.({
+      durationMs: performance.now() - started,
+      kind,
+      features,
+      labels,
+    })
+  function stop(id: FoundationId) {
+    const request = pending.get(id)
+    if (request) {
+      pending.delete(id)
+      void cancelFoundation(request.id)
     }
   }
-  function stop(id: FoundationId) {
-    const current = pending.get(id)
-    if (current) {
-      pending.delete(id)
-      void cancelFoundation(current.id)
+  function stopJob(id: FoundationId) {
+    const job = jobs.get(id)
+    if (job) {
+      job.cancelled = true
+      job.layer.remove()
+      jobs.delete(id)
+    }
+  }
+  function clear(id: FoundationId) {
+    stopJob(id)
+    const previous = rendered.get(id)
+    if (previous) {
+      const started = performance.now()
+      previous.layer.remove()
+      rendered.delete(id)
+      measure(started, 'clear')
+    }
+  }
+  const pathStyle = (id: FoundationId, style: LayerStyle): L.PathOptions => ({
+    renderer,
+    color: style.color,
+    weight: style.width,
+    opacity: 0.95,
+    fillOpacity: 0.12,
+    dashArray: id === 'railways' ? '8 3' : undefined,
+    interactive: false,
+  })
+  async function prepare(
+    id: FoundationId,
+    data: FoundationPreview,
+    shifted: boolean,
+  ) {
+    stopJob(id)
+    const candidates: LabelCandidate[] = []
+    const style = useFoundationStore.getState().settings.layers[id]
+    const layer = L.geoJSON(undefined, {
+      pane: 'geod-foundation',
+      interactive: false,
+      coordsToLatLng: (coordinates) => {
+        const [lng, lat] = shifted
+          ? wgsToGcj(coordinates[0], coordinates[1])
+          : [coordinates[0], coordinates[1]]
+        return L.latLng(lat, lng)
+      },
+      style: () => pathStyle(id, style),
+      pointToLayer: (_feature, latlng) =>
+        L.circleMarker(latlng, {
+          ...pathStyle(id, style),
+          pane: 'geod-foundation',
+          radius: style.width + 1,
+          weight: 1,
+          fillColor: style.color,
+          fillOpacity: 0.95,
+        }),
+      onEachFeature: (feature) => {
+        if (feature.geometry)
+          candidates.push({
+            geometry: feature.geometry,
+            properties: feature.properties,
+          })
+      },
+    }).addTo(map)
+    const job: Job = { layer, data, shifted, cancelled: false }
+    jobs.set(id, job)
+    try {
+      const complete = await forEachFrame(
+        data.geojson.features,
+        (feature) => layer.addData(feature),
+        () => closed || job.cancelled || moving,
+        {
+          nextFrame,
+          now: () => performance.now(),
+          report: (durationMs, features) =>
+            onMeasure?.({ durationMs, features, labels: 0, kind: 'geometry' }),
+        },
+      )
+      if (!complete || jobs.get(id) !== job) {
+        layer.remove()
+        return
+      }
+      jobs.delete(id)
+      const previous = rendered.get(id)
+      if (previous) {
+        const started = performance.now()
+        previous.layer.remove()
+        measure(started, 'clear')
+      }
+      rendered.set(id, {
+        layer,
+        data,
+        shifted,
+        style: JSON.stringify([style.color, style.width]),
+        candidates,
+      })
+      scheduleRender()
+    } catch (error) {
+      layer.remove()
+      if (jobs.get(id) !== job || closed) return
+      jobs.delete(id)
+      console.warn('[foundation] geometry render failed', error)
+      useFoundationStore
+        .getState()
+        .setRecord(id, { phase: 'error', data: null, error: 'responseError' })
+    }
+  }
+  function* candidates() {
+    const { settings } = useFoundationStore.getState()
+    for (const id of LABEL_ORDER) {
+      if (settings.layers[id].visible && settings.layers[id].labels) {
+        const item = rendered.get(id)
+        if (item) yield* item.candidates
+      }
     }
   }
   function render() {
-    if (closed) return
-    const { settings, records } = useFoundationStore.getState()
-    const shifted = gcj()
-    const zoom = map.getZoom()
-    const signature = JSON.stringify([
-      settings,
-      shifted,
-      Math.floor(zoom),
-      map.getBounds().toBBoxString(),
-    ])
-    if (
-      signature === renderKey &&
-      FOUNDATION_IDS.every(
-        (id) =>
-          !settings.layers[id].visible ||
-          rendered.get(id)?.data === records[id].data,
-      )
-    )
-      return
-    renderKey = signature
+    frame = undefined
+    if (closed || moving) return
+    const { settings, records } = useFoundationStore.getState(),
+      shifted = gcj()
     const enabled = FOUNDATION_IDS.some((id) => settings.layers[id].visible)
     if (enabled !== attribution) {
-      const text =
-        '基础要素 © <a href="https://www.tianditu.gov.cn/" target="_blank" rel="noreferrer">国家基础地理信息中心 / 天地图</a>'
-      if (enabled) map.attributionControl.addAttribution(text)
-      else map.attributionControl.removeAttribution(text)
+      if (enabled) map.attributionControl.addAttribution(ATTRIBUTION)
+      else map.attributionControl.removeAttribution(ATTRIBUTION)
       attribution = enabled
     }
-    // Rebuild labels together so names from different reference layers also avoid one another.
-    // Point names have priority; geometry itself retains its independent style and visibility.
-    const occupied = new Set<string>()
-    let labels = 0
-    for (const id of ['settlements', 'railways', 'roads', 'water'] as const) {
-      const style: LayerStyle = settings.layers[id],
-        record = records[id]
+    for (const id of FOUNDATION_IDS) {
+      const style = settings.layers[id],
+        record = records[id],
+        previous = rendered.get(id)
       if (!style.visible || !record.data) {
         clear(id)
         continue
       }
-      clear(id)
-      const labelGroup = L.layerGroup()
-      const view = map.getBounds()
-      const layer = L.geoJSON(record.data.geojson, {
-        pane: 'geod-foundation',
-        interactive: false,
-        coordsToLatLng: (coordinates) => {
-          const [lng, lat] = shifted
-            ? wgsToGcj(coordinates[0], coordinates[1])
-            : [coordinates[0], coordinates[1]]
-          return L.latLng(lat, lng)
-        },
-        style: () => ({
-          renderer,
-          color: style.color,
-          weight: style.width,
-          opacity: 0.95,
-          fillOpacity: 0.12,
-          dashArray: id === 'railways' ? '8 3' : undefined,
-          interactive: false,
-        }),
-        pointToLayer: (_feature, latlng) =>
-          L.circleMarker(latlng, {
-            renderer,
-            pane: 'geod-foundation',
-            radius: style.width + 1,
-            color: style.color,
-            weight: 1,
-            fillColor: style.color,
-            fillOpacity: 0.95,
-            interactive: false,
-          }),
-        onEachFeature: (feature) => {
-          const text = featureLabel(feature.properties)
-          if (
-            !style.labels ||
-            !text ||
-            zoom < MIN_FOUNDATION_ZOOM ||
-            labels >= 250
-          )
-            return
-          let point: L.LatLng | undefined
-          function find(value: unknown) {
-            if (point || !Array.isArray(value)) return
-            if (typeof value[0] === 'number' && typeof value[1] === 'number') {
-              const [x, y] = shifted
-                ? wgsToGcj(value[0], value[1])
-                : [value[0], value[1]]
-              const p = L.latLng(y, x)
-              if (view.contains(p)) point = p
-            } else
-              for (const child of value) {
-                find(child)
-                if (point) break
-              }
-          }
-          if (feature.geometry && 'coordinates' in feature.geometry)
-            find(feature.geometry.coordinates)
-          if (!point) return
-          const pixel = map.latLngToContainerPoint(point)
-          const width =
-            [...text].reduce(
-              (n, c) => n + ((c.codePointAt(0) ?? 0) > 255 ? 1 : 0.6),
-              0,
-            ) *
-              settings.fontSize +
-            10
-          const cells: string[] = []
-          for (
-            let x = Math.floor((pixel.x - width / 2) / 25);
-            x <= Math.floor((pixel.x + width / 2) / 25);
-            x++
-          )
-            for (
-              let y = Math.floor((pixel.y - settings.fontSize - 8) / 20);
-              y <= Math.floor(pixel.y / 20);
-              y++
-            )
-              cells.push(`${x}:${y}`)
-          if (cells.some((k) => occupied.has(k))) return
-          cells.forEach((k) => occupied.add(k))
-          labels++
-          const span = document.createElement('span')
-          span.textContent = text
-          span.style.fontSize = `${settings.fontSize}px`
-          L.tooltip({
-            pane: 'geod-foundation-labels',
-            permanent: true,
-            direction: 'top',
-            className: 'geod-foundation-label',
-            interactive: false,
-            opacity: 1,
-            offset: [0, -3],
+      if (previous?.data === record.data && previous.shifted === shifted) {
+        const signature = JSON.stringify([style.color, style.width])
+        if (signature !== previous.style) {
+          const started = performance.now()
+          previous.layer.setStyle(pathStyle(id, style))
+          previous.layer.eachLayer((item) => {
+            if (item instanceof L.CircleMarker)
+              item
+                .setRadius(style.width + 1)
+                .setStyle({ fillColor: style.color })
           })
-            .setLatLng(point)
-            .setContent(span)
-            .addTo(labelGroup)
-        },
-      }).addTo(map)
-      labelGroup.addTo(map)
-      rendered.set(id, {
-        layer,
-        labels: labelGroup,
-        data: record.data,
-        style: signature,
-      })
+          previous.style = signature
+          measure(started, 'style', previous.layer.getLayers().length)
+        }
+      } else if (record.phase === 'ready') {
+        const job = jobs.get(id)
+        if (job?.data !== record.data || job.shifted !== shifted)
+          void prepare(id, record.data, shifted)
+      }
+    }
+    const key = JSON.stringify([
+      map.getBounds().toBBoxString(),
+      map.getZoom(),
+      settings.fontSize,
+      shifted,
+      FOUNDATION_IDS.map((id) => [
+        settings.layers[id].visible,
+        settings.layers[id].labels,
+      ]),
+    ])
+    const data = FOUNDATION_IDS.map((id) => rendered.get(id)?.data)
+    if (
+      key !== labelKey ||
+      data.some((value, index) => value !== labelData[index])
+    ) {
+      labelKey = key
+      labelData = data
+      void labelCanvas
+        .draw(
+          map.getZoom() >= MIN_FOUNDATION_ZOOM ? candidates() : [],
+          settings.fontSize,
+          shifted,
+          (durationMs, labels) =>
+            onMeasure?.({ durationMs, labels, features: 0, kind: 'labels' }),
+        )
+        .catch((error) =>
+          console.warn('[foundation] label rendering failed', error),
+        )
     }
   }
+  function scheduleRender() {
+    if (!closed && frame === undefined) frame = requestAnimationFrame(render)
+  }
   async function load() {
-    if (closed) return
-    const state = useFoundationStore.getState()
-    const b = map.getBounds()
-    const zoom = map.getZoom()
+    if (closed || moving) return
+    const state = useFoundationStore.getState(),
+      b = map.getBounds(),
+      zoom = map.getZoom()
     const forced = refresh !== state.refresh
     refresh = state.refresh
     let proxy: Promise<string | null> | undefined
@@ -231,11 +311,13 @@ export function installFoundationLayers(map: L.Map) {
     }
     if (gcj()) bounds = gcjBoundsToWgs(bounds)
     const query = foundationQueryBounds(bounds, zoom)
-    state.setViewport(query && zoom >= MIN_FOUNDATION_ZOOM ? { bounds, zoom } : null)
-    const key = query ? `${boundsKey(query)}:${state.refresh}` : ''
+    state.setViewport(
+      query && zoom >= MIN_FOUNDATION_ZOOM ? { bounds, zoom } : null,
+    )
+    const key = query ? boundsKey(query) + ':' + state.refresh : ''
     for (const id of FOUNDATION_IDS) {
-      const current = useFoundationStore.getState()
-      const record = current.records[id]
+      const current = useFoundationStore.getState(),
+        record = current.records[id]
       if (!current.settings.layers[id].visible) {
         stop(id)
         if (record.phase !== 'off')
@@ -251,8 +333,11 @@ export function installFoundationLayers(map: L.Map) {
         })
         continue
       }
-      if (pending.get(id)?.key === key) continue
-      if (record.phase === 'ready' && applied.get(id) === key) continue
+      if (
+        pending.get(id)?.key === key ||
+        (record.phase === 'ready' && applied.get(id) === key)
+      )
+        continue
       stop(id)
       const requestId = crypto.randomUUID()
       pending.set(id, { id: requestId, key })
@@ -274,25 +359,33 @@ export function installFoundationLayers(map: L.Map) {
         .catch((error) => {
           if (closed || pending.get(id)?.id !== requestId) return
           pending.delete(id)
-          useFoundationStore
-            .getState()
-            .setRecord(id, {
-              data: null,
-              phase: 'error',
-              error: foundationErrorKey(error),
-            })
+          useFoundationStore.getState().setRecord(id, {
+            phase: 'error',
+            data: null,
+            error: foundationErrorKey(error),
+          })
         })
     }
-    render()
+    scheduleRender()
   }
   function schedule() {
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => void load(), 350)
-    render()
+    scheduleRender()
   }
   function invalidate() {
-    for (const id of FOUNDATION_IDS) stop(id)
+    moving = true
+    labelCanvas.cancel()
+    labelKey = ''
+    for (const id of FOUNDATION_IDS) {
+      stop(id)
+      stopJob(id)
+    }
     useFoundationStore.getState().setViewport(null)
+  }
+  function moved() {
+    moving = false
+    schedule()
   }
   const unsubscribe = useFoundationStore.subscribe((state, previous) => {
     if (
@@ -300,7 +393,7 @@ export function installFoundationLayers(map: L.Map) {
       state.refresh !== previous.refresh
     )
       schedule()
-    else if (state.records !== previous.records) render()
+    else if (state.records !== previous.records) scheduleRender()
   })
   const unsubscribeBase = useAppStore.subscribe((state, previous) => {
     if (
@@ -309,28 +402,28 @@ export function installFoundationLayers(map: L.Map) {
     )
       schedule()
   })
-  const language = () => render()
+  const language = () => scheduleRender()
   i18n.on('languageChanged', language)
-  map.on('movestart', invalidate)
-  map.on('moveend', schedule)
-  map.on('zoomend', schedule)
+  map.on('movestart zoomstart', invalidate)
+  map.on('moveend zoomend', moved)
+  map.on('resize', scheduleRender)
   void load()
   return () => {
     closed = true
     if (timer) clearTimeout(timer)
+    if (frame !== undefined) cancelAnimationFrame(frame)
     unsubscribe()
     unsubscribeBase()
     i18n.off('languageChanged', language)
-    map.off('movestart', invalidate)
-    map.off('moveend', schedule)
-    map.off('zoomend', schedule)
+    map.off('movestart zoomstart', invalidate)
+    map.off('moveend zoomend', moved)
+    map.off('resize', scheduleRender)
     for (const id of FOUNDATION_IDS) {
       stop(id)
       clear(id)
     }
-    if (attribution)
-      map.attributionControl.removeAttribution(
-        '基础要素 © <a href="https://www.tianditu.gov.cn/" target="_blank" rel="noreferrer">国家基础地理信息中心 / 天地图</a>',
-      )
+    labelCanvas.remove()
+    renderer.remove()
+    if (attribution) map.attributionControl.removeAttribution(ATTRIBUTION)
   }
 }

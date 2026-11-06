@@ -30,7 +30,7 @@ import { probeTile } from '@/features/download/download-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
 import { SharedOverlayPicker } from '@/features/sources/shared-overlay-picker'
-import { FoundationControls } from '@/features/foundation/foundation-controls'
+import { FoundationMapPanel } from '@/features/foundation/foundation-map-panel'
 import { installFoundationLayers } from '@/features/foundation/foundation-map'
 import { enabledOverlayIds, EMPTY_OVERLAY_SELECTION } from '@/features/sources/layer-selection'
 import { validOverlayIds } from '@/features/sources/overlay-sources'
@@ -1530,6 +1530,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0" />
+      <FoundationMapPanel />
       {overlayControlContainer && createPortal(<div className="max-w-64 space-y-1" data-map-overlay-controls>
         {overlaySelection.length > 0 && <><p className="px-1 pt-1 text-xs font-medium">{t('download.output.overlays')}</p>
           {overlaySelection.map((entry) => <label key={entry.sourceId} className="flex cursor-pointer items-center gap-2 px-1 py-1 text-xs">
@@ -1537,7 +1538,6 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
               onChange={(event) => setOverlayVisibility(mode, entry.sourceId, event.target.checked)}/>
             <span className="min-w-0 break-words">{sourcesQuery.data?.[entry.sourceId]?.name ?? entry.sourceId}</span>
           </label>)}</>}
-        <FoundationControls compact />
         <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start gap-1 text-xs"
           onClick={() => setOverlayDialogOpen(true)}><Layers className="size-3.5"/>{t('overlays.configure')}</Button>
       </div>, overlayControlContainer)}
