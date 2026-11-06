@@ -11,3 +11,16 @@
 上线不修改数据库 schema，不操作用户安装器或鼠标，不更新 Agent 索引，不发送额外应用内通知。生产服务器不下载任何 GitHub 资源。采集服务、镜像、Nginx 和官网均保留回滚。未验证用户实际升级或读到通知。
 
 证据目录：`G:/code/tif-downloader/artifacts/geod-3.6.28-release/`。最终验证完成后补充交付记录。
+
+## 已验证交付
+
+- 不可变源码及 tag：`4731c29a6c944d2608a72b70e0e175c9b7c07f06` / `v3.6.28`，Release run `42155625135` 四个平台成功，两个 macOS 签名检查成功。桌面 286 项、前端 97 项、采集端 26 项通过；共享内核 175 项、CLI 4 项、内核集成 15 项通过；发布元数据 6 项、更新清单 5 项通过。显式网络/大体量测试按默认策略忽略，原生真实安装包下载单独执行。
+- 正式发布页：https://github.com/gaopengbin/geo-downloader/releases/tag/v3.6.28 。最新版本元数据、canonical 页面 HTTP 200、五个安装包名称、大小及 SHA-256 均核对完成。
+- Windows 包 10,677,960 字节，SHA-256 `6bf630e922cf83cdbf3b65385dbaa17dfcf84a57a1f3c6beed96754479679e1e`，归档完整性通过、内嵌版本 3.6.28。原生生产更新下载代码读取本次清单并完整下载校验约 0.673 秒，第一条国内直连成功；未执行安装器、未修改系统代理。同步器另作旧请求链路完整读取，约 99.2 秒通过；它的代理路径速度不作为新更新器速度。
+- 采集服务先部署为 `/srv/laogao/releases/geod-telemetry/geod-telemetry-3.6.28-20261106`，运行进程目录及源码 SHA 已独立核对；生产数据库 quick_check 为 ok，schema/服务身份未变，写入失败计数为 0。备份为 `/srv/laogao/backups/geod-telemetry-3628-20261106/before.sqlite`，回滚源码为 `/srv/laogao/releases/geod-telemetry/geod-telemetry-3.6.25-20261102`。
+- 先在隔离数据库副本上验证，再切换生产服务；公网实际写入旧事件、新 execution 和新错误码，重复上报后只保留 4 条，逐字段 SQL 读回一致；携带额外私密字段的事件返回 400。验证使用已登记内部安装和 `3.6.28-smoke`，不计为用户安装/使用；无用户标识在报告中输出。
+- 国内镜像原子切换为 `/srv/laogao/packages/v3.6.28`，回滚为 `/srv/laogao/packages/v3.6.27`，备份 `/srv/laogao/backups/geod-mirror-3628-20261106`。五包均通过本地、服务端及公网完整大小/SHA-256 验证；公网 Intel 包首次读取超时，单独重试后通过，其余四包初次完整验证已通过。同步器兼容性检查通过。
+- Windows 精确 URL 接入不可变 CDN 对象，全内容及 Range 验证通过；Nginx 备份 `/srv/laogao/backups/geod-legacy-cdn-20261106-034236/portfolio-direct.conf`，nginx -t 与平滑重载通过。GeoD Agent 更新索引字节保持不变。
+- 官网源码 `9217aa37d0ca68661f9eb68d16e22abb050b0615`，腾讯云四个桌面路由已显示 3.6.28，40 个非桌面文档保持原哈希。官网回滚为 `/srv/laogao/releases/geod-website/geod-website-desktop-3627-20261103`。
+- Cloudflare Pages run `42158533750` 已成功，源码与官网提交一致。
+- 提前预取 Linux Actions 归档的一次本地下载超时，未使用该未校验归档；正式附件采用分段下载并通过 GitHub 官方摘要验证。生产服务器没有下载 GitHub 资源。未观察或宣称任何实际用户已升级，没有发送额外应用内通知。
