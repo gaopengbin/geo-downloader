@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
+  ArrowRightLeft,
   CheckCircle2,
   Database,
   Loader2,
@@ -57,6 +58,7 @@ import {
 import type { AppSettings, CustomTileSource, SourceUrlAnalysis, TileSource } from '@/types/api'
 import { GeovisPanel } from './geovis-panel'
 import { RequestHeadersEditor } from './request-headers-editor'
+import { convertOvitalUrl, OvitalUrlError } from './ovital-url'
 
 type SourceFormProps = {
   value: CustomTileSource
@@ -67,6 +69,7 @@ type SourceFormProps = {
 }
 
 function SourceForm({ value, onChange, disableId, onHeadersError, headersError }: SourceFormProps) {
+  const { t } = useTranslation()
   const [testing, setTesting] = useState(false)
   async function testSource() {
     setTesting(true)
@@ -99,6 +102,15 @@ function SourceForm({ value, onChange, disableId, onHeadersError, headersError }
           placeholder="https://example.com/{z}/{x}/{y}.png  支持 {s}/{x}/{y}/{z}/{q}"
           className="font-mono text-xs"
         />
+        <Button type="button" size="sm" variant="outline" onClick={() => {
+          try {
+            const converted = convertOvitalUrl(value.url)
+            onChange({ ...value, url: converted.url })
+            toast.success(t('ovital.converted'))
+          } catch (error) {
+            toast.error(t(`ovital.errors.${error instanceof OvitalUrlError ? error.code : 'absolute'}`))
+          }
+        }}><ArrowRightLeft className="mr-1 size-3.5" />{t('ovital.convertButton')}</Button>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor={`sub-${value.id}`}>子域名（逗号分隔）</Label>
@@ -160,7 +172,7 @@ function SourceForm({ value, onChange, disableId, onHeadersError, headersError }
 function validateSource(s: CustomTileSource): string | null {
   if (!s.name.trim()) return '名称不能为空'
   if (!s.url.trim()) return 'URL 模板不能为空'
-  const hasXyz = /\{x\}/.test(s.url) && /\{y\}/.test(s.url) && /\{z\}/.test(s.url)
+  const hasXyz = /\{x\}/.test(s.url) && /\{-?y\}/.test(s.url) && /\{z\}/.test(s.url)
   const hasQuadKey = /\{q\}/.test(s.url)
   if (!hasXyz && !hasQuadKey) {
     return 'URL 模板必须包含 {x} {y} {z}，或使用 {q} QuadKey 占位符'
@@ -180,6 +192,10 @@ function CustomPanel({
   onMutate: (next: AppSettings) => void
   pending: boolean
 }) {
+  const { t } = useTranslation()
+  const [ovitalOpen, setOvitalOpen] = useState(false)
+  const [ovitalServer, setOvitalServer] = useState('')
+  const [ovitalUrl, setOvitalUrl] = useState('')
   const list = useMemo(() => settings.custom_sources ?? [], [settings.custom_sources])
   const [editing, setEditing] = useState<CustomTileSource | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -223,7 +239,7 @@ function CustomPanel({
     setAnalysis(null)
     try {
       const result = await analyzeTileSourceUrl(
-        smartUrl.trim(),
+        /\{\$|%7b%24/i.test(smartUrl) ? convertOvitalUrl(smartUrl).url : smartUrl.trim(),
         settings.proxy_enabled && settings.proxy_url ? settings.proxy_url : null,
         smartHeaders,
       )
@@ -243,7 +259,9 @@ function CustomPanel({
         toast.warning('模板已生成，但样例测试未通过，请检查后再保存')
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = error instanceof OvitalUrlError
+        ? t(`ovital.errors.${error.code}`)
+        : error instanceof Error ? error.message : String(error)
       toast.error(`智能解析失败：${message}`)
     } finally {
       setAnalyzing(false)
@@ -252,11 +270,15 @@ function CustomPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
           自定义图源保存后可用于底图或叠加图层；叠加顺序在使用时配置。
         </p>
         <div className="flex shrink-0 items-center gap-1.5">
+          <Button type="button" size="sm" variant="outline" disabled={pending}
+            onClick={() => { setOvitalOpen(v => !v); setSmartOpen(false) }}>
+            <ArrowRightLeft className="mr-1 size-3.5" />{t('ovital.title')}
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -284,6 +306,28 @@ function CustomPanel({
         </div>
       </div>
 
+      {ovitalOpen && <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3" data-ovital-converter>
+        <p className="text-xs leading-relaxed text-muted-foreground">{t('ovital.hint')}</p>
+        <div className="space-y-1.5">
+          <Label htmlFor="ovital-server">{t('ovital.server')}</Label>
+          <Input id="ovital-server" value={ovitalServer} onChange={e => setOvitalServer(e.target.value)} placeholder="http://127.0.0.1:9999" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="ovital-url">{t('ovital.url')}</Label>
+          <Input id="ovital-url" value={ovitalUrl} onChange={e => setOvitalUrl(e.target.value)} placeholder="/getomap_200_{$z}_{$x}_{$y}_0_0.png" className="font-mono text-xs" />
+        </div>
+        <Button type="button" size="sm" onClick={() => {
+          try {
+            const result = convertOvitalUrl(ovitalUrl, ovitalServer)
+            setEditing({ ...blankCustomSource(), name: t('ovital.defaultName'), url: result.url })
+            setOvitalOpen(false)
+            setAnalysis(null)
+            toast.success(t('ovital.converted'))
+          } catch (error) {
+            toast.error(t(`ovital.errors.${error instanceof OvitalUrlError ? error.code : 'absolute'}`))
+          }
+        }}><ArrowRightLeft className="mr-1 size-3.5" />{t('ovital.use')}</Button>
+      </div>}
       {smartOpen && (
         <div className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3">
           <div className="space-y-1.5">

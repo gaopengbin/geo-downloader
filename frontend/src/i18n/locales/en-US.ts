@@ -1,4 +1,79 @@
 const enUS = {
+  foundation: {
+    title: 'National reference features',
+    retry: 'Reload reference features',
+    layers: {
+      water: 'Waterways',
+      roads: 'Roads',
+      railways: 'Railways',
+      settlements: 'Settlements / names',
+    },
+    colors: {
+      0: 'Blue',
+      1: 'Orange',
+      2: 'Purple',
+      3: 'Red',
+      4: 'Green',
+      5: 'Light gray',
+    },
+    color: '{{name}} color',
+    width: '{{name}} width',
+    labels: 'Names',
+    labelsFor: 'Show {{name}} names',
+    font: 'Label size',
+    fontValue: 'Size {{size}}',
+    coordinates: 'Coordinate alignment',
+    coordinateModes: {
+      auto: 'Follow basemap',
+      wgs84: 'Standard coordinates',
+      gcj02: 'Amap alignment',
+    },
+    zoomHint: 'Zoom to level {{zoom}} to load',
+    partial:
+      'Preview contains only part of the features. Zoom in for detail; export queries the complete intersecting features.',
+    empty: 'No features in this area',
+    cached: 'Loaded from local cache',
+    loaded: 'Current area loaded',
+    exportView: 'Save viewport vectors',
+    exportHint:
+      'Query features intersecting the current map viewport. Complete feature geometries are preserved in GeoJSON.',
+    saving: 'Saving, {{count}} features read',
+    saved: 'Saved {{count}} features',
+    cancel: 'Cancel',
+    cancelled: 'Export cancelled; the original file is preserved',
+    scopeHint:
+      'Map reference overlay · separate GeoJSON export. Labels avoid overlap. Coordinate alignment can be set for custom basemaps.',
+    attribution:
+      'Source: NGCC / Tianditu public geographic framework. Reference data, not a live detailed road network.',
+    networkError:
+      'Could not load reference features. Check the network or proxy and retry.',
+    limited: 'The feature service is busy or rate limited. Retry later.',
+    storageError:
+      'Could not save the vector file. Check the path, permissions and free space.',
+    responseError:
+      'The service returned incomplete or invalid data. No successful output was saved. Retry.',
+    boundsError:
+      'This area cannot be queried. Use a smaller area or avoid the date line.',
+    desktopOnly: 'This feature requires GeoD desktop.',
+  },
+  ovital: {
+    title: 'Ovital URL',
+    convertButton: 'Convert Ovital URL',
+    defaultName: 'Ovital custom source',
+    server: 'Server address (optional for full URLs)',
+    url: 'Full URL or path template',
+    use: 'Create GeoD source',
+    converted: 'Tile template ready. Check source settings before saving.',
+    hint: 'Supports ordinary Ovital online URLs and custom-map web tile services. Only tile variables are converted; authentication parameters are preserved. Check the original projection, zoom and tile size.',
+    errors: {
+      absolute: 'Enter a full HTTP/HTTPS URL or provide the server address.',
+      variables:
+        'This URL contains time, function or other Ovital-specific variables. Fix their values before converting.',
+      placeholders: 'No complete x/y/z or QuadKey tile variables were found.',
+      projection:
+        'This URL declares geographic tiles. The converter currently targets Web Mercator tiles; use the corresponding Mercator source.',
+    },
+  },
   layout: {
     resizeSidebar: 'Resize sidebar',
     sidebarResizeHint: 'Drag to resize ({{min}}–{{max}} px), or use arrow keys. Double-click to reset.',
@@ -222,7 +297,7 @@ const enUS = {
   overlays: {
     configure: 'Configure overlays',
     configureHint: 'Choose any raster source or add your own service. Layers run from bottom to top; later layers cover earlier ones. Transparent layers work best.',
-    previewHint: 'Synced with the task panel. Checked layers appear on the map and are included in newly created download tasks.',
+    previewHint: 'Raster overlays share the download selection. Reference features can be saved separately as vectors.',
     visibility: 'Show and download {{name}}',
     previewOnlyHint: 'Overlays in this module are reference layers for map preview only.',
     incrementalHint: 'Incremental downloads save changed base tiles only. Overlays are for reference; use single-version or batch downloads for composited output.',

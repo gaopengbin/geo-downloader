@@ -30,6 +30,8 @@ import { probeTile } from '@/features/download/download-api'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
 import { getTileSourcesMerged } from '@/features/sources/sources-api'
 import { SharedOverlayPicker } from '@/features/sources/shared-overlay-picker'
+import { FoundationControls } from '@/features/foundation/foundation-controls'
+import { installFoundationLayers } from '@/features/foundation/foundation-map'
 import { enabledOverlayIds, EMPTY_OVERLAY_SELECTION } from '@/features/sources/layer-selection'
 import { validOverlayIds } from '@/features/sources/overlay-sources'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -763,6 +765,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
     })
 
     mapRef.current = map
+    const removeFoundationLayers = installFoundationLayers(map)
     drawnRef.current = drawn
     onMapReady?.(map)
 
@@ -810,6 +813,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       stopMeasurement(false)
       measureActionsRef.current = null
       setMeasureControlContainer(null)
+      removeFoundationLayers()
       map.remove()
       mapRef.current = null
       drawnRef.current = null
@@ -1533,6 +1537,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
               onChange={(event) => setOverlayVisibility(mode, entry.sourceId, event.target.checked)}/>
             <span className="min-w-0 break-words">{sourcesQuery.data?.[entry.sourceId]?.name ?? entry.sourceId}</span>
           </label>)}</>}
+        <FoundationControls compact />
         <Button type="button" variant="ghost" size="sm" className="mt-1 w-full justify-start gap-1 text-xs"
           onClick={() => setOverlayDialogOpen(true)}><Layers className="size-3.5"/>{t('overlays.configure')}</Button>
       </div>, overlayControlContainer)}

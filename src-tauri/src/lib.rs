@@ -5,6 +5,7 @@ pub mod downloader;
 mod update_download;
 mod osm_output;
 mod overpass;
+mod foundation;
 mod tile_requests;
 mod download_scheduling;
 pub mod tianditu_tokens;
@@ -214,6 +215,9 @@ pub fn run() {
             assistant::assistant_cancel,
             // 矢量数据
             commands::create_osm_download_task,
+            foundation::foundation_preview,
+            foundation::foundation_cancel,
+            foundation::foundation_export,
             commands::download_osm_data,
             commands::download_admin_boundary_file,
             // 3D Tiles
