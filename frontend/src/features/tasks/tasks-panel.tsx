@@ -306,6 +306,15 @@ function TaskRow({
     },
     onError: (e) => toast.error(t('tasks.toast.deleteError', { message: String(e) })),
   })
+  const retryFailedMutation = useMutation({
+    mutationFn: () => resumeTask(task.id),
+    onSuccess: () => {
+      toast.success(t('tasks.toast.failedRetryStarted'))
+      refresh()
+    },
+    onError: (e) =>
+      toast.error(t('tasks.toast.failedRetryError', { message: String(e) })),
+  })
   // Issue #31：强制按现状导出（paused 待决策时使用）
   const exportPartialMutation = useMutation({
     mutationFn: () => exportPartialTask(task.id),
@@ -431,14 +440,26 @@ function TaskRow({
           )}
 
           {(isActive(status) || isCompletedWithGaps(status) || isFinished(status)) && (
-            <TaskCardAction
-              icon={Trash2} danger
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
-              title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}
-            >
-              {t('history.actions.delete')}
-            </TaskCardAction>
+            <>
+              {status === 'failed' && (
+                <TaskCardAction
+                  icon={RefreshCw}
+                  onClick={() => retryFailedMutation.mutate()}
+                  disabled={retryFailedMutation.isPending}
+                  title={t('tasks.actions.retry')}
+                >
+                  {t('tasks.cardActions.retry')}
+                </TaskCardAction>
+              )}
+              <TaskCardAction
+                icon={Trash2} danger
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteMutation.isPending}
+                title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}
+              >
+                {t('history.actions.delete')}
+              </TaskCardAction>
+            </>
           )}
       </TaskCardActions>
       {showLogs && <TaskLogPanel taskId={task.id} />}
