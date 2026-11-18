@@ -2,7 +2,7 @@
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -45,6 +45,7 @@ pub struct TaskInfo {
     pub format: String,
     pub save_path: String,
     pub status: TaskStatus,
+    pub can_retry: bool,
     pub revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preparation: Option<PreparationProgress>,
@@ -98,9 +99,21 @@ impl TaskEntry {
 /// 全局任务管理器
 pub struct TaskManager {
     tasks: Arc<Mutex<HashMap<String, TaskEntry>>>,
+    task_operations: Mutex<HashSet<String>>,
     log_dir: PathBuf,
     event_sink: Mutex<Option<Arc<dyn Fn(TaskInfo) + Send + Sync>>>,
     revision: std::sync::atomic::AtomicU64,
+}
+
+pub(crate) struct TaskOperation<'a> {
+    operations: &'a Mutex<HashSet<String>>,
+    task_id: String,
+}
+
+impl Drop for TaskOperation<'_> {
+    fn drop(&mut self) {
+        self.operations.lock().unwrap().remove(&self.task_id);
+    }
 }
 
 impl TaskManager {
@@ -116,10 +129,30 @@ impl TaskManager {
         let _ = std::fs::create_dir_all(&log_dir);
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            task_operations: Mutex::new(HashSet::new()),
             log_dir,
             event_sink: Mutex::new(None),
             revision: std::sync::atomic::AtomicU64::new(1),
         }
+    }
+
+    /// Reserve the task through status checks and disk changes.
+    pub(crate) fn begin_task_operation(&self, id: &str) -> Result<TaskOperation<'_>, String> {
+        if !self.task_operations.lock().unwrap().insert(id.to_owned()) {
+            return Err("正在处理该任务，请稍后重试".into());
+        }
+        Ok(TaskOperation {
+            operations: &self.task_operations,
+            task_id: id.to_owned(),
+        })
+    }
+
+    pub(crate) fn task_status(&self, id: &str) -> Option<TaskStatus> {
+        self.tasks
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|entry| entry.info.status.clone())
     }
 
     pub fn set_event_sink(&self, sink: Arc<dyn Fn(TaskInfo) + Send + Sync>) {
@@ -189,6 +222,7 @@ impl TaskManager {
             format,
             save_path,
             status: TaskStatus::Pending,
+            can_retry: false,
             revision: 0,
             preparation: None,
             progress: 0.0,
@@ -332,6 +366,7 @@ impl TaskManager {
 
     /// 标记任务失败
     pub fn fail_task(&self, id: &str, error: String) {
+        let can_retry = load_task_file(id).is_some_and(|task| task.task_id == id);
         if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
             // 终态保护：已取消/已完成的任务不被覆写成失败
             if matches!(
@@ -343,6 +378,7 @@ impl TaskManager {
                 return;
             }
             entry.info.status = TaskStatus::Failed;
+            entry.info.can_retry = can_retry;
             if let Some(pool)=entry.token_pool.as_ref(){pool.record_failure(&error);}
             entry.freeze_diagnostics();
             entry.info.error = Some(error);
@@ -452,18 +488,21 @@ impl TaskManager {
     }
 
     /// 移除已完成/失败/取消的任务
-    pub fn remove_finished(&self, id: &str) {
+    pub fn remove_finished(&self, id: &str) -> bool {
         let mut tasks = self.tasks.lock().unwrap();
-        if let Some(entry) = tasks.get(id) {
-            if matches!(
+        if tasks.get(id).is_some_and(|entry| {
+            matches!(
                 entry.info.status,
                 TaskStatus::Completed
                     | TaskStatus::CompletedWithGaps
                     | TaskStatus::Failed
                     | TaskStatus::Cancelled
-            ) {
-                tasks.remove(id);
-            }
+            )
+        }) {
+            tasks.remove(id);
+            true
+        } else {
+            false
         }
     }
 
@@ -584,6 +623,37 @@ fn task_id_prefix(id: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn running_retry_cannot_be_removed_and_blocks_other_task_operations() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = TaskManager::new_with_log_dir(directory.path().into());
+        let id = uuid::Uuid::new_v4().to_string();
+        let create = || {
+            manager.create_task(
+                id.clone(), "Test".into(), "tiles".into(), "Tiles".into(),
+                1, "tiles".into(), "output".into(), 1,
+            );
+        };
+        create();
+        manager.fail_task(&id, "test failure".into());
+        assert_eq!(manager.task_status(&id), Some(TaskStatus::Failed));
+
+        let retry = manager.begin_task_operation(&id).unwrap();
+        assert!(manager.begin_task_operation(&id).is_err());
+        assert!(manager.begin_task_operation("another-task").is_ok());
+        create();
+        drop(retry);
+
+        let remove = manager.begin_task_operation(&id).unwrap();
+        assert!(!manager.remove_finished(&id));
+        assert_eq!(manager.task_status(&id), Some(TaskStatus::Pending));
+        manager.complete_task(&id, 256);
+        assert!(manager.remove_finished(&id));
+        assert!(manager.task_status(&id).is_none());
+        drop(remove);
+        assert!(manager.begin_task_operation(&id).is_ok());
+    }
     #[test]
     fn preparation_updates_are_visible_pauseable_and_revisioned_until_export_completion() {
         let directory=tempfile::tempdir().unwrap();

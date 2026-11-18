@@ -89,10 +89,10 @@ function ProgressBar({ value }: { value: number }) {
 function TaskRow({ task }: { task: TaskInfo }) {
   const { t, i18n } = useTranslation()
   const qc = useQueryClient()
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: ['active-tasks'] })
-    qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
-  }
+  const refresh = () => Promise.all([
+    qc.invalidateQueries({ queryKey: ['active-tasks'] }),
+    qc.invalidateQueries({ queryKey: ['resumable-tasks'] }),
+  ])
 
   const pauseMutation = useMutation({
     mutationFn: () => togglePauseTask(task.id),
@@ -116,11 +116,14 @@ function TaskRow({ task }: { task: TaskInfo }) {
     mutationFn: () => resumeTask(task.id),
     onSuccess: () => {
       toast.success(t('tasks.toast.failedRetryStarted'))
-      refresh()
+      return refresh()
     },
-    onError: (e) =>
-      toast.error(t('tasks.toast.failedRetryError', { message: String(e) })),
+    onError: (e) => {
+      toast.error(t('tasks.toast.failedRetryError', { message: String(e) }))
+      return refresh()
+    },
   })
+  const retryOrRemovePending = retryFailedMutation.isPending || removeMutation.isPending
 
   const status = String(task.status)
   const statusKey = getTaskStatusKey(status)
@@ -177,13 +180,13 @@ function TaskRow({ task }: { task: TaskInfo }) {
           )}
           {isFinished(status) && (
             <>
-              {status === 'failed' && (
+              {status === 'failed' && task.can_retry === true && (
                 <Tooltip content={t('tasks.actions.retry')}>
                   <Button
                     size="sm"
                     variant="ghost"
                     onClick={() => retryFailedMutation.mutate()}
-                    disabled={retryFailedMutation.isPending}
+                    disabled={retryOrRemovePending}
                     aria-label={t('tasks.actions.retry')}
                   >
                     <RefreshCw className="size-4" />
@@ -194,7 +197,7 @@ function TaskRow({ task }: { task: TaskInfo }) {
                 size="sm"
                 variant="ghost"
                 onClick={() => removeMutation.mutate()}
-                disabled={removeMutation.isPending}
+                disabled={retryOrRemovePending}
                 aria-label={t('tasks.actions.remove')}
               >
                 <Trash2 className="size-4" />

@@ -248,10 +248,10 @@ function TaskRow({
 }) {
   const { t, i18n } = useTranslation()
   const qc = useQueryClient()
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: ['active-tasks'] })
-    qc.invalidateQueries({ queryKey: ['resumable-tasks'] })
-  }
+  const refresh = () => Promise.all([
+    qc.invalidateQueries({ queryKey: ['active-tasks'] }),
+    qc.invalidateQueries({ queryKey: ['resumable-tasks'] }),
+  ])
   const [showLogs, setShowLogs] = useState(false)
   const [elapsed, setElapsed] = useState<number>(0)
   const status = String(task.status)
@@ -302,7 +302,7 @@ function TaskRow({
       if (!changed) return
       taskStartTimes.delete(task.id)
       toast.success(t('tasks.toast.deleted'))
-      refresh()
+      return refresh()
     },
     onError: (e) => toast.error(t('tasks.toast.deleteError', { message: String(e) })),
   })
@@ -310,11 +310,14 @@ function TaskRow({
     mutationFn: () => resumeTask(task.id),
     onSuccess: () => {
       toast.success(t('tasks.toast.failedRetryStarted'))
-      refresh()
+      return refresh()
     },
-    onError: (e) =>
-      toast.error(t('tasks.toast.failedRetryError', { message: String(e) })),
+    onError: (e) => {
+      toast.error(t('tasks.toast.failedRetryError', { message: String(e) }))
+      return refresh()
+    },
   })
+  const retryOrDeletePending = retryFailedMutation.isPending || deleteMutation.isPending
   // Issue #31：强制按现状导出（paused 待决策时使用）
   const exportPartialMutation = useMutation({
     mutationFn: () => exportPartialTask(task.id),
@@ -441,11 +444,11 @@ function TaskRow({
 
           {(isActive(status) || isCompletedWithGaps(status) || isFinished(status)) && (
             <>
-              {status === 'failed' && (
+              {status === 'failed' && task.can_retry === true && (
                 <TaskCardAction
                   icon={RefreshCw}
                   onClick={() => retryFailedMutation.mutate()}
-                  disabled={retryFailedMutation.isPending}
+                  disabled={retryOrDeletePending}
                   title={t('tasks.actions.retry')}
                 >
                   {t('tasks.cardActions.retry')}
@@ -454,7 +457,7 @@ function TaskRow({
               <TaskCardAction
                 icon={Trash2} danger
                 onClick={() => deleteMutation.mutate()}
-                disabled={deleteMutation.isPending}
+                disabled={retryOrDeletePending}
                 title={t('tasks.actions.deleteTask')} aria-label={t('tasks.actions.deleteTask')}
               >
                 {t('history.actions.delete')}
