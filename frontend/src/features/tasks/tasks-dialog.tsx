@@ -30,6 +30,7 @@ import {
   cancelTask,
   getActiveTasks,
   removeTask,
+  resumeTask,
   togglePauseTask,
 } from '@/features/tasks/tasks-api'
 import { getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
@@ -88,7 +89,10 @@ function ProgressBar({ value }: { value: number }) {
 function TaskRow({ task }: { task: TaskInfo }) {
   const { t, i18n } = useTranslation()
   const qc = useQueryClient()
-  const refresh = () => qc.invalidateQueries({ queryKey: ['active-tasks'] })
+  const refresh = () => Promise.all([
+    qc.invalidateQueries({ queryKey: ['active-tasks'] }),
+    qc.invalidateQueries({ queryKey: ['resumable-tasks'] }),
+  ])
 
   const pauseMutation = useMutation({
     mutationFn: () => togglePauseTask(task.id),
@@ -108,6 +112,18 @@ function TaskRow({ task }: { task: TaskInfo }) {
     onSuccess: refresh,
     onError: (e) => toast.error(t('tasks.toast.deleteError', { message: String(e) })),
   })
+  const retryFailedMutation = useMutation({
+    mutationFn: () => resumeTask(task.id),
+    onSuccess: () => {
+      toast.success(t('tasks.toast.failedRetryStarted'))
+      return refresh()
+    },
+    onError: (e) => {
+      toast.error(t('tasks.toast.failedRetryError', { message: String(e) }))
+      return refresh()
+    },
+  })
+  const retryOrRemovePending = retryFailedMutation.isPending || removeMutation.isPending
 
   const status = String(task.status)
   const statusKey = getTaskStatusKey(status)
@@ -163,15 +179,30 @@ function TaskRow({ task }: { task: TaskInfo }) {
             </>
           )}
           {isFinished(status) && (
-            <Tooltip content={t('tasks.actions.remove')}><Button
-              size="sm"
-              variant="ghost"
-              onClick={() => removeMutation.mutate()}
-              disabled={removeMutation.isPending}
-              aria-label={t('tasks.actions.remove')}
-            >
-              <Trash2 className="size-4" />
-            </Button></Tooltip>
+            <>
+              {status === 'failed' && task.can_retry === true && (
+                <Tooltip content={t('tasks.actions.retry')}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => retryFailedMutation.mutate()}
+                    disabled={retryOrRemovePending}
+                    aria-label={t('tasks.actions.retry')}
+                  >
+                    <RefreshCw className="size-4" />
+                  </Button>
+                </Tooltip>
+              )}
+              <Tooltip content={t('tasks.actions.remove')}><Button
+                size="sm"
+                variant="ghost"
+                onClick={() => removeMutation.mutate()}
+                disabled={retryOrRemovePending}
+                aria-label={t('tasks.actions.remove')}
+              >
+                <Trash2 className="size-4" />
+              </Button></Tooltip>
+            </>
           )}
         </div>
       </div>

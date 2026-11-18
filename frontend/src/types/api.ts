@@ -247,6 +247,7 @@ export interface TaskInfo {
   format?: OutputFormat
   save_path?: string
   status: TaskStatus | string
+  can_retry?: boolean
   progress?: number
   completed?: number
   total?: number

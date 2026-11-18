@@ -2424,15 +2424,16 @@ pub fn toggle_pause_task(
 
 /// 移除已完成的任务
 ///
-/// Issue #31：CompletedWithGaps 状态的任务保留了 task_file + temp_dir
-/// 供「补漏重导」/「强制按现状导出」复用，用户从列表移除时由本命令统一清理。
-/// Completed / Failed / Cancelled 任务的 task_file + temp_dir 已在
-/// execute_download_task 末段清理过，这里调用为 no-op。
+/// 失败和缺块完成的任务可能仍保留续传数据。确认终态后再清理。
 #[tauri::command]
-pub fn remove_task(task_manager: State<'_, Arc<TaskManager>>, task_id: String) {
+pub fn remove_task(task_manager: State<'_, Arc<TaskManager>>, task_id: String) -> Result<(), String> {
+    let _operation = task_manager.begin_task_operation(&task_id)?;
+    if !task_manager.remove_finished(&task_id) {
+        return Err("任务已不存在或仍在进行中，请刷新任务列表".into());
+    }
     crate::task::cleanup_temp_dir(&task_id);
     crate::task::remove_task_file(&task_id);
-    task_manager.remove_finished(&task_id);
+    Ok(())
 }
 
 // ============ 断点续传相关命令 ============
@@ -2466,23 +2467,13 @@ pub async fn resume_task(
     task_manager: State<'_, Arc<TaskManager>>,
     task_id: String,
 ) -> Result<CreateTaskResult, String> {
-    // 防止重复 resume：若任务正处于「活动运行」状态（下载/处理循环存活），拒绝二次
-    // 启动，避免两个 execute_download_task 循环同时写同一 temp_dir/save_path。
-    // 注意：Paused / PendingDecision / CompletedWithGaps 是静止态，resume_task 正是
-    // 用于这些状态的「恢复 / 补漏重导」，不能拒绝。
-    let already_running = task_manager
-        .get_all_tasks()
-        .iter()
-        .any(|t| t.id == task_id && matches!(
-            t.status,
-            TaskStatus::Pending
-                | TaskStatus::Downloading
-                | TaskStatus::Merging
-                | TaskStatus::Processing
-                | TaskStatus::Exporting
-        ));
-    if already_running {
-        return Err("任务已在进行中".to_string());
+    let _operation = task_manager.begin_task_operation(&task_id)?;
+    // 暂停仍有工作线程，继续时使用 toggle_pause_task。
+    if !matches!(
+        task_manager.task_status(&task_id),
+        None | Some(TaskStatus::PendingDecision | TaskStatus::CompletedWithGaps | TaskStatus::Failed)
+    ) {
+        return Err("当前任务状态无法重试，请刷新任务列表".into());
     }
 
     // 读取持久化任务
@@ -3026,11 +3017,20 @@ pub async fn export_partial_task(
 /// `delete_cache=true`：连同 .partial 缓存目录一起删除（彻底清理）
 /// `delete_cache=false`：仅移除任务条目，保留缓存供下次复用
 #[tauri::command]
-pub fn discard_resumable_task(task_id: String, delete_cache: Option<bool>) {
+pub fn discard_resumable_task(
+    task_manager: State<'_, Arc<TaskManager>>,
+    task_id: String,
+    delete_cache: Option<bool>,
+) -> Result<(), String> {
+    let _operation = task_manager.begin_task_operation(&task_id)?;
+    if !matches!(task_manager.task_status(&task_id), None | Some(TaskStatus::Cancelled)) {
+        return Err("任务状态已变化，请刷新任务列表".into());
+    }
     if delete_cache.unwrap_or(true) {
         crate::task::cleanup_temp_dir(&task_id);
     }
     crate::task::remove_task_file(&task_id);
+    Ok(())
 }
 
 /// 获取省份列表
