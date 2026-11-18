@@ -6,6 +6,20 @@ Users can turn reporting off; an existing explicit opt-out is retained.
 
 ## Client behavior
 
+Download lifecycle events optionally include the native random task UUID as
+`task_id`, scoped by anonymous installation. It remains stable across recovery
+and application restarts while `attempt_id` changes for a new observed attempt.
+No task names, paths, or download locations are included. Legacy events without
+this field remain accepted and cannot be retrospectively linked to tasks.
+
+The protected statistics API exposes `download_outcomes` over retained events,
+excluding registered internal installations. It counts the latest observed state
+of each linked task and separately counts completed tasks with an earlier failure
+as `recovered_tasks`. A later retry can change a task's result. A latest `started`
+state means in progress or a missing terminal report, and does not prove failure.
+Events are ordered by occurrence time to tolerate delayed delivery. Unlinked
+legacy attempts are counted separately from tasks.
+
 - Consent state: `pending`, `enabled`, or `disabled`.
 - A random anonymous installation ID is generated for enabled GeoD clients.
 - Reporting waits for saved preferences to hydrate, so an opt-out cannot leak a startup event.

@@ -11,6 +11,8 @@ import { useFoundationStore } from '../src/features/foundation/foundation-store'
 import { SourcesDialog } from '../src/features/sources/sources-dialog'
 import { Button } from '../src/components/ui/button'
 import { Toaster } from 'sonner'
+import { VectorPage } from '../src/features/vector/vector-page'
+import { installOsmPreview } from '../src/features/vector/osm-preview-map'
 if (!import.meta.env.DEV || location.hostname !== '127.0.0.1')
   throw Error('Local isolated acceptance only')
 let settings: Record<string, unknown> = {
@@ -35,6 +37,7 @@ originalWindow.__TAURI_INTERNALS__ = {
   invoke: async (command: string, args: Record<string, unknown> = {}) => {
     qaCalls[command] = (qaCalls[command] ?? 0) + 1
     if (command === 'get_settings') return settings
+    if (command === 'get_provinces') return [] // Region list is outside this rendering acceptance.
     if (command === 'save_settings') {
       settings = args.settings as Record<string, unknown>
       return null
@@ -59,6 +62,9 @@ originalWindow.__TAURI_INTERNALS__ = {
         foundation_raster_tile: 'raster',
         foundation_cancel: 'cancel',
         foundation_export: 'export',
+        osm_preview_load: 'osm-load',
+        osm_preview_tile: 'osm-tile',
+        osm_preview_remove: 'osm-remove',
       } as Record<string, string>
     )[command]
     if (!route) throw Error(`Unsupported isolated command: ${command}`)
@@ -83,9 +89,10 @@ export function Harness() {
   useEffect(() => {
     const pointCase =
       new URLSearchParams(location.search).get('case') === 'points'
+    const osmCase = new URLSearchParams(location.search).get('case') === 'osm'
     const m = L.map(ref.current!).setView(
       pointCase ? [35.95, 114.63] : [39.9, 116.4],
-      pointCase ? 12 : 11,
+      osmCase ? 16 : pointCase ? 12 : 11,
     )
     map.current = m
     L.tileLayer(
@@ -95,6 +102,7 @@ export function Harness() {
     const remove = installFoundationLayers(m, (sample) =>
       setMeasurements((v) => [...v.slice(-99), sample]),
     )
+    const removeOsm = installOsmPreview(m)
     const report = () =>
       setView(
         `${m.getCenter().lat.toFixed(6)},${m.getCenter().lng.toFixed(6)} / z${m.getZoom()}`,
@@ -103,6 +111,7 @@ export function Harness() {
     report()
     return () => {
       remove()
+      removeOsm()
       m.remove()
     }
   }, [])
@@ -143,6 +152,7 @@ export function Harness() {
           </Button>
         </div>
         <SourcesDialog triggerLabel="图源管理" listenForActions={false} />
+        <VectorPage />
         <output className="block text-xs" data-qa-view>
           {view}
         </output>

@@ -278,6 +278,28 @@ async fn serve_ui_bridge() {
                     foundation_cancel(args["requestId"].as_str().unwrap_or_default().into());
                     return Ok(Value::Null);
                 }
+                if path == "/osm-load" {
+                    return serde_json::to_value(osm_preview::osm_preview_load(
+                        args["requestId"].as_str().ok_or("missing request")?.into(),
+                        serde_json::from_value(args["bounds"].clone()).map_err(|_| "bad bounds")?,
+                        args["featureType"].as_str().ok_or("missing type")?.into(), None,
+                        serde_json::from_value(args.get("polygon").cloned().unwrap_or(Value::Null)).map_err(|_| "bad polygon")?,
+                    ).await?).map_err(|e| e.to_string());
+                }
+                if path == "/osm-remove" {
+                    osm_preview::osm_preview_remove(args["id"].as_str().unwrap_or_default().into());
+                    return Ok(Value::Null);
+                }
+                if path == "/osm-tile" {
+                    return serde_json::to_value(osm_preview::osm_preview_tile(
+                        args["requestId"].as_str().ok_or("missing request")?.into(),
+                        args["id"].as_str().ok_or("missing snapshot")?.into(),
+                        serde_json::from_value(args["config"].clone()).map_err(|_| "bad config")?,
+                        args["z"].as_u64().ok_or("bad zoom")?.try_into().map_err(|_| "bad zoom")?,
+                        args["x"].as_u64().ok_or("bad x")?.try_into().map_err(|_| "bad x")?,
+                        args["y"].as_u64().ok_or("bad y")?.try_into().map_err(|_| "bad y")?,
+                    ).await?).map_err(|e| e.to_string());
+                }
                 let id = args["requestId"].as_str().ok_or("request ID missing")?;
                 let (_guard, cancel) = register(id)?;
                 let mut source = Source::new(None)?;

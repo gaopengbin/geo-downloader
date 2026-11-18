@@ -248,7 +248,7 @@ function sanitizeProperties<TName extends TelemetryEventName>(
     }
     case 'download_task_state': {
       const value = properties as DownloadLifecycleEvent
-      return { attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason, ...sanitizeDownloadDiagnostics(value),...(value.diagnostic!==undefined?{diagnostic:sanitizeAcquisitionDiagnostic(value.diagnostic)}:{}),...(value.execution!==undefined?{execution:validateExecutionDiagnostic(value.execution)}:{}) }
+      return { ...(value.task_id ? { task_id: value.task_id } : {}), attempt_id: value.attempt_id, state: value.state, duration: value.duration, reason: value.reason, ...sanitizeDownloadDiagnostics(value),...(value.diagnostic!==undefined?{diagnostic:sanitizeAcquisitionDiagnostic(value.diagnostic)}:{}),...(value.execution!==undefined?{execution:validateExecutionDiagnostic(value.execution)}:{}) }
     }
     case 'bookmark_action':
     case 'task_action':

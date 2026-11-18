@@ -35,14 +35,17 @@ export class FoundationRasterLayer extends L.GridLayer {
   private config: RasterConfig
   private proxy: () => Promise<string | null>
   private changed: (status: RasterStatus) => void
+  private loadRaster: typeof fetchFoundationRaster
   constructor(
     config: RasterConfig,
     proxy: () => Promise<string | null>,
     changed: (status: RasterStatus) => void,
+    loadRaster = fetchFoundationRaster,
+    pane = 'geod-foundation',
   ) {
     super({
       tileSize: 512,
-      pane: 'geod-foundation',
+      pane,
       minZoom: 8,
       maxZoom: 22,
       updateWhenIdle: true,
@@ -54,6 +57,7 @@ export class FoundationRasterLayer extends L.GridLayer {
     this.config = config
     this.proxy = proxy
     this.changed = changed
+    this.loadRaster = loadRaster
     this.on('tileunload', (event: L.TileEvent) => {
       const tile = event.tile as HTMLImageElement,
         job = this.jobs.get(tile)
@@ -123,7 +127,7 @@ export class FoundationRasterLayer extends L.GridLayer {
         .then(async (proxy) => {
           if (this.closed || !this.jobs.has(job.tile)) return
           job.native = true
-          const value = await fetchFoundationRaster(
+          const value = await this.loadRaster(
             job.requestId,
             this.config,
             job.coords,

@@ -10,7 +10,7 @@
  */
 
 import L from 'leaflet'
-import { resolveTileUrl } from './tile-url'
+import { isCartoBasemapUrl, resolveTileUrl } from './tile-url'
 import { invokeCommand, isTauriRuntime } from '@/lib/tauri'
 import { isOsmOfflineBlocked } from '@/features/sources/osm-download-policy'
 
@@ -41,6 +41,9 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     this._cacheFormat = options.format
     this._cacheReadOnly = options.readOnly === true
     this._requiresHeaders = Object.keys(options.requestHeaders ?? {}).length > 0
+    // Use the full authenticated URL for browser caching. The MBTiles key can't
+    // distinguish old watermark tiles or store a credentialed URL safely.
+    this._skipPersistentCache = isCartoBasemapUrl(urlTemplate)
     this.on('tileunload', (event: L.TileEvent) => {
       const tile = event.tile as HTMLImageElement & { earthAbort?: AbortController; earthRequest?: string; earthBlob?: string }
       tile.earthAbort?.abort()
@@ -81,7 +84,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     }
     const onLoadFromNetwork = () => {
       done(undefined, tile)
-      if (this._requiresHeaders) return
+      if (this._requiresHeaders || this._skipPersistentCache) return
       if (!this._cacheReadOnly && TAURI && !this._cacheSourceKey.startsWith('geovis_') && !this._cacheSourceKey.startsWith('earth_history_') && !this._cacheSourceKey.startsWith('earth_keyhole_')) {
         // 异步回写，不阻塞渲染
         this._writeBackTile(tile, coords).catch(() => {
@@ -90,7 +93,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
       }
     }
 
-    if (this._requiresHeaders || (TAURI && this._cacheSourceKey.startsWith('earth_keyhole_'))) {
+    if (this._requiresHeaders || this._skipPersistentCache || (TAURI && this._cacheSourceKey.startsWith('earth_keyhole_'))) {
       this._loadFromNetwork(tile, coords, onLoadFromNetwork, onError)
     } else if (TAURI) {
       // 先尝试缓存：直接走 gdcache 自定义协议（避免 base64 中转）

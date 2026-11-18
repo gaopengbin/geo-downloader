@@ -23,14 +23,18 @@ export function convertOvitalUrl(
     value = base + value
   }
   const original = value
+  const tileVariable = (_token: string, key: string) => {
+    const name = key.toLowerCase()
+    return name === 'serverpart' ? '{s}' : `{${name}}`
+  }
   value = value
     .replace(
-      /%7b%24(-?y|x|z|q|s)%7d/gi,
-      (_token, key: string) => `{${key.toLowerCase()}}`,
+      /%7b%24(-?y|x|z|q|s|serverpart)%7d/gi,
+      tileVariable,
     )
     .replace(
-      /\{\$(-?y|x|z|q|s)\}/gi,
-      (_token, key: string) => `{${key.toLowerCase()}}`,
+      /\{\$(-?y|x|z|q|s|serverpart)\}/gi,
+      tileVariable,
     )
   if (/\{\$|%7b%24/i.test(value)) throw new OvitalUrlError('variables')
   let parsed: URL

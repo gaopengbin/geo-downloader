@@ -32,6 +32,7 @@ import { getTileSourcesMerged } from '@/features/sources/sources-api'
 import { SharedOverlayPicker } from '@/features/sources/shared-overlay-picker'
 import { FoundationMapPanel } from '@/features/foundation/foundation-map-panel'
 import { installFoundationLayers } from '@/features/foundation/foundation-map'
+import { installOsmPreview } from '@/features/vector/osm-preview-map'
 import { enabledOverlayIds, EMPTY_OVERLAY_SELECTION } from '@/features/sources/layer-selection'
 import { validOverlayIds } from '@/features/sources/overlay-sources'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -766,6 +767,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
 
     mapRef.current = map
     const removeFoundationLayers = installFoundationLayers(map)
+    const removeOsmPreview = installOsmPreview(map)
     drawnRef.current = drawn
     onMapReady?.(map)
 
@@ -814,6 +816,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       measureActionsRef.current = null
       setMeasureControlContainer(null)
       removeFoundationLayers()
+      removeOsmPreview()
       map.remove()
       mapRef.current = null
       drawnRef.current = null

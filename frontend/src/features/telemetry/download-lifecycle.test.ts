@@ -2,6 +2,33 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DownloadLifecycleTracker, reasonBucket } from './download-lifecycle.ts'
 
+test('task identity survives failure, resume, observer restart and removal from active list', () => {
+  const taskId = crypto.randomUUID()
+  const tracker = new DownloadLifecycleTracker(() => crypto.randomUUID(), () => 0)
+  const start = tracker.observe([{ id: taskId, status: 'downloading' }])[0]
+  const failure = tracker.observe([{ id: taskId, status: 'failed' }])[0]
+  const restarted = new DownloadLifecycleTracker(() => crypto.randomUUID(), () => 1000, JSON.parse(JSON.stringify(tracker.snapshot())))
+  const resume = restarted.observe([{ id: taskId, status: 'downloading' }])[0]
+  const done = restarted.observe([{ id: taskId, status: 'completed' }])[0]
+  assert.equal(start.attempt_id, failure.attempt_id)
+  assert.notEqual(resume.attempt_id, failure.attempt_id)
+  assert.equal(done.attempt_id, resume.attempt_id)
+  assert.deepEqual([start, failure, resume, done].map(e => e.task_id), Array(4).fill(taskId))
+  restarted.observe([])
+  assert.equal(restarted.observe([{ id: taskId, status: 'downloading' }])[0].task_id, taskId)
+})
+
+test('recovery that finishes between polls updates the task outcome', () => {
+  const taskId = crypto.randomUUID()
+  const tracker = new DownloadLifecycleTracker(() => crypto.randomUUID(), () => 0)
+  tracker.observe([{ id: taskId, status: 'downloading' }])
+  tracker.observe([{ id: taskId, status: 'failed' }])
+  const result = tracker.observe([{ id: taskId, status: 'completed' }])
+  assert.equal(result[0].task_id, taskId)
+  assert.equal(result[0].state, 'completed')
+  assert.equal(tracker.observe([{ id: taskId, status: 'completed' }]).length, 0)
+})
+
 test('OSM execution diagnostics survive start, failure and lifecycle tracking without credentials',()=>{
  const execution={version:1,scheduler:null,overpass:{queue_wait_ms:10,fallback_count:0,wait_ms:0,attempts:[{endpoint:'de',outcome:'connect_error',http_status:null,elapsed_ms:100,backoff_ms:0}]}};
  let id=0;const tracker=new DownloadLifecycleTracker(()=>`attempt-${++id}`,()=>1000);

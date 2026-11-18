@@ -1,4 +1,18 @@
 const enUS = {
+  vectorData: {
+    admin: 'Administrative boundaries', local: 'Local vector files',
+    adminDescription: 'Download the selected administrative boundary as GeoJSON', localDescription: 'Overlay local GeoJSON, KML, Shapefile and other vector files', loading: 'Querying OSM services…',
+    localHint: 'Load local vector files as map overlays.', adminReady: 'An administrative area is selected. Its boundary is ready to download.', adminHint: 'Select an administrative area first.', osmReady: 'The selected area is ready for OSM preview or download.', osmHint: 'Preview can use the current view. Select an area to download.',
+    source: 'Vector source', mapLayers: 'Vector layers',
+    foundationDescription: 'Water / roads / railways / settlements, map overlays and GeoJSON export',
+    osmDescription: 'Feature preview / GeoJSON download / boundaries / local import',
+    osmPreview: 'OSM preview layers', featureCount: '{{count}} features',
+    preview: 'Add to map preview', cancel: 'Cancel loading', remove: 'Remove preview',
+    previewHint: 'Uses the selected area, or the current map view. Pan and zoom reuse the loaded data. Add another preview for a different area.',
+    chooseArea: 'Select an area or zoom in to the location to preview',
+    added: 'Added {{count}} OSM features to the map',
+    tileError: 'Preview image failed. Remove and add the preview again.', rendering: 'Rendering preview images…', ready: 'Preview loaded',
+  },
   foundation: {
     rasterLoading: 'Loading image tiles…',
     rasterLoaded: 'Loaded {{count}} image tiles',
@@ -122,7 +136,7 @@ const enUS = {
         description: 'Download MVT / PBF tiles from a custom source such as MapTiler or Mapbox.',
       },
       vector: {
-        label: 'Vector Data (OSM)',
+        label: 'Vector Data',
         description: 'Download roads, buildings, POIs, and other OSM features as GeoJSON.',
       },
     },

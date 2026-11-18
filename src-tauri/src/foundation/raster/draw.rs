@@ -510,6 +510,7 @@ pub(super) fn render(
                     .as_str()
                     .filter(|s| !s.trim().is_empty())
                     .or_else(|| props["RN"].as_str())
+                    .or_else(|| props["name"].as_str())
                     .unwrap_or("");
                 if name.is_empty() {
                     continue;

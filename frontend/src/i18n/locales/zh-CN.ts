@@ -1,4 +1,18 @@
 const zhCN = {
+  vectorData: {
+    admin: '行政边界', local: '本地矢量文件',
+    adminDescription: '按所选行政区下载 GeoJSON 边界', localDescription: 'GeoJSON / KML / Shapefile 等本地文件叠加', loading: '正在查询 OSM 服务…',
+    localHint: '加载本地矢量文件后叠加到地图。', adminReady: '已选择行政区，可以下载边界。', adminHint: '请先选择行政区划。', osmReady: '已选择区域，可以预览或下载 OSM。', osmHint: '预览可使用当前视口；下载请先绘制或选择区域。',
+    source: '矢量数据源', mapLayers: '矢量图层',
+    foundationDescription: '水系 / 公路 / 铁路 / 居民点，地图叠加与 GeoJSON 导出',
+    osmDescription: '要素预览 / GeoJSON 下载 / 边界 / 本地导入',
+    osmPreview: 'OSM 预览图层', featureCount: '{{count}} 个要素',
+    preview: '添加到地图预览', cancel: '取消加载', remove: '移除预览',
+    previewHint: '优先预览所选区域，未选区域时使用当前视口。平移缩放复用已加载数据，其他区域需重新添加。',
+    chooseArea: '请先选择区域，或放大地图到需要预览的位置',
+    added: '已添加 {{count}} 个 OSM 要素到地图',
+    tileError: '预览图像加载失败，可移除后重新添加', rendering: '正在生成预览图像…', ready: '预览已加载',
+  },
   foundation: {
     rasterLoading: '正在加载图像瓦片…',
     rasterLoaded: '已加载 {{count}} 片图像瓦片',
@@ -115,8 +129,8 @@ const zhCN = {
         description: 'MVT / PBF 矢量瓦片下载（需自定义图源，如 MapTiler / Mapbox）。',
       },
       vector: {
-        label: '矢量数据 (OSM)',
-        description: 'OSM Overpass 道路 / 建筑 / POI 等要素数据下载（GeoJSON）。',
+        label: '矢量数据 (Vector)',
+        description: 'OSM、基础地理参考要素、行政边界和本地矢量数据的预览与导出。',
       },
     },
     tabs: { download: '资源下载', history: '下载中心', settings: '设置' },

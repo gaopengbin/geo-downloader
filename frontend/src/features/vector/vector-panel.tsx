@@ -30,6 +30,12 @@ import {
 } from '@/lib/geo-import'
 import { createOsmDownloadTask } from './vector-api'
 import { downloadAdminBoundaryFile } from '@/features/admin/admin-api'
+import { useTranslation } from 'react-i18next'
+import { invokeCommand } from '@/lib/tauri'
+import { useFoundationStore } from '@/features/foundation/foundation-store'
+import { cancelFoundation } from '@/features/foundation/foundation-api'
+import { useOsmPreviewStore } from './osm-preview-store'
+import { OsmPreviewControls } from './osm-preview-controls'
 
 type FeatureType = 'roads' | 'buildings' | 'waterways' | 'landuse' | 'pois' | 'railways' | 'natural'
 
@@ -50,14 +56,20 @@ function countFeatures(geojson: GeoJsonObject): number {
   return 0
 }
 
-export function VectorPanel() {
+export function VectorPanel({ source = 'osm' }: { source?: 'osm' | 'admin' | 'local' }) {
+  const { t } = useTranslation()
+  const previewRequest = useRef<string | null>(null)
+  const viewport = useFoundationStore(s => s.viewport)
+  useEffect(() => () => {
+    if (previewRequest.current) void cancelFoundation(previewRequest.current)
+    previewRequest.current = null
+  }, [])
   const inTauri = isTauriRuntime()
   const qc = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [featureType, setFeatureType] = useState<FeatureType>('roads')
   const [osmTaskName, setOsmTaskName] = useState('')
-  const [statusMsg, setStatusMsg] = useState<string>('绘制区域或选择行政区划后可下载')
 
   const bounds = useSelectionStore((s) => s.bounds)
   const polygon = useSelectionStore((s) => s.polygon)
@@ -69,13 +81,9 @@ export function VectorPanel() {
 
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings, enabled: inTauri })
 
-  // 状态文本随选区/行政区变化更新
-  useEffect(() => {
-    if (bounds && currentAdminCode) setStatusMsg('可下载 OSM 和行政边界')
-    else if (bounds) setStatusMsg('可下载 OSM（选择行政区可下载边界）')
-    else if (currentAdminCode) setStatusMsg('可下载行政边界（绘制区域可下载 OSM）')
-    else setStatusMsg('绘制区域或选择行政区划后可下载')
-  }, [bounds, currentAdminCode])
+  const statusMsg = source === 'local' ? t('vectorData.localHint')
+    : source === 'admin' ? (currentAdminCode ? t('vectorData.adminReady') : t('vectorData.adminHint'))
+    : bounds ? t('vectorData.osmReady') : t('vectorData.osmHint')
 
   const proxy =
     settingsQuery.data?.proxy_enabled && settingsQuery.data.proxy_url
@@ -115,6 +123,30 @@ export function VectorPanel() {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg === '__user_cancelled__') return
       toast.error(`OSM 下载失败：${msg}`)
+    },
+  })
+
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      const area = bounds ?? viewport?.bounds
+      if (!area) throw Error(t('vectorData.chooseArea'))
+      const requestId = crypto.randomUUID()
+      previewRequest.current = requestId
+      try {
+        const result = await invokeCommand<{ id: string; feature_count: number }>('osm_preview_load', { requestId, bounds: area, featureType, proxy, polygon: bounds ? polygon?.[0] ?? null : null })
+        if (previewRequest.current !== requestId) {
+          await invokeCommand('osm_preview_remove', { id: result.id })
+          return
+        }
+        const label = FEATURE_OPTIONS.find(o => o.value === featureType)?.label ?? featureType
+        useOsmPreviewStore.getState().add({ id: result.id, name: `OSM ${label}`, featureCount: result.feature_count, color: '#e89c32' })
+        toast.success(t('vectorData.added', { count: result.feature_count }))
+      } finally {
+        if (previewRequest.current === requestId) previewRequest.current = null
+      }
+    },
+    onError: error => {
+      if (!String(error).includes('CANCELLED')) toast.error(String(error))
     },
   })
 
@@ -169,7 +201,8 @@ export function VectorPanel() {
   }
 
   return (
-    <PanelSection icon={Download} title="矢量数据" description="OSM / 边界 / 本地导入" dataTour="osm-panel">
+    <PanelSection icon={Download} title={source === 'osm' ? 'OpenStreetMap' : t(`vectorData.${source}`)} description={t(`vectorData.${source}Description`)} dataTour="osm-panel">
+      {source === 'osm' && <>
       <div className="space-y-1.5" data-tour="osm-feature-type">
         <Label className="text-xs uppercase tracking-wider text-muted-foreground">OSM 要素类型</Label>
         <Select value={featureType} onValueChange={(v) => setFeatureType(v as FeatureType)}>
@@ -186,6 +219,19 @@ export function VectorPanel() {
         </Select>
       </div>
 
+      <Button className="w-full" variant="outline" size="sm" disabled={!inTauri || (!bounds && !viewport) || previewMutation.isPending} onClick={() => previewMutation.mutate()}>
+        {previewMutation.isPending && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+        {t(previewMutation.isPending ? 'vectorData.loading' : 'vectorData.preview')}
+      </Button>
+      {previewMutation.isPending && <Button variant="ghost" size="sm" onClick={() => {
+        const id = previewRequest.current
+        previewRequest.current = null
+        if (id) void cancelFoundation(id)
+      }}>{t('vectorData.cancel')}</Button>}
+      <p className="text-xs text-muted-foreground">{t('vectorData.previewHint')}</p>
+      {previewMutation.isError && !String(previewMutation.error).includes('CANCELLED') && <p role="alert" className="break-words text-xs text-destructive">{String(previewMutation.error)}</p>}
+      <OsmPreviewControls />
+
       <div className="space-y-1.5 border-t border-border/60 pt-3" data-tour="vector-output-section">
         <Label className="text-xs">
           OSM 任务名称 <span className="text-muted-foreground">(可选)</span>
@@ -198,8 +244,9 @@ export function VectorPanel() {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-2" data-tour="osm-download-actions">
-        <Button
+      </>}
+      {source !== 'local' && <div className="flex gap-2" data-tour="osm-download-actions">
+        {source === 'osm' && <Button
           size="sm"
           variant="outline"
           disabled={!bounds || osmMutation.isPending}
@@ -211,8 +258,8 @@ export function VectorPanel() {
             <Download className="mr-1 h-3.5 w-3.5" />
           )}
           下载 OSM
-        </Button>
-        <Button
+        </Button>}
+        {source === 'admin' && <Button
           size="sm"
           variant="outline"
           disabled={!currentAdminCode || adminMutation.isPending}
@@ -224,9 +271,10 @@ export function VectorPanel() {
             <Download className="mr-1 h-3.5 w-3.5" />
           )}
           下载边界
-        </Button>
-      </div>
+        </Button>}
+      </div>}
 
+      {source === 'local' && <>
       <Separator />
 
       <div className="grid grid-cols-2 gap-2">
@@ -271,6 +319,7 @@ export function VectorPanel() {
           ))}
         </div>
       )}
+      </>}
 
       <p className="text-xs text-muted-foreground">{statusMsg}</p>
 

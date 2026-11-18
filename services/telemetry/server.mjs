@@ -5,6 +5,7 @@ import { openTelemetryDatabase, TIME_ZONE } from './database.mjs'
 import {validateDownloadDiagnostic}from './download-diagnostic.mjs'
 import {validateExecutionDiagnostic}from './execution-diagnostic.mjs'
 import { FEATURE_EVENT_NAMES, validateFeatureTelemetry } from './feature-events.mjs'
+import { DOWNLOAD_OUTCOMES_SQL } from './download-outcomes.mjs'
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const VERSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$/
@@ -112,7 +113,8 @@ function validateProperties(eventName, properties) {
   }
 
   if (eventName === 'download_task_state') {
-    const base = ['attempt_id','duration','reason','state']
+    const linked = Object.hasOwn(properties, 'task_id')
+    const base = ['attempt_id','duration','reason','state', ...(linked ? ['task_id'] : [])]
     const enums = {
       provider: ['tianditu','other','unknown'],
       phase: ['prepare','base_download','overlay_download','composite','export','unknown'],
@@ -124,13 +126,14 @@ function validateProperties(eventName, properties) {
     const hasDiagnostics = properties.diagnostic_version !== undefined
     const detailed=Object.hasOwn(properties,'diagnostic')
     const execution=Object.hasOwn(properties,'execution')
-    if (!exactKeys(properties, [...base,...(hasDiagnostics?extra:[]),...(detailed?['diagnostic']:[]),...(execution?['execution']:[])].sort()) || !UUID_PATTERN.test(properties.attempt_id) ||
+    if (!exactKeys(properties, [...base,...(hasDiagnostics?extra:[]),...(detailed?['diagnostic']:[]),...(execution?['execution']:[])].sort()) || !UUID_PATTERN.test(properties.attempt_id) || (linked && !UUID_PATTERN.test(properties.task_id)) ||
         !['started','completed','completed_with_gaps','failed','cancelled'].includes(properties.state) ||
         !['unknown','under_10s','10-60s','1-5m','5-30m','30m+'].includes(properties.duration) ||
         !['none','cancelled','network','auth','disk','permission','missing_tiles','unknown'].includes(properties.reason)) {
       throw invalid('download_task_state properties are invalid')
     }
     const safe = { attempt_id: properties.attempt_id, state: properties.state, duration: properties.duration, reason: properties.reason }
+    if (linked) safe.task_id = properties.task_id
     if(execution){try{safe.execution=validateExecutionDiagnostic(properties.execution)}catch{throw invalid('download execution diagnostic is invalid')}}
     if(detailed){try{safe.diagnostic=validateDownloadDiagnostic(properties.diagnostic)}catch{throw invalid('download acquisition diagnostic is invalid')}}
     if (hasDiagnostics) {
@@ -446,6 +449,7 @@ function createDatabase(config) {
           day_source: "date(occurred_at, '+8 hours'); legacy event_day values are not rewritten",
         },
         totals,
+        download_outcomes: queryRows(database, DOWNLOAD_OUTCOMES_SQL)[0],
         daily: queryRows(
           database,
           `WITH daily_activity AS (
@@ -680,7 +684,7 @@ function trendChart(rows){
 }
 const platformLabels={windows:'Windows',macos:'macOS',linux:'Linux',web:'Web',unknown:'未知'}
 const eventLabels={app_started:'应用启动',mode_changed:'功能模式切换',sidebar_tab_changed:'侧栏切换',graticule_changed:'经纬网设置',selection_changed:'下载范围选择',region_imported:'范围文件导入',bookmark_action:'范围书签操作',download_task_created:'创建下载任务',task_action:'下载任务操作',measurement_used:'地图量测',onboarding_event:'新手引导'}
-const modeLabels={imagery:'GeoTIFF',dem:'DEM',wayback:'Wayback',tiles3d:'3D',vector:'OSM',mvt:'MVT'}
+const modeLabels={imagery:'GeoTIFF',dem:'DEM',wayback:'Wayback',tiles3d:'3D',vector:'Vector',mvt:'MVT'}
 const sidebarLabels={download:'资源下载',history:'下载中心',settings:'设置'}
 const graticuleEnabledLabels={'1':'启用','0':'关闭'}
 const graticuleModeLabels={auto:'自动间隔',fixed:'固定间隔'}
@@ -723,6 +727,22 @@ function eventDistribution(rows,details){
  const max=Math.max(1,...rows.map(row=>number(row.count)))
  return '<div class="distribution">'+rows.map(function(row){const value=number(row.count),detail=eventDetail(row.event,details);return '<div class="event-group"><div class="bar-row"><div class="bar-meta"><span>'+esc(eventLabels[row.event]||row.event)+'</span><span class="bar-value">'+value+'</span></div><div class="bar-track"><div class="bar-fill" style="--bar:#d97706;width:'+Math.max(3,value/max*100).toFixed(1)+'%"></div></div></div>'+(detail?'<div class="event-details">'+detail+'</div>':'')+'</div>'}).join('')+'</div>'
 }
+function downloadOutcomes(outcomes){
+ const title='<div class="panel-head"><div><h2>下载任务结果</h2><div class="panel-note">按任务的最近一次上报统计，恢复成功计入完整完成</div></div></div>'
+ if(!outcomes)return '<section class="panel full">'+title+'<div class="empty">当前采集服务暂无任务结果数据</div></section>'
+ const metrics=[
+   ['已关联任务',outcomes.observed_tasks],
+   ['完整完成',outcomes.completed_tasks],
+   ['其中恢复成功',outcomes.recovered_tasks],
+   ['最近一次失败',outcomes.latest_failed_tasks],
+   ['缺块完成',outcomes.completed_with_gaps_tasks],
+   ['取消',outcomes.cancelled_tasks],
+   ['进行中或待上报',outcomes.in_progress_or_unreported_tasks],
+ ]
+ const rows=metrics.map(([label,value])=>({label,value:number(value)}))
+ return '<section class="panel full">'+title+table(rows,[['结果','label'],['任务数','value']])+
+   '<p class="panel-note">旧版有 '+number(outcomes.legacy_unlinked_attempts)+' 次未关联的下载尝试。</p></section>'
+}
 function activity(lastActive){
  const age=Date.now()-new Date(lastActive).getTime()
  if(age<=24*60*60*1000)return ['24 小时','active']
@@ -738,7 +758,8 @@ async function load(){
  const token=tokenInput.value.trim();localStorage.setItem('geod_telemetry_admin_token',token)
  const content=document.getElementById('content');content.innerHTML='<div class="skeleton"></div>'
  try{
-  const response=await fetch('stats',{headers:{authorization:'Bearer '+token}})
+  const statsPath=location.pathname.endsWith('/')?'stats':location.pathname+'/stats'
+  const response=await fetch(statsPath,{headers:{authorization:'Bearer '+token}})
   if(!response.ok)throw new Error(response.status===401?'管理口令不正确':'载入失败：HTTP '+response.status)
   const data=await response.json(),t=data.totals
   document.getElementById('updated').textContent='更新时间：'+formatTime(data.generated_at)+'（北京时间）'
@@ -748,6 +769,7 @@ async function load(){
    '<div class="side-stack"><section class="panel"><div class="panel-head"><h2>版本分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.versions,'version','installs','#2563eb')+'</section>'+
    '<section class="panel"><div class="panel-head"><h2>平台分布</h2><span class="panel-note">匿名设备</span></div>'+distribution(data.platforms,'platform','installs','#059669',platformLabels)+'</section>'+
    '<section class="panel"><div class="panel-head"><h2>功能使用</h2><span class="panel-note">事件次数</span></div>'+eventDistribution(data.events,data.event_details)+'</section></div>'+
+   downloadOutcomes(data.download_outcomes)+
    '<section class="panel full"><div class="panel-head"><div><h2>设备活跃明细</h2><div class="panel-note">首次出现按已收到事件的最早发生时间计算，不等同于系统安装时间；设备数不等于自然人数</div></div><span class="panel-note">最多显示 200 个匿名设备</span></div>'+deviceTable(data.devices)+'</section></div>'
  }catch(error){content.innerHTML='<div class="error">'+esc(error.message)+'</div>'}
 }

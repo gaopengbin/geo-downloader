@@ -88,7 +88,7 @@ const MODES: ModeMeta[] = [
   {
     value: 'vector',
     labelKey: 'app.modes.vector.label',
-    short: 'OSM',
+    short: 'Vector',
     descriptionKey: 'app.modes.vector.description',
     icon: Shapes,
   },

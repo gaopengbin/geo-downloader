@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { resolveTileUrl, tileCoordsToQuadKey } from './tile-url.ts'
+import { isCartoBasemapUrl, resolveTileUrl, tileCoordsToQuadKey } from './tile-url.ts'
+
+test('identifies CARTO templates regardless of source ID, subdomain or key', () => {
+  assert.equal(isCartoBasemapUrl('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'), true)
+  assert.equal(isCartoBasemapUrl('https://BASEMAPS.CARTOCDN.COM./light_all/{z}/{x}/{y}.png?key=test'), true)
+  assert.equal(isCartoBasemapUrl('https://basemaps.cartocdn.com.example.test/{z}/{x}/{y}.png'), false)
+  assert.equal(isCartoBasemapUrl('https://example.test/?source=basemaps.cartocdn.com'), false)
+})
 
 test('builds a Bing quadkey from XYZ coordinates', () => {
   assert.equal(tileCoordsToQuadKey({ x: 3, y: 5, z: 3 }), '213')

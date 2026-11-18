@@ -1,6 +1,8 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
+import test from 'node:test'
+import { resolveTileUrl } from '../map/tile-url.ts'
 import { convertOvitalUrl, OvitalUrlError } from './ovital-url.ts'
+
 test('Ovital tile variables become existing GeoD tokens without changing authentication bytes', () => {
   const url =
     'https://tiles.example.test/wmts?x={$x}&y={$y}&z={$z}&tk=a%2Bb%3D&signature=ABC%2fDEF'
@@ -44,4 +46,9 @@ test('unsupported time expressions and geographic tile grids are not silently mi
     convertOvitalUrl('https://x.test/{z}/{x}/{y}.png').changed,
     false,
   )
+})
+test('converts the official Ovital hostname variable and resolves a tile', () => {
+  const result = convertOvitalUrl('/{$z}/{$x}/{$y}.png', 'https://{$serverpart}.tile.openstreetmap.org')
+  assert.equal(result.url, 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+  assert.equal(resolveTileUrl(result.url, { z: 6, x: 50, y: 22 }, 'a'), 'https://a.tile.openstreetmap.org/6/50/22.png')
 })

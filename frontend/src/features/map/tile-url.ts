@@ -4,6 +4,16 @@ export type TileUrlCoords = {
   z: number
 }
 
+export function isCartoBasemapUrl(template: string): boolean {
+  if (!/^https?:\/\//i.test(template)) return false
+  try {
+    const host = new URL(template.replaceAll('{s}', 'a')).hostname.toLowerCase().replace(/\.+$/, '')
+    return host === 'basemaps.cartocdn.com' || host.endsWith('.basemaps.cartocdn.com')
+  } catch {
+    return false
+  }
+}
+
 export function tileCoordsToQuadKey({ x, y, z }: TileUrlCoords): string {
   let key = ''
   for (let level = z; level > 0; level -= 1) {

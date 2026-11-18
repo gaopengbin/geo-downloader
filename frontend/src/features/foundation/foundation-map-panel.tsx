@@ -6,6 +6,8 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { FoundationControls } from './foundation-controls'
 import { useFoundationStore } from './foundation-store'
 import { FOUNDATION_IDS } from './model'
+import { OsmPreviewControls } from '@/features/vector/osm-preview-controls'
+import { useOsmPreviewStore } from '@/features/vector/osm-preview-store'
 
 /** A pinned, non-modal map control. It never enters the download parameter form. */
 export function FoundationMapPanel() {
@@ -15,6 +17,7 @@ export function FoundationMapPanel() {
     (s) =>
       FOUNDATION_IDS.filter((key) => s.settings.layers[key].visible).length,
   )
+  const osmVisible = useOsmPreviewStore(s => s.layers.filter(l => l.visible).length)
   const [open, setOpen] = useState(() => visible > 0)
   const toggle = useRef<HTMLButtonElement>(null)
   return (
@@ -41,10 +44,10 @@ export function FoundationMapPanel() {
           onClick={() => setOpen((v) => !v)}
         >
           <Layers className="size-4 shrink-0" />
-          <span className="truncate">{t('foundation.panelTitle')}</span>
-          {visible > 0 && (
+          <span className="truncate">{t('vectorData.mapLayers')}</span>
+          {visible + osmVisible > 0 && (
             <span className="text-[11px] tabular-nums text-muted-foreground">
-              {visible}
+              {visible + osmVisible}
             </span>
           )}
           <ChevronDown
@@ -73,10 +76,11 @@ export function FoundationMapPanel() {
         <div
           id={id}
           role="region"
-          aria-label={t('foundation.panelTitle')}
+          aria-label={t('vectorData.mapLayers')}
           className="min-h-0 overflow-y-auto border-t px-3 pb-3 pt-2"
         >
           <FoundationControls embedded />
+          <OsmPreviewControls />
         </div>
       )}
     </section>

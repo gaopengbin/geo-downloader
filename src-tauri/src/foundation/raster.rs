@@ -438,5 +438,42 @@ pub async fn foundation_raster_tile(
     tile(Source::new(proxy.as_deref())?, config, z, x, y, &cancel).await
 }
 
+pub(super) async fn render_snapshot(
+    identity: &str,
+    mut config: RasterConfig,
+    features: Vec<Value>,
+    z: u8,
+    x: u32,
+    y: u32,
+    cancel: &CancellationToken,
+) -> Result<RasterTile, String> {
+    config.validate(z, x, y)?;
+    let key = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&(identity, &config, z, x, y)).unwrap())
+    );
+    if let Some(value) = remembered(&key) {
+        return Ok(response(&value, true));
+    }
+    let slots = SLOTS.get_or_init(|| Arc::new(Semaphore::new(2))).clone();
+    let permit = tokio::select! { _ = cancel.cancelled() => return Err(cancelled()), p = slots.acquire_owned() => p.map_err(|_| "FOUNDATION_BUSY")? };
+    let token = cancel.clone();
+    let work = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        draw::render(
+            &[(config.layers[0].clone(), features)],
+            &config,
+            z,
+            x,
+            y,
+            &token,
+        )
+    });
+    let value = tokio::select! { _ = cancel.cancelled() => return Err(cancelled()), v = work => v.map_err(|_| "FOUNDATION_RASTER: worker failed")?? };
+    let value = Arc::new(value);
+    remember(key, value.clone());
+    Ok(response(&value, false))
+}
+
 #[cfg(test)]
 mod tests;
