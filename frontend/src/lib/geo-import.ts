@@ -157,11 +157,7 @@ function visitGeometryCoordinates(geometry: unknown, visit: (position: unknown) 
   }
   const walk = (coordinates: unknown) => {
     if (!Array.isArray(coordinates)) return
-    if (
-      coordinates.length >= 2 &&
-      typeof coordinates[0] === 'number' &&
-      typeof coordinates[1] === 'number'
-    ) {
+    if (!coordinates.some(Array.isArray)) {
       visit(coordinates)
       return
     }
