@@ -552,7 +552,9 @@ const enUS = {
       title: 'TIFF compression',
       none: 'None (fastest export)',
       lzw: 'LZW (widely compatible)',
-      deflate: 'Deflate (smallest file)',
+      deflate: 'Deflate (lossless)',
+      jpegMask: 'Keeps coordinates and clipping boundaries. Partially transparent pixels become opaque.',
+      jpeg75: 'JPEG 75 (lossy, for imagery)',
     },
     crop: {
       tilesHint: 'When enabled, exports PNG with transparent pixels outside the boundary, keeping tile dimensions and z/x/y coordinates. Files may be larger than JPG.',

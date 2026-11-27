@@ -13,7 +13,7 @@ export interface ImageryParamsSnapshot {
   zoom: number
   zoomMax: number | null
   format: OutputFormat
-  compression: 'none' | 'lzw' | 'deflate'
+  compression: 'none' | 'lzw' | 'deflate' | 'jpeg75'
   buildPyramid: boolean
   generateSidecars: boolean
   cropToShape: boolean

@@ -25,6 +25,7 @@ import type { TileSource } from '@/types/api'
 import { getActiveTasks } from '@/features/tasks/tasks-api'
 import { useTaskUpdates } from '@/features/tasks/use-task-updates'
 import { getTaskMessage, getTaskStatusKey } from '@/features/tasks/task-copy'
+import { TiffCompressionSelect, type TiffCompression } from '@/features/download/output-controls'
 import { cancelEarthOperation } from './earth-history-api'
 import { createKeyholeSession, getKeyholeDates, getKeyholeStatus } from './keyhole-api'
 import type { KeyholeCatalog } from './keyhole-api'
@@ -43,6 +44,7 @@ export function EarthHistoryPage({ historySelector }: { historySelector?: ReactN
   const setDate = useWaybackStore((s) => s.setEarthDate)
   const [settledView, setSettledView] = useState(view)
   const [format, setFormat] = useState<'geotiff' | 'png'>('geotiff')
+  const [compression, setCompression] = useState<TiffCompression>('lzw')
   const [savePath, setSavePath] = useState('')
   const [downloadTaskId, setDownloadTaskId] = useState<string | null>(null)
   const progressRef = useRef<HTMLDivElement>(null)
@@ -99,7 +101,7 @@ export function EarthHistoryPage({ historySelector }: { historySelector?: ReactN
       return createDownloadTask({ source: preview.source.id, bounds, zoom, zoom_levels: [zoom], zoom_max: null,
         format, save_path: destination, concurrency: 2, proxy: proxyKey ?? null, tianditu_token: token,
         overlay_sources: overlays.length ? overlays : null,
-        crop_to_shape: true, polygon: buildSelectionCropPolygon(bounds, polygon, true), compression: 'lzw',
+        crop_to_shape: true, polygon: buildSelectionCropPolygon(bounds, polygon, true), compression: format === 'geotiff' ? compression : 'none',
         build_pyramid: false, generate_sidecars: format === 'geotiff' }, `Google Earth ${date} z${zoom}`, preview.source.name)
     },
     onSuccess: (result) => { setDownloadTaskId(result.task_id); toast.success(t('wayback.toast.taskCreated')); void client.invalidateQueries({ queryKey: ['active-tasks'] }) },
@@ -152,6 +154,7 @@ export function EarthHistoryPage({ historySelector }: { historySelector?: ReactN
         <SelectTrigger><SelectValue /></SelectTrigger>
         <SelectContent><SelectItem value="geotiff">GeoTIFF (.tif)</SelectItem><SelectItem value="png">PNG (.png)</SelectItem></SelectContent>
       </Select>
+      {format === 'geotiff' && <TiffCompressionSelect value={compression} onChange={setCompression} />}
       <div className="space-y-2"><Label className="text-xs">{t('download.output.overlays')}</Label>
         <SharedOverlayPicker mode="wayback" sources={overlaySources.data ?? {}} baseId={preview?.source.id}/>
       </div>

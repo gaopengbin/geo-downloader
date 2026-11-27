@@ -273,7 +273,7 @@ pub struct DownloadRequest {
     /// 并发数 (10-100, 默认30)
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
-    /// TIFF 压缩方式: "none", "lzw", "deflate"（默认 "lzw"）
+    /// TIFF 压缩方式: "none", "lzw", "deflate", "jpeg75"（默认 "lzw"）
     #[serde(default = "default_compression")]
     pub compression: String,
     /// 导出 GeoTIFF 后是否构建内置金字塔（Overview Layers）
@@ -436,6 +436,7 @@ fn compression_ratio(kind: SourceKind, compression: &str) -> f64 {
     let comp = compression.to_lowercase();
     match (kind, comp.as_str()) {
         (_, "none") => 1.00,
+        (_, "jpeg75") => 0.20,
         (SourceKind::Satellite, "lzw") => 0.95,
         (SourceKind::Satellite, "deflate") => 0.85,
         (SourceKind::Vector, "lzw") => 0.25,
@@ -721,7 +722,7 @@ fn estimate_download_with_settings(
             notes.push("已计入金字塔附加 ~33% 体积".to_string());
         }
         if has_crop {
-            notes.push("裁剪输出含 alpha 通道（RGBA）".to_string());
+            notes.push(if comp == "jpeg75" { "裁剪范围以无损有效区掩膜保存" } else { "裁剪输出含 alpha 通道（RGBA）" }.to_string());
         }
     }
     if format_class_export == ExportFormat::Tiles && has_crop {
@@ -773,7 +774,7 @@ fn estimate_download_with_settings(
 
 fn uses_measured_tiff_space(format: &str, compression: &str) -> bool {
     ExportFormat::from_str(format) == ExportFormat::GeoTiff
-        && matches!(compression, "lzw" | "deflate")
+        && matches!(compression, "lzw" | "deflate" | "jpeg75")
 }
 
 fn ensure_download_disk_space(
@@ -845,6 +846,10 @@ pub async fn create_download_task(
     let save_path = request.save_path.clone()
         .ok_or_else(|| "未指定保存路径".to_string())?;
     
+    if request.compression == "jpeg75" && crate::dem::is_dem_source(&request.source) {
+        return Err("高程 GeoTIFF 需要无损压缩，请选择 LZW 或 Deflate".into());
+    }
+
     // 获取图源配置（包含覆盖 + 自定义图源）
     let sources = get_tile_sources(request.tianditu_token.clone());
     let source = sources.get(&request.source).cloned().or_else(|| {
@@ -1114,8 +1119,8 @@ async fn execute_zoom_level(
     }
     
     // 获取瓦片列表
-    let tiles = tile::get_tiles_in_bounds(&request.bounds, current_zoom);
-    let actual_count = tiles.len() as u32;
+    let mut tiles = tile::tiles_in_bounds(&request.bounds, current_zoom).peekable();
+    let actual_count = tile::estimate_tile_count(&request.bounds, current_zoom);
     let (x_min, y_min, x_max, y_max, cols, rows) = tile::get_tile_matrix_size(&request.bounds, current_zoom);
     task_log(app, tm, task_id, "INFO", &format!(
         "瓦片数量: {}，矩阵: {}列×{}行，范围: x[{}-{}] y[{}-{}]",
@@ -1150,7 +1155,7 @@ async fn execute_zoom_level(
     }
     let main_download_end = crate::overlay::main_download_end(overlay_list.len());
 
-    if let Some(sample)=tiles.first(){
+    if let Some(sample)=tiles.peek(){
         let mut layers=vec![source.clone()];layers.extend(overlay_list.iter().cloned());
         task_log(app,tm,task_id,"INFO","下载前核验底图与注记访问；成功瓦片将直接复用。");
         crate::downloader::preflight_layer_access(&layers,sample.clone(),&temp_dir,request.proxy.as_deref(),tianditu_tokens,Some(cancel_token),Some(pause_control)).await?;
@@ -1180,7 +1185,7 @@ async fn execute_zoom_level(
     
     let prog_off_dl = prog_off;
     let prog_span_dl = prog_span;
-    let mut tile_files = downloader.download_tiles(tiles, concurrency, &temp_dir, Some(cancel_token), Some(pause_control), move |progress| {
+    let mut tile_files = downloader.download_iter(tiles, actual_count, concurrency, &temp_dir, Some(cancel_token), Some(pause_control), move |progress| {
         no_data_tracker_c.store(progress.no_data, std::sync::atomic::Ordering::Relaxed);
         let p = progress.percent();
         // Reserve progress for annotation downloads instead of declaring 85% at main completion.
@@ -1316,11 +1321,6 @@ async fn execute_zoom_level(
             message: Some("下载叠加图层...".to_string()),
         });
 
-        // 重建 tile coord 列表（仅成功的主瓦片）
-        let main_tiles: Vec<crate::tile::TileCoord> = tile_files.keys()
-            .map(|&(x, y)| crate::tile::TileCoord { x, y, z: current_zoom })
-            .collect();
-
         // 收集每层 overlay 的 tile_files
         let mut per_layer_files: Vec<HashMap<(u32, u32), crate::merger::TileSource>> = Vec::with_capacity(overlay_list.len());
         for (idx, ov_src) in overlay_list.iter().enumerate() {
@@ -1343,11 +1343,12 @@ async fn execute_zoom_level(
                 .with_tianditu_tokens(tianditu_tokens.clone());
             task_log(app, tm, task_id, "INFO", &format!(
                 "开始注记 {}/{} [{}]：{} 张瓦片（检查已有文件 / 读取缓存 / 网络下载）",
-                idx + 1, overlay_list.len(), ov_src.name, main_tiles.len()
+                idx + 1, overlay_list.len(), ov_src.name, tile_files.len()
             ));
             let mut reporter = crate::overlay::LayerDownloadReporter::new(idx, overlay_list.len(), &ov_src.name);
-            let ov_files = ov_dl.download_tiles(
-                main_tiles.clone(),
+            let coords = tile_files.keys().copied().map(|(x,y)| crate::tile::TileCoord {x,y,z:current_zoom});
+            let ov_files = ov_dl.download_iter(
+                coords, tile_files.len() as u32,
                 request.concurrency,
                 &ov_temp_dir,
                 Some(cancel_token),
@@ -1373,7 +1374,7 @@ async fn execute_zoom_level(
             })?;
             task_log(app, tm, task_id, "INFO", &format!(
                 "叠加图层 [{}] 完成：{}/{}",
-                ov_src.name, ov_files.len(), main_tiles.len()
+                ov_src.name, ov_files.len(), tile_files.len()
             ));
             per_layer_files.push(ov_files);
         }
@@ -2506,24 +2507,35 @@ pub fn toggle_pause_task(
 ///
 /// 失败和缺块完成的任务可能仍保留续传数据。确认终态后再清理。
 #[tauri::command]
-pub fn remove_task(task_manager: State<'_, Arc<TaskManager>>, task_id: String) -> Result<(), String> {
-    let _operation = task_manager.begin_task_operation(&task_id)?;
-    if !task_manager.remove_finished(&task_id) {
-        return Err("任务已不存在或仍在进行中，请刷新任务列表".into());
-    }
-    crate::task::cleanup_temp_dir(&task_id);
-    crate::task::remove_task_file(&task_id);
-    Ok(())
+pub async fn remove_task(
+    task_manager: State<'_, Arc<TaskManager>>,
+    task_id: String,
+) -> Result<(), String> {
+    let task_manager = Arc::clone(&task_manager);
+    tokio::task::spawn_blocking(move || {
+        let _operation = task_manager.begin_task_operation(&task_id)?;
+        if !task_manager.remove_finished(&task_id) {
+            return Err("任务已不存在或仍在进行中，请刷新任务列表".into());
+        }
+        crate::task::cleanup_temp_dir(&task_id);
+        crate::task::remove_task_file(&task_id);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("处理任务文件失败: {e}"))?
 }
 
 // ============ 断点续传相关命令 ============
 
 /// 获取可恢复的任务列表（排除仍在本次进程任务管理器中的任务）
 #[tauri::command]
-pub fn get_resumable_tasks(task_manager: State<'_, Arc<TaskManager>>) -> Vec<PersistedTask> {
-    // task_file 在下载期间始终存在，用于崩溃恢复。暂停只是当前进程内的运行状态，
-    // 不能同时把它暴露成“中断任务”，否则前端恢复会以同一 ID 再启动一条下载流程。
-    task_manager.resumable_tasks()
+pub async fn get_resumable_tasks(
+    task_manager: State<'_, Arc<TaskManager>>,
+) -> Result<Vec<crate::task::ResumableSummary>, String> {
+    let manager = Arc::clone(&task_manager);
+    tokio::task::spawn_blocking(move || manager.resumable_tasks())
+        .await
+        .map_err(|e| format!("读取中断任务失败: {e}"))
 }
 
 fn refresh_task_tianditu_token(request: &mut DownloadRequest, settings: &AppSettings) {
@@ -3144,20 +3156,28 @@ pub async fn export_partial_task(
 /// `delete_cache=true`：连同 .partial 缓存目录一起删除（彻底清理）
 /// `delete_cache=false`：仅移除任务条目，保留缓存供下次复用
 #[tauri::command]
-pub fn discard_resumable_task(
+pub async fn discard_resumable_task(
     task_manager: State<'_, Arc<TaskManager>>,
     task_id: String,
     delete_cache: Option<bool>,
 ) -> Result<(), String> {
-    let _operation = task_manager.begin_task_operation(&task_id)?;
-    if !matches!(task_manager.task_status(&task_id), None | Some(TaskStatus::Cancelled)) {
-        return Err("任务状态已变化，请刷新任务列表".into());
-    }
-    if delete_cache.unwrap_or(true) {
-        crate::task::cleanup_temp_dir(&task_id);
-    }
-    crate::task::remove_task_file(&task_id);
-    Ok(())
+    let task_manager = Arc::clone(&task_manager);
+    tokio::task::spawn_blocking(move || {
+        let _operation = task_manager.begin_task_operation(&task_id)?;
+        if !matches!(
+            task_manager.task_status(&task_id),
+            None | Some(TaskStatus::Cancelled)
+        ) {
+            return Err("任务状态已变化，请刷新任务列表".into());
+        }
+        if delete_cache.unwrap_or(true) {
+            crate::task::cleanup_temp_dir(&task_id);
+        }
+        crate::task::remove_task_file(&task_id);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("处理任务文件失败: {e}"))?
 }
 
 /// 获取省份列表

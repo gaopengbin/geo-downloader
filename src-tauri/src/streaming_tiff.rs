@@ -5,6 +5,9 @@
 //! Issue #27: 串行遍历 strip + 每 strip 内 rayon 并行解码/压缩，
 //!          writer 线程异步落盘实现 IO/CPU 重叠。
 
+#[path = "jpeg_tiff.rs"]
+pub(crate) mod jpeg_tiff;
+
 use crate::config::TILE_SIZE;
 use crate::merger::{self, PolygonPoint, TileSource};
 use crate::settings::SettingsManager;
@@ -144,6 +147,54 @@ fn scanline_intersection(xi: i32, yi: i32, xj: i32, yj: i32, y: i32) -> i32 {
     (i128::from(xi) + i128::from(dx) * i128::from(i64::from(y) - i64::from(yi)) / i128::from(dy)) as i32
 }
 
+fn projected_rings(
+    bounds: &TileBounds,
+    width: u32,
+    height: u32,
+    polygons: Option<&[Vec<PolygonPoint>]>,
+) -> Vec<Vec<(i32, i32)>> {
+    if let Some(polys) = polygons {
+        let lng_span = bounds.east - bounds.west;
+        let merc_north = merger::mercator_y(bounds.north);
+        let merc_south = merger::mercator_y(bounds.south);
+        let merc_span = merc_north - merc_south;
+        polys
+            .iter()
+            .map(|ring| {
+                ring.iter()
+                    .map(|p| {
+                        let x = ((p.lng - bounds.west) / lng_span * width as f64) as i32;
+                        let y = ((merc_north - merger::mercator_y(p.lat)) / merc_span
+                            * height as f64) as i32;
+                        (x, y)
+                    })
+                    .collect()
+            })
+            .filter(|ring: &Vec<(i32, i32)>| ring.len() >= 3)
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn scanline_spans(rings: &[Vec<(i32, i32)>], y: i32) -> Vec<(i32, i32)> {
+    let mut intersections = Vec::new();
+    for ring in rings {
+        let mut previous = ring[ring.len() - 1];
+        for &(x, row) in ring {
+            if (row > y) != (previous.1 > y) {
+                intersections.push(scanline_intersection(x, row, previous.0, previous.1, y));
+            }
+            previous = (x, row);
+        }
+    }
+    intersections.sort_unstable();
+    intersections
+        .chunks_exact(2)
+        .map(|pair| (pair[0], pair[1]))
+        .collect()
+}
+
 /// LZW 压缩一个 strip（TIFF 规范：MSB 位序，最小码长 8，early code size switch）
 fn lzw_compress(data: &[u8]) -> Result<Vec<u8>, String> {
     let mut encoder = weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
@@ -212,26 +263,11 @@ pub fn merge_and_export_streaming_with_budget(
     let channels: u32 = if has_mask { 4 } else { 3 };
 
     // 预计算多边形像素坐标环（复用 merger 的 mercator_y）
-    let pixel_rings: Vec<Vec<(i32, i32)>> = if let Some(polys) = polygons {
-        let lng_span = bounds.east - bounds.west;
-        let merc_north = merger::mercator_y(bounds.north);
-        let merc_south = merger::mercator_y(bounds.south);
-        let merc_span = merc_north - merc_south;
-        polys.iter()
-            .map(|ring| {
-                ring.iter()
-                    .map(|p| {
-                        let x = ((p.lng - bounds.west) / lng_span * width as f64) as i32;
-                        let y = ((merc_north - merger::mercator_y(p.lat)) / merc_span * height as f64) as i32;
-                        (x, y)
-                    })
-                    .collect()
-            })
-            .filter(|ring: &Vec<(i32, i32)>| ring.len() >= 3)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let pixel_rings = projected_rings(bounds, width, height, polygons);
+    if compression == "jpeg75" {
+        return jpeg_tiff::export(tile_files, x_min, y_min, width, height, bounds,
+            save_path, &pixel_rings, has_mask, options);
+    }
 
     // 用 u64 计算字节大小，防止 u32 溢出
     let strip_byte_size_u64 = width as u64 * rows_per_strip as u64 * channels as u64;
@@ -315,28 +351,12 @@ pub fn merge_and_export_streaming_with_budget(
             let strip_y_start = (tile_y - y_min) * TILE_SIZE;
             for local_row in 0..TILE_SIZE {
                 let global_y = (strip_y_start + local_row) as i32;
-                let mut intersections: Vec<i32> = Vec::new();
-                for ring in &pixel_rings {
-                    let n = ring.len();
-                    let mut j = n - 1;
-                    for i in 0..n {
-                        let (xi, yi) = ring[i];
-                        let (xj, yj) = ring[j];
-                        if (yi > global_y) != (yj > global_y) {
-                            let x_int = scanline_intersection(xi, yi, xj, yj, global_y);
-                            intersections.push(x_int);
-                        }
-                        j = i;
-                    }
-                }
-                intersections.sort_unstable();
-
                 let row_start = local_row as usize * width_u * channels_u;
                 let line = &mut strip[row_start..row_start + width_u * channels_u];
                 let mut cursor = 0;
-                for span in intersections.chunks_exact(2) {
-                    let left = (span[0].max(0) as usize).min(width_u) * channels_u;
-                    let right = (span[1].max(0) as usize).min(width_u) * channels_u;
+                for (left, right) in scanline_spans(&pixel_rings, global_y) {
+                    let left = (left.max(0) as usize).min(width_u) * channels_u;
+                    let right = (right.max(0) as usize).min(width_u) * channels_u;
                     line[cursor..left].fill(0);
                     cursor = right;
                 }
@@ -562,6 +582,7 @@ pub fn merge_and_export_dem_streaming_with_budget(
     polygons: Option<&[Vec<PolygonPoint>]>,
     options: impl Into<StripWriteOptions>,
 ) -> Result<u64, String> {
+    if compression == "jpeg75" { return Err("浮点高程不能使用 JPEG 压缩".into()); }
     let options = options.into();
     let (_cols, rows, width, height) = grid_dims(x_min, y_min, x_max, y_max)?;
     let rows_per_strip = TILE_SIZE;
@@ -931,6 +952,61 @@ mod tests {
             }
         }
         map
+    }
+
+    #[test]
+    fn jpeg75_uses_tiled_jpeg_and_preserves_output_if_write_fails() {
+        use tiff::{decoder::Decoder, tags::Tag};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("imagery.tif");
+        let tiles = solid_tile_files(0, 0, 2, 0, 35, 95, 170);
+        let bounds = dummy_bounds();
+        let write = |options| {
+            merge_and_export_streaming_with_budget(
+                &tiles,
+                0,
+                0,
+                2,
+                0,
+                &bounds,
+                &path,
+                "jpeg75",
+                Some(&[]),
+                options,
+            )
+        };
+        write(StripWriteOptions::from(1 << 20)).unwrap();
+        let inspect =
+            || Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap())).unwrap();
+        let mut tiff = inspect();
+        assert_eq!(tiff.get_tag_u32(Tag::Compression).unwrap(), 7);
+        assert_eq!(tiff.get_tag_u32(Tag::TileWidth).unwrap(), 512);
+        assert_eq!(tiff.dimensions().unwrap(), (768, 256));
+        drop(tiff);
+        let pyramid = || crate::pyramid::build_pyramid(&path, Default::default()).unwrap();
+        assert_eq!(pyramid().levels_generated, 1);
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(pyramid().size_added_bytes, 0);
+        let options = StripWriteOptions {
+            check_space: |_, _| Err("磁盘空间不足".into()),
+            ..StripWriteOptions::from(1 << 20)
+        };
+        assert!(write(options).unwrap_err().contains("磁盘空间不足"));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(merge_and_export_dem_streaming_with_budget(
+            &tiles,
+            0,
+            0,
+            2,
+            0,
+            &bounds,
+            &path,
+            "jpeg75",
+            None,
+            1 << 20
+        )
+        .is_err());
     }
 
     /// 回归：多边形裁剪必须真正清除环外像素，而不是仅把 alpha 置 0 却保留 RGB。

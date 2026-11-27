@@ -122,7 +122,7 @@ const createDownloadSchema = (t: TFunction) => z.object({
   source: z.string().min(1, t('download.validation.source')),
   zoom_levels: z.array(z.number().int().min(1).max(22)).min(1, t('download.validation.zoom')),
   format: z.enum(['geotiff', 'png', 'jpeg', 'tiles', 'mbtiles', 'gpkg', 'pbf']),
-  compression: z.enum(['none', 'lzw', 'deflate']),
+  compression: z.enum(['none', 'lzw', 'deflate', 'jpeg75']),
   build_pyramid: z.boolean(),
   generate_sidecars: z.boolean(),
   overlay_sources: z.array(z.string()),
@@ -360,7 +360,7 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
       ...DEFAULT_VALUES,
       source: initialSource,
       format: fmt,
-      compression: persisted.compression,
+      compression: isDemMode && persisted.compression === 'jpeg75' ? 'lzw' : persisted.compression,
       build_pyramid: persisted.buildPyramid,
       generate_sidecars: persisted.generateSidecars,
       concurrency:
@@ -450,7 +450,7 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
     if (!hasRememberedZooms && typeof s.default_zoom === 'number') {
       setValue('zoom_levels', [s.default_zoom])
     }
-    setValue('compression', persistedParams.compression)
+    setValue('compression', isDemMode && persistedParams.compression === 'jpeg75' ? 'lzw' : persistedParams.compression)
     setValue('build_pyramid', persistedParams.buildPyramid)
     setValue('generate_sidecars', persistedParams.generateSidecars)
     setCropToShape(persistedParams.cropToShape)
@@ -756,7 +756,7 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
       zoom,
       zoomMax: zoomMax > zoom ? zoomMax : null,
       format: format as OutputFormat,
-      compression: compression as 'none' | 'lzw' | 'deflate',
+      compression: compression as 'none' | 'lzw' | 'deflate' | 'jpeg75',
       buildPyramid: !!buildPyramid,
       generateSidecars: !!generateSidecars,
       cropToShape: effectiveCropToShape,
@@ -1113,6 +1113,7 @@ export function ImageryPage({ mode = 'imagery', historyProvider, historySelector
               name="compression"
               render={({ field }) => (
                 <TiffCompressionSelect
+                  losslessOnly={isDemMode}
                   value={field.value as DownloadFormValues['compression']}
                   onChange={(v) => field.onChange(v)}
                 />

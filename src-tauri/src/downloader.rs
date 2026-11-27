@@ -632,8 +632,118 @@ impl TileDownloader {
         temp_dir: &Path,
         cancel_token: Option<&CancellationToken>,
         pause_control: Option<&PauseControl>,
-        mut progress_callback: F,
+        progress_callback: F,
     ) -> Result<HashMap<(u32, u32), MergerTileSource>, String>
+    where
+        F: FnMut(DownloadProgress),
+    {
+        let total = u32::try_from(tiles.len()).map_err(|_| "瓦片总数超过任务进度表示范围")?;
+        self.download_iter(tiles.into_iter(),total,concurrency,temp_dir,cancel_token,pause_control,progress_callback).await
+    }
+
+    pub async fn download_iter<F>(
+        &self,
+        mut tiles: impl Iterator<Item = TileCoord> + Send,
+        total: u32,
+        concurrency: usize,
+        temp_dir: &Path,
+        cancel_token: Option<&CancellationToken>,
+        pause_control: Option<&PauseControl>,
+        mut progress: F,
+    ) -> Result<HashMap<(u32, u32), MergerTileSource>, String>
+    where
+        F: FnMut(DownloadProgress),
+    {
+        // Bound coordinates, cache probes and pending network registrations for a country-sized grid.
+        const WINDOW: usize = 8192;
+        let mut files = HashMap::new();
+        let (mut completed, mut failed, mut no_data) = (0, 0, 0);
+        let mut first_error = None;
+        let mut processed = 0u64;
+        loop {
+            if cancel_token.is_some_and(|c| c.is_cancelled()) {
+                return Err("任务已取消".into());
+            }
+            let batch: Vec<_> = tiles.by_ref().take(WINDOW).collect();
+            if batch.is_empty() {
+                break;
+            }
+            processed += batch.len() as u64;
+            let last = processed == u64::from(total);
+            let mut end = (0, 0, 0);
+            let (found, error) = self
+                .download_batch(
+                    batch,
+                    concurrency,
+                    temp_dir,
+                    cancel_token,
+                    pause_control,
+                    |mut p| {
+                        end = (p.completed, p.failed, p.no_data);
+                        let terminal = p.status.starts_with("completed");
+                        p.total = total;
+                        p.completed += completed;
+                        p.failed += failed;
+                        p.no_data += no_data;
+                        if terminal && !last {
+                            p.status = "downloading".into();
+                        }
+                        if terminal && last {
+                            p.status = if p.failed > 0 {
+                                "completed_with_errors"
+                            } else if p.no_data > 0 {
+                                "completed_with_no_data"
+                            } else {
+                                "completed"
+                            }
+                            .into();
+                        }
+                        progress(p);
+                    },
+                )
+                .await?;
+            if first_error.is_none() {
+                first_error = error;
+            }
+            if files.is_empty() {
+                files = found;
+            } else {
+                files.try_reserve(found.len())
+                    .map_err(|_| "内存不足，已下载瓦片保留在工作目录中".to_string())?;
+                files.extend(found);
+            }
+            completed += end.0;
+            failed += end.1;
+            no_data += end.2;
+        }
+        if files.is_empty() {
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+            if failed > 0 {
+                return Err(format!(
+                    "全部 {failed} 张瓦片下载失败，请检查图源配置和网络连接"
+                ));
+            }
+            if no_data > 0 {
+                return Err(format!(
+                    "该区域在此缩放级别无可用数据（全部 {no_data} 张瓦片均返回 404）"
+                ));
+            }
+            return Err("没有成功下载任何瓦片".into());
+        }
+        Ok(files)
+    }
+
+    async fn download_batch<F>(
+        &self,
+        tiles: Vec<TileCoord>,
+        concurrency: usize,
+        temp_dir: &Path,
+        cancel_token: Option<&CancellationToken>,
+        pause_control: Option<&PauseControl>,
+        mut progress_callback: F,
+    ) -> Result<(HashMap<(u32, u32), MergerTileSource>, Option<String>), String>
     where
         F: FnMut(DownloadProgress),
     {
@@ -661,7 +771,10 @@ impl TileDownloader {
         });
         let mut scanned = 0usize;
         let mut scan_report = std::time::Instant::now();
+        let mut validated = [false; 256];
         for tile in &tiles {
+            if cancellation.is_cancelled() { return Err("任务已取消".into()); }
+            if std::mem::replace(&mut validated[usize::from(tile.z)], true) { continue; }
             if (self.source.url.starts_with("earth-history://") && tile.z>self.source.max_zoom) || (self.source.url.starts_with("keyhole-history://") && tile.z!=self.source.max_zoom) {return Err("EARTH_PLAN: tile exceeds frozen output detail".into());}
             crate::historical_sources::validate_zoom(&self.source.url,tile.z)?;
         }
@@ -1168,20 +1281,7 @@ impl TileDownloader {
             total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status: status.to_string(),
         });
 
-        if tile_files.is_empty() && failed > 0 {
-            return Err(first_failure_error.unwrap_or_else(|| {
-                format!("全部 {} 张瓦片下载失败，请检查图源配置和网络连接", failed)
-            }));
-        }
-
-        if tile_files.is_empty() {
-            if no_data_count > 0 {
-                return Err(format!("该区域在此缩放级别无可用数据（全部 {} 张瓦片均返回 404）", no_data_count));
-            }
-            return Err("没有成功下载任何瓦片".to_string());
-        }
-
-        Ok(tile_files)
+        Ok((tile_files, first_failure_error))
     }
 }
 
@@ -1314,6 +1414,75 @@ mod user_scheduling_acceptance;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn country_size_resume_can_cancel_in_the_first_window() {
+        use std::sync::atomic::AtomicUsize;
+        let dir = tempfile::tempdir().unwrap();
+        let dl =
+            TileDownloader::new(custom_source("http://127.0.0.1:1/{z}/{x}/{y}"), None).unwrap();
+        for total in [30_765_609u32, 7_694_176] {
+            let seen = AtomicUsize::new(0);
+            let coords = (0..total).map(|n| {
+                seen.fetch_add(1, Ordering::Relaxed);
+                TileCoord {
+                    x: n % 32768,
+                    y: n / 32768,
+                    z: 15,
+                }
+            });
+            let cancel = CancellationToken::new();
+            let started = std::time::Instant::now();
+            let result = dl
+                .download_iter(coords, total, 30, dir.path(), Some(&cancel), None, |p| {
+                    assert_eq!(p.total, total);
+                    cancel.cancel();
+                })
+                .await;
+            assert!(matches!(result,Err(e) if e.contains("取消")));
+            assert_eq!(seen.load(Ordering::Relaxed), 8192);
+            eprintln!(
+                "tiles={total} buffered=8192 cancel_ms={}",
+                started.elapsed().as_millis()
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "checks more than one full window using 8193 local tile files"]
+    async fn recovered_grid_reports_one_completion_across_windows() {
+        let _guard = tcache::CACHE_TEST_LOCK.lock().unwrap();
+        let old_cache = tcache::get_config();
+        struct Restore(tcache::CacheConfig);
+        impl Drop for Restore {
+            fn drop(&mut self) { tcache::set_config(self.0.clone()); }
+        }
+        let _restore = Restore(old_cache);
+        let dir = tempfile::tempdir().unwrap();
+        tcache::set_config(tcache::CacheConfig {
+            enabled: false, root_dir: dir.path().join("cache"), max_total_bytes: 0
+        });
+        let test_image = dir.path().join("test.png");
+        image::RgbImage::new(1, 1).save(&test_image).unwrap();
+        let png = std::fs::read(test_image).unwrap();
+        for x in 0..8193 {
+            let column = dir.path().join((x / 128).to_string());
+            std::fs::create_dir_all(&column).unwrap();
+            std::fs::write(column.join(format!("{}.png", x % 128)), &png).unwrap();
+        }
+        let dl = TileDownloader::new(custom_source("http://127.0.0.1:1/{z}/{x}/{y}"), None).unwrap();
+        let coords = (0..8193).map(|i| TileCoord {x:i/128, y:i%128, z:15});
+        let mut terminal = Vec::new();
+        let mut previous = 0;
+        let files = dl.download_iter(coords, 8193, 2, dir.path(), None, None, |p| {
+            assert_eq!(p.total,8193);
+            assert!(p.completed>=previous);
+            previous=p.completed;
+            if p.status.starts_with("completed") {terminal.push((p.status, p.completed));}
+        }).await.unwrap();
+        assert_eq!(files.len(),8193);
+        assert_eq!(terminal,vec![("completed".to_string(),8193)]);
+    }
+
     #[test]
     fn isolated_rate_limited_tiles_require_recent_usable_progress() {
         let rate = "TILE_RATE_LIMITED: HTTP 429";

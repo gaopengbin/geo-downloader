@@ -34,6 +34,9 @@ pub struct PyramidStats {
 // ===== IFD 解析 =====
 
 struct IfdInfo {
+    tile_width: u32,
+    tile_height: u32,
+    subfile_type: u64,
     width: u32,
     height: u32,
     channels: u32,
@@ -130,6 +133,7 @@ fn parse_bigtiff_ifd(r: &mut (impl Read + Seek), ifd_offset: u64) -> Result<IfdI
 
     let num_entries = read_u64(r)?;
 
+    let (mut tile_width, mut tile_height, mut subfile_type) = (0, 0, 0);
     let mut width: u32 = 0;
     let mut height: u32 = 0;
     let mut channels: u32 = 3;
@@ -149,17 +153,20 @@ fn parse_bigtiff_ifd(r: &mut (impl Read + Seek), ifd_offset: u64) -> Result<IfdI
         let value = read_u64(r)?;
 
         match tag {
+            254 => subfile_type = value,
+            322 => tile_width = value as u32,
+            323 => tile_height = value as u32,
             256 => width = value as u32,                // ImageWidth
             257 => height = value as u32,               // ImageLength
             259 => compression_tag = value as u16,      // Compression
             277 => channels = value as u32,             // SamplesPerPixel
             278 => rows_per_strip = value as u32,       // RowsPerStrip
-            273 => {                                     // StripOffsets
+            273 | 324 => {                                     // StripOffsets
                 strip_offsets_type = typ;
                 strip_offsets_count = count;
                 strip_offsets_value = value;
             }
-            279 => {                                     // StripByteCounts
+            279 | 325 => {                                     // StripByteCounts
                 strip_counts_type = typ;
                 strip_counts_count = count;
                 strip_counts_value = value;
@@ -175,11 +182,12 @@ fn parse_bigtiff_ifd(r: &mut (impl Read + Seek), ifd_offset: u64) -> Result<IfdI
     let strip_offsets = read_ifd_value(r, strip_offsets_type, strip_offsets_count, strip_offsets_value)?;
     let strip_byte_counts = read_ifd_value(r, strip_counts_type, strip_counts_count, strip_counts_value)?;
 
-    if width == 0 || height == 0 || rows_per_strip == 0 {
+    if width == 0 || height == 0 || (rows_per_strip == 0 && (tile_width == 0 || tile_height == 0)) {
         return Err("IFD 缺少必要 tag (width/height/rows_per_strip)".to_string());
     }
 
     Ok(IfdInfo {
+        tile_width, tile_height, subfile_type,
         width,
         height,
         channels,
@@ -356,10 +364,77 @@ fn build_with_space_check(
 
     let file_size_before = file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
 
-    let root_link = ifd0.next_ifd_field_pos;
-    file.seek(SeekFrom::Start(root_link)).map_err(|e| e.to_string())?;
-    let original_link = read_u64(&mut file)?;
-    let result = append_levels(&mut file, path, &opts, ifd0, compression_str, level_count, check_space);
+    let mut root_link = ifd0.next_ifd_field_pos;
+    file.seek(SeekFrom::Start(root_link))
+        .map_err(|e| e.to_string())?;
+    let mut original_link = read_u64(&mut file)?;
+    let result = if ifd0.tile_width != 0 {
+        use crate::streaming_tiff::jpeg_tiff::{self, Blocks, Level};
+        if (
+            ifd0.tile_width,
+            ifd0.tile_height,
+            ifd0.compression_tag,
+            ifd0.channels,
+        ) != (512, 512, 7, 3)
+        {
+            return Err("无法为此分块 TIFF 构建金字塔".into());
+        }
+        let mut mask = None;
+        if original_link != 0 {
+            let next = parse_bigtiff_ifd(&mut file, original_link)?;
+            if next.subfile_type == 4 {
+                if (
+                    next.width,
+                    next.height,
+                    next.tile_width,
+                    next.tile_height,
+                    next.compression_tag,
+                ) != (ifd0.width, ifd0.height, 512, 512, 8)
+                {
+                    return Err("JPEG TIFF 有效区掩膜格式不匹配".into());
+                }
+                mask = Some(Blocks {
+                    offsets: next.strip_offsets,
+                    counts: next.strip_byte_counts,
+                });
+                root_link = next.next_ifd_field_pos;
+                file.seek(SeekFrom::Start(root_link))
+                    .map_err(|e| e.to_string())?;
+                original_link = read_u64(&mut file)?;
+            }
+            if original_link != 0 {
+                if parse_bigtiff_ifd(&mut file, original_link)?.subfile_type & 1 == 0 {
+                    return Err("TIFF 包含其他影像目录".into());
+                }
+                return Ok(PyramidStats {
+                    levels_generated: 0,
+                    size_added_bytes: 0,
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                });
+            }
+        }
+        let base = Level {
+            width: ifd0.width,
+            height: ifd0.height,
+            color: Blocks {
+                offsets: ifd0.strip_offsets,
+                counts: ifd0.strip_byte_counts,
+            },
+            mask,
+        };
+        jpeg_tiff::append_levels(&mut file, path, base, &opts, check_space)
+    } else {
+        append_levels(
+            &mut file,
+            path,
+            &opts,
+            ifd0,
+            compression_str,
+            level_count,
+            check_space,
+        )
+    };
+
     match result {
         Ok((levels, first_ifd)) => {
             if let Some(first) = first_ifd {

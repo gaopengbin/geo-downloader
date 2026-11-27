@@ -137,6 +137,7 @@ impl BatchSlots {
 pub struct TaskManager {
     tasks: Arc<Mutex<HashMap<String, TaskEntry>>>,
     task_operations: Mutex<HashSet<String>>,
+    interrupted_cards: Mutex<HashMap<PathBuf, CachedCard>>,
     batch_slots: Mutex<HashMap<String, std::sync::Weak<BatchSlots>>>,
     log_dir: PathBuf,
     event_sink: Mutex<Option<Arc<dyn Fn(TaskInfo) + Send + Sync>>>,
@@ -168,6 +169,7 @@ impl TaskManager {
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             task_operations: Mutex::new(HashSet::new()),
+            interrupted_cards: Mutex::new(HashMap::new()),
             batch_slots: Mutex::new(HashMap::new()),
             log_dir,
             event_sink: Mutex::new(None),
@@ -537,9 +539,38 @@ impl TaskManager {
         }
     }
 
-    pub fn resumable_tasks(&self) -> Vec<PersistedTask> {
+    pub fn resumable_tasks(&self) -> Vec<ResumableSummary> {
         let registered_ids = self.tasks.lock().unwrap().keys().cloned().collect();
-        load_resumable_tasks_from(&tasks_dir(), &registered_ids)
+        self.interrupted_cards_in(&tasks_dir(), &registered_ids)
+    }
+
+    fn interrupted_cards_in(
+        &self,
+        dir: &Path,
+        registered: &HashSet<String>,
+    ) -> Vec<ResumableSummary> {
+        // A slow volume can delay another list operation without holding the live task lock.
+        let mut cache = self.interrupted_cards.lock().unwrap();
+        let mut previous = std::mem::take(&mut *cache);
+        let mut cards = Vec::new();
+        for path in persisted_paths(dir, registered) {
+            let stamp = std::fs::metadata(&path)
+                .ok()
+                .and_then(|m| Some((m.modified().ok()?, m.len())));
+            let cached = previous
+                .remove(&path)
+                .filter(|c| stamp.is_some() && c.stamp == stamp);
+            let card = cached.or_else(|| {
+                let file = std::fs::File::open(&path).ok()?;
+                let info = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
+                Some(CachedCard { stamp, info })
+            });
+            if let Some(card) = card {
+                cards.push(card.info.clone());
+                cache.insert(path, card);
+            }
+        }
+        cards
     }
 
     pub fn get_all_tasks(&self) -> Vec<TaskInfo> {
@@ -913,6 +944,26 @@ mod tests {
 
 use crate::commands::DownloadRequest;
 
+// Listing interrupted jobs only needs the card fields. Serde skips polygon
+// coordinates and credentials without materializing or sending them to the UI.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct ResumableSummary {
+    task_id: String,
+    task_name: String,
+    source_name: String,
+    request: ResumableZoom,
+    tile_count: u32,
+    created_at: String,
+}
+
+struct CachedCard {
+    stamp: Option<(std::time::SystemTime, u64)>,
+    info: ResumableSummary,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ResumableZoom { zoom: u8 }
+
 /// 持久化的任务数据（用于崩溃后恢复）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedTask {
@@ -957,26 +1008,34 @@ pub fn load_resumable_tasks() -> Vec<PersistedTask> {
     load_resumable_tasks_from(&tasks_dir(), &HashSet::new())
 }
 
-fn load_resumable_tasks_from(dir: &Path, registered_ids: &HashSet<String>) -> Vec<PersistedTask> {
-    let mut tasks = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            // Polling the interrupted list must not reopen every live job on the disk.
-            if path.file_stem().and_then(|s| s.to_str()).is_some_and(|id| registered_ids.contains(id)) {
-                continue;
-            }
-            if path.extension().is_some_and(|e| e == "json") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(task) = serde_json::from_str::<PersistedTask>(&content) {
-                        // 工作目录即使被系统或用户清理，任务描述仍可用于从头恢复。
-                        tasks.push(task);
-                    }
-                }
-            }
-        }
-    }
-    tasks
+fn load_resumable_tasks_from<T: serde::de::DeserializeOwned>(
+    dir: &Path,
+    registered_ids: &HashSet<String>,
+) -> Vec<T> {
+    persisted_paths(dir, registered_ids)
+        .filter_map(|path| {
+            let data = std::fs::read(path).ok()?;
+            serde_json::from_slice(&data).ok()
+        })
+        .collect()
+}
+
+fn persisted_paths<'a>(
+    dir: &Path,
+    registered_ids: &'a HashSet<String>,
+) -> impl Iterator<Item = PathBuf> + 'a {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(move |path| {
+            path.extension().is_some_and(|e| e == "json")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|id| !registered_ids.contains(id))
+        })
 }
 
 pub fn task_work_dir(task_id: &str, request: &DownloadRequest) -> Option<PathBuf> {
@@ -1121,6 +1180,41 @@ mod persistence_tests {
     }
 
     #[test]
+    fn interrupted_card_omits_large_boundaries_and_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        for (zoom, count) in [(15, 30_765_609), (14, 7_694_176)] {
+            let input = serde_json::json!({"task_id":zoom.to_string(),"task_name":"region",
+                "source_name":"Tianditu","request":{"zoom":zoom,"tianditu_token":"private",
+                "polygon":[vec![[116.0,40.0];100_000]]},"tile_count":count,"created_at":"2026-11-11"});
+            std::fs::write(dir.path().join(format!("{zoom}.json")), input.to_string()).unwrap();
+        }
+        let manager = TaskManager::new_with_log_dir(dir.path().join("logs"));
+        let rows = manager.interrupted_cards_in(dir.path(), &HashSet::new());
+        assert_eq!(rows.len(), 2);
+        let json = serde_json::to_string(&rows).unwrap();
+        assert!(json.len() < 500 && !json.contains("private") && !json.contains("polygon"));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            manager
+                .interrupted_cards_in(dir.path(), &HashSet::new())
+                .len(),
+            2
+        );
+        eprintln!(
+            "interrupted_rows=2 ipc_bytes={} cached_read_us={}",
+            json.len(),
+            started.elapsed().as_micros()
+        );
+        std::fs::remove_file(dir.path().join("15.json")).unwrap();
+        assert_eq!(
+            manager
+                .interrupted_cards_in(dir.path(), &HashSet::new())
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn loader_keeps_task_when_work_dir_is_missing() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("output").join("map.tif");
@@ -1144,8 +1238,8 @@ mod persistence_tests {
         let task_file = dir.path().join("recoverable-task.json");
         std::fs::write(&task_file, serde_json::to_vec(&task).unwrap()).unwrap();
 
-        let loaded = load_resumable_tasks_from(dir.path(), &HashSet::new());
-        assert!(load_resumable_tasks_from(dir.path(), &HashSet::from([task.task_id.clone()])).is_empty());
+        let loaded: Vec<PersistedTask> = load_resumable_tasks_from(dir.path(), &HashSet::new());
+        assert!(load_resumable_tasks_from::<ResumableSummary>(dir.path(), &HashSet::from([task.task_id.clone()])).is_empty());
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].task_id, "recoverable-task");

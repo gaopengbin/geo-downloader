@@ -11,21 +11,24 @@ import {
 import { cn } from '@/lib/utils'
 import type { Bounds, Polygon } from '@/types/api'
 
-export type TiffCompression = 'none' | 'lzw' | 'deflate'
+export type TiffCompression = 'none' | 'lzw' | 'deflate' | 'jpeg75'
 
 const TIFF_COMPRESSION_OPTIONS: { value: TiffCompression; labelKey: string }[] = [
   { value: 'none', labelKey: 'download.compression.none' },
   { value: 'lzw', labelKey: 'download.compression.lzw' },
   { value: 'deflate', labelKey: 'download.compression.deflate' },
+  { value: 'jpeg75', labelKey: 'download.compression.jpeg75' },
 ]
 
 export function TiffCompressionSelect({
   value,
   onChange,
   triggerClassName,
+  losslessOnly = false,
 }: {
   value: TiffCompression
   onChange: (value: TiffCompression) => void
+  losslessOnly?: boolean
   triggerClassName?: string
 }) {
   const { t } = useTranslation()
@@ -38,13 +41,14 @@ export function TiffCompressionSelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          {TIFF_COMPRESSION_OPTIONS.map((opt) => (
+          {TIFF_COMPRESSION_OPTIONS.filter((opt) => !losslessOnly || opt.value !== 'jpeg75').map((opt) => (
             <SelectItem key={opt.value} value={opt.value}>
               {t(opt.labelKey)}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
+      {value === 'jpeg75' && <p className="text-xs text-muted-foreground">{t('download.compression.jpegMask')}</p>}
     </div>
   )
 }

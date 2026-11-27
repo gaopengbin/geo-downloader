@@ -107,16 +107,13 @@ pub fn tile_to_latlng(x: u32, y: u32, zoom: u8) -> TileBounds {
 
 /// 获取边界框内的所有瓦片
 pub fn get_tiles_in_bounds(bounds: &Bounds, zoom: u8) -> Vec<TileCoord> {
+    tiles_in_bounds(bounds, zoom).collect()
+}
+
+pub fn tiles_in_bounds(bounds: &Bounds, zoom: u8) -> impl Iterator<Item = TileCoord> {
     let (x_min, y_min) = latlng_to_tile(bounds.north, bounds.west, zoom);
     let (x_max, y_max) = latlng_to_tile(bounds.south, bounds.east, zoom);
-
-    let mut tiles = Vec::new();
-    for x in x_min..=x_max {
-        for y in y_min..=y_max {
-            tiles.push(TileCoord { x, y, z: zoom });
-        }
-    }
-    tiles
+    (x_min..=x_max).flat_map(move |x| (y_min..=y_max).map(move |y| TileCoord { x, y, z: zoom }))
 }
 
 /// 获取瓦片矩阵尺寸

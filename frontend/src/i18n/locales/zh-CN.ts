@@ -545,7 +545,9 @@ const zhCN = {
       title: 'TIFF 压缩',
       none: '无压缩（最快导出）',
       lzw: 'LZW（通用兼容）',
-      deflate: 'Deflate（体积最小）',
+      deflate: 'Deflate（无损压缩）',
+      jpegMask: '保留坐标和裁剪边界，半透明像素按不透明处理。',
+      jpeg75: 'JPEG 75（有损，适合卫星影像）',
     },
     crop: {
       tilesHint: '开启后输出 PNG，界外透明，保留瓦片尺寸及 z/x/y 编号；文件可能比 JPG 更大',

@@ -159,7 +159,7 @@ export interface DownloadRequest {
   crop_to_shape?: boolean
   source_name?: string
   tianditu_token?: Nullable<string>
-  /** TIFF 压缩方式: 'none' | 'lzw' | 'deflate'，默认 lzw */
+  /** TIFF 压缩方式: 'none' | 'lzw' | 'deflate' | 'jpeg75'，默认 lzw */
   compression?: string
   /** 是否构建影像金字塔（仅 GeoTIFF） */
   build_pyramid?: boolean
@@ -276,7 +276,7 @@ export interface PersistedTask {
   task_id: string
   task_name: string
   source_name: string
-  request: DownloadRequest
+  request: Pick<DownloadRequest, 'zoom'>
   tile_count: number
   created_at: string
 }
