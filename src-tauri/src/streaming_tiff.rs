@@ -955,6 +955,36 @@ mod tests {
     }
 
     #[test]
+    fn parallel_jpeg_blocks_and_overviews_match_serial_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tiles = HashMap::new();
+        for x in 0..9 {
+            for y in 0..5 {
+                if (x, y) != (4, 2) {
+                    tiles.insert((x, y), TileSource::from_bytes(make_solid_tile(
+                        (x * 24) as u8, (y * 30) as u8, 96,
+                    )));
+                }
+            }
+        }
+        let polygon = vec![vec![
+            PolygonPoint { lng: -8.0, lat: 8.0 }, PolygonPoint { lng: 7.0, lat: 1.0 },
+            PolygonPoint { lng: 0.0, lat: -8.0 },
+        ]];
+        let render = |workers| {
+            let path = dir.path().join(format!("workers-{workers}.tif"));
+            rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+                merge_and_export_streaming_with_budget(
+                    &tiles, 0, 0, 8, 4, &dummy_bounds(), &path, "jpeg75", Some(&polygon), 32 << 20,
+                ).unwrap();
+                crate::pyramid::build_pyramid(&path, Default::default()).unwrap();
+            });
+            std::fs::read(path).unwrap()
+        };
+        assert!(render(1) == render(4));
+    }
+
+    #[test]
     fn jpeg75_uses_tiled_jpeg_and_preserves_output_if_write_fails() {
         use tiff::{decoder::Decoder, tags::Tag};
         let dir = tempfile::tempdir().unwrap();

@@ -17,6 +17,14 @@ pub struct TileStore {
 impl TileStore {
     /// 打开（必要时创建）一个 mbtiles 文件。
     pub fn open(path: &Path, source_key: &str) -> Result<Self, String> {
+        Self::open_for_workload(path, source_key, false)
+    }
+
+    pub(super) fn open_for_workload(path: &Path, source_key: &str, bulk_download: bool) -> Result<Self, String> {
+        // For a freshly created bulk database the rollback journal only needs
+        // pre-existing pages. Newly appended tile payloads can go straight to
+        // the DB instead of being written to WAL and checkpointed again.
+        let fresh_bulk = bulk_download && !path.exists();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("创建缓存目录失败 {}: {}", parent.display(), e))?;
@@ -28,8 +36,12 @@ impl TileStore {
         .map_err(|e| format!("打开 mbtiles 失败 {}: {}", path.display(), e))?;
 
         // 性能调优
-        conn.pragma_update(None, "journal_mode", "WAL").ok();
-        conn.pragma_update(None, "synchronous", "NORMAL").ok();
+        if fresh_bulk {
+            conn.pragma_update(None, "synchronous", "FULL").map_err(|e| e.to_string())?;
+        } else {
+            conn.pragma_update(None, "journal_mode", "WAL").ok();
+            conn.pragma_update(None, "synchronous", "NORMAL").ok();
+        }
         conn.pragma_update(None, "temp_store", "MEMORY").ok();
         conn.pragma_update(None, "cache_size", -8000i64).ok();
         conn.pragma_update(None, "mmap_size", 268_435_456i64).ok();
@@ -155,7 +167,9 @@ impl TileStore {
         {
             let mut stmt = tx
                 .prepare_cached(
-                    "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?1,?2,?3,?4)",
+                    "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?1,?2,?3,?4)
+                     ON CONFLICT(zoom_level,tile_column,tile_row) DO UPDATE SET tile_data=excluded.tile_data
+                     WHERE tiles.tile_data <> excluded.tile_data",
                 )
                 .map_err(|e| e.to_string())?;
             for (c, tile) in batch {
@@ -373,6 +387,26 @@ mod tests {
         }
         let stats = store.stats(0).unwrap();
         assert_eq!(stats.tile_count, 10);
+    }
+
+    #[test]
+    fn batch_writes_skip_identical_payloads_and_replace_changed_tiles() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("download.mbtiles");
+        let mut store = TileStore::open_for_workload(&path, "download", true).unwrap();
+        let mode: String = store.conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap();
+        assert_eq!(mode, "delete");
+        let coord = TileCoord { z: 1, x: 0, y: 0 };
+        let mut batch = [(coord, StoredTile { bytes: vec![1; 4096], content_type: "image/png".into() })];
+        store.put_batch(&batch).unwrap();
+        let changes = store.conn.total_changes();
+        store.put_batch(&batch).unwrap();
+        assert_eq!(store.conn.total_changes(), changes);
+        batch[0].1.bytes[0] = 9;
+        store.put_batch(&batch).unwrap();
+        drop(store);
+        let store = TileStore::open(&path, "download").unwrap();
+        assert_eq!(store.get(coord).unwrap().unwrap().bytes, batch[0].1.bytes);
     }
 
     /// 空入参直接返回空集，不应触碰 DB。

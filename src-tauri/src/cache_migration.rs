@@ -611,11 +611,12 @@ fn verify_migration_with_progress<F>(
 where
     F: FnMut(usize, &CacheFile),
 {
-    for (index, entry) in files.iter().enumerate() {
+    // Opening a recovered SQLite file can consume its hot journal. Verify all
+    // copied byte lengths before asking SQLite to recover and check databases.
+    for entry in files {
         if cancel.is_some_and(CancellationToken::is_cancelled) {
             return Err(MigrationFailure::Cancelled);
         }
-        progress(index, entry);
         let target = staging.join(&entry.name);
         let target_size = target
             .metadata()
@@ -627,6 +628,13 @@ where
                 entry.name
             )));
         }
+    }
+    for (index, entry) in files.iter().enumerate() {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Err(MigrationFailure::Cancelled);
+        }
+        progress(index, entry);
+        let target = staging.join(&entry.name);
         if entry.path.extension().and_then(|s| s.to_str()) == Some("mbtiles") {
             verify_mbtiles(&entry.path, &target)?;
         }
@@ -830,7 +838,7 @@ fn is_cache_file(path: &Path) -> bool {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
-    name.ends_with(".mbtiles") || name.ends_with(".mbtiles-wal") || name.ends_with(".mbtiles-shm")
+    name.ends_with(".mbtiles") || name.ends_with(".mbtiles-wal") || name.ends_with(".mbtiles-shm") || name.ends_with(".mbtiles-journal")
 }
 
 fn staging_path(target: &Path, id: &str) -> Result<PathBuf, String> {
@@ -1178,6 +1186,7 @@ mod tests {
         assert!(is_cache_file(Path::new("a.mbtiles")));
         assert!(is_cache_file(Path::new("a.mbtiles-wal")));
         assert!(is_cache_file(Path::new("a.mbtiles-shm")));
+        assert!(is_cache_file(Path::new("a.mbtiles-journal")));
         assert!(!is_cache_file(Path::new("settings.json")));
         assert!(!is_cache_file(Path::new("a.tif")));
     }
@@ -1266,6 +1275,30 @@ mod tests {
         assert_eq!(fs::read(source.join("a.mbtiles")).unwrap(), before_a);
         assert_eq!(fs::read(source.join("b.mbtiles")).unwrap(), before_b);
         assert!(!staging.join("notes.txt").exists());
+    }
+
+    #[test]
+    fn migration_recovers_hot_rollback_journals_after_size_verification() {
+        let root = tempdir().unwrap();
+        let live = root.path().join("live.mbtiles");
+        create_test_mbtiles(&live, 2);
+        let conn = Connection::open(&live).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA cache_size=1;
+            BEGIN IMMEDIATE; UPDATE tiles SET tile_data=zeroblob(65536);").unwrap();
+        let source = root.path().join("source");
+        let staging = root.path().join("staging");
+        for dir in [&source, &staging] {
+            fs::create_dir(dir).unwrap();
+            fs::copy(&live, dir.join("a.mbtiles")).unwrap();
+            fs::copy(live.with_extension("mbtiles-journal"), dir.join("a.mbtiles-journal")).unwrap();
+        }
+        drop(conn);
+        let files = collect_cache_files(&source).unwrap();
+        assert_eq!(files.len(), 2);
+        verify_migration(&source, &staging, &files).unwrap();
+        let recovered = Connection::open(staging.join("a.mbtiles")).unwrap();
+        let max: i64 = recovered.query_row("SELECT max(length(tile_data)) FROM tiles", [], |r| r.get(0)).unwrap();
+        assert!(max < 65536);
     }
 
     #[test]

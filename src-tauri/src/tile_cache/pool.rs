@@ -91,13 +91,17 @@ impl Store {
 
     /// 获取/创建 source 对应的 store handle。
     fn handle(&self, src: &SourceKey) -> Result<Arc<Mutex<TileStore>>, String> {
+        self.handle_for_workload(src, false)
+    }
+
+    fn handle_for_workload(&self, src: &SourceKey, bulk_download: bool) -> Result<Arc<Mutex<TileStore>>, String> {
         let mut inner = self.inner.lock().map_err(|_| "pool poisoned".to_string())?;
         if let Some(entry) = inner.entries.get_mut(src.as_str()) {
             entry.last_used = Instant::now();
             return Ok(entry.store.clone());
         }
         let path = Self::path_for(src);
-        let store = TileStore::open(&path, src.as_str())?;
+        let store = TileStore::open_for_workload(&path, src.as_str(), bulk_download)?;
         let arc = Arc::new(Mutex::new(store));
         inner.entries.insert(
             src.as_str().to_string(),
@@ -212,26 +216,56 @@ impl Store {
         batch: Vec<(TileCoord, StoredTile)>,
         info: Option<SourceInfo>,
     ) -> Result<(), String> {
-        if batch.is_empty() {
-            return Ok(());
-        }
-        let written_bytes = batch.iter().map(|(_, tile)| tile.bytes.len() as u64).sum();
+        self.put_download_batch(src, batch, info, false).map(|_| ())
+    }
+
+    /// Bulk scans share the available space, including simultaneous jobs using
+    /// other sources. A false result tells this scan to keep subsequent misses
+    /// only in its own resumable work directory.
+    pub(crate) fn put_download_batch(
+        &self, src: &SourceKey, mut batch: Vec<(TileCoord, StoredTile)>,
+        info: Option<SourceInfo>, large_scan: bool,
+    ) -> Result<bool, String> {
+        if batch.is_empty() { return Ok(true); }
+        let written_bytes;
+        let mut has_room = true;
         {
-            let Some(_access) = crate::cache_access::begin_cache_access() else {
-                return Ok(());
-            };
-            if !get_config().enabled {
-                return Ok(());
+            // Same lock order as clear/prune. Keep the size check and commit
+            // together so concurrent bulk writers cannot reserve the same space.
+            let _admission = if large_scan {
+                Some(self.prune_gate.lock().map_err(|_| "prune lock poisoned".to_string())?)
+            } else { None };
+            let Some(_access) = crate::cache_access::begin_cache_access() else { return Ok(true); };
+            let cfg = get_config();
+            if !cfg.enabled { return Ok(true); }
+            if large_scan && cfg.max_total_bytes != 0 {
+                let mut active = active_downloads::active_source_keys();
+                if !active.iter().any(|key| key == src.as_str()) {
+                    active.push(src.as_str().to_owned());
+                }
+                let used: u64 = active.iter().map(|key|
+                    Self::source_disk_size(&cfg.root_dir.join(format!("{key}.mbtiles")))
+                ).sum();
+                let target = cfg.max_total_bytes.saturating_mul(AUTO_PRUNE_TARGET_PERCENT) / 100;
+                let mut room = target.saturating_sub(used);
+                let count = batch.iter().take_while(|(_, tile)| {
+                    let charge = (tile.bytes.len() as u64).div_ceil(4096) * 4096 + 64;
+                    if charge > room { return false; }
+                    room -= charge;
+                    true
+                }).count();
+                has_room = count == batch.len();
+                batch.truncate(count);
+                if batch.is_empty() { return Ok(false); }
             }
-            let handle = self.handle(src)?;
+            written_bytes = batch.iter().map(|(_, tile)| tile.bytes.len() as u64).sum();
+            let handle = self.handle_for_workload(src, true)?;
             let mut store = handle.lock().map_err(|_| "store poisoned".to_string())?;
-            if let Some(info) = info {
-                store.ensure_metadata(&info)?;
-            }
+            if let Some(info) = info { store.ensure_metadata(&info)?; }
             store.put_batch(&batch)?;
         }
         self.maybe_auto_prune(written_bytes, false);
-        Ok(())
+        Ok(has_room)
     }
 
     /// 批量判断哪些坐标已在缓存中。
@@ -427,6 +461,7 @@ impl Store {
             path.to_path_buf(),
             path.with_extension("mbtiles-wal"),
             path.with_extension("mbtiles-shm"),
+            path.with_extension("mbtiles-journal"),
         ]
         .iter()
         .map(|candidate| {
@@ -443,6 +478,7 @@ impl Store {
             path.to_path_buf(),
             path.with_extension("mbtiles-wal"),
             path.with_extension("mbtiles-shm"),
+            path.with_extension("mbtiles-journal"),
         ];
         let mut freed = 0;
         for candidate in candidates {
@@ -472,7 +508,7 @@ impl Store {
             };
             let is_companion = matches!(
                 path.extension().and_then(|value| value.to_str()),
-                Some("mbtiles-wal" | "mbtiles-shm")
+                Some("mbtiles-wal" | "mbtiles-shm" | "mbtiles-journal")
             );
             if !is_companion || path.with_extension("mbtiles").exists() {
                 continue;
@@ -604,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn source_size_and_removal_include_wal_and_shm_files() {
+    fn source_size_and_removal_include_sqlite_journals() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("source.mbtiles");
         let wal = path.with_extension("mbtiles-wal");
@@ -613,11 +649,14 @@ mod tests {
         std::fs::write(&wal, [2u8; 5]).unwrap();
         std::fs::write(&shm, [3u8; 7]).unwrap();
 
-        assert_eq!(Store::source_disk_size(&path), 15);
-        assert_eq!(Store::remove_source_files(&path).unwrap(), 15);
+        let journal = path.with_extension("mbtiles-journal");
+        std::fs::write(&journal, [4u8; 2]).unwrap();
+        assert_eq!(Store::source_disk_size(&path), 17);
+        assert_eq!(Store::remove_source_files(&path).unwrap(), 17);
         assert!(!path.exists());
         assert!(!wal.exists());
         assert!(!shm.exists());
+        assert!(!journal.exists());
     }
 
     #[test]

@@ -135,11 +135,77 @@ fn encode(rgb: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+// Limit concurrent 512px blocks across a wide row. Each lane needs RGB,
+// decoded source pixels, a mask, and encoder scratch. Rayon shares its pool
+// across simultaneous exports; the memory budget also applies on small hosts.
+fn jpeg_lanes(budget: u64) -> usize {
+    rayon::current_num_threads().min((budget / (4 * 1024 * 1024)).clamp(1, 8) as usize)
+}
+
 fn valid(mask: &[u8], pixel: usize) -> bool {
     mask[pixel / 8] & (128 >> (pixel % 8)) != 0
 }
 fn cover(mask: &mut [u8], pixel: usize) {
     mask[pixel / 8] |= 128 >> (pixel % 8);
+}
+
+fn encode_base_block(
+    files: &HashMap<(u32, u32), TileSource>,
+    tile_x: u32,
+    tile_y: u32,
+    pixel_x: u32,
+    spans: &[Vec<(i32, i32)>],
+    masked: bool,
+    clip: bool,
+) -> Result<(Vec<u8>, Option<Vec<u8>>, StripTimes), String> {
+    let mut times = StripTimes::default();
+    let mut rgb = vec![if masked { 0 } else { 255 }; PIXELS * 3];
+    let mut mask = if masked {
+        vec![0; PIXELS / 8]
+    } else {
+        Vec::new()
+    };
+    for ty in 0..2 {
+        for tx in 0..2 {
+            let Some(src) = files.get(&(tile_x + tx, tile_y + ty)) else {
+                continue;
+            };
+            let start = std::time::Instant::now();
+            let bytes = src.bytes().map_err(e2s)?;
+            let image = image::load_from_memory(&bytes).map_err(e2s)?.into_rgba8();
+            times.read_decode += start.elapsed();
+            let start = std::time::Instant::now();
+            for y in 0..TILE_SIZE.min(image.height()) {
+                let ly = ty * TILE_SIZE + y;
+                let Some(row) = spans.get(ly as usize) else {
+                    continue;
+                };
+                for x in 0..TILE_SIZE.min(image.width()) {
+                    let lx = tx * TILE_SIZE + x;
+                    let gx = (pixel_x + lx) as i32;
+                    let p = image.get_pixel(x, y).0;
+                    if masked {
+                        let covered = !clip
+                            || row
+                                .get(row.partition_point(|&(_, right)| right <= gx))
+                                .is_some_and(|&(left, _)| left <= gx);
+                        if p[3] == 0 || !covered {
+                            continue;
+                        }
+                        cover(&mut mask, (ly * SIDE + lx) as usize);
+                    }
+                    let i = ((ly * SIDE + lx) * 3) as usize;
+                    rgb[i..i + 3].copy_from_slice(&p[..3]);
+                }
+            }
+            times.assemble_crop += start.elapsed();
+        }
+    }
+    let start = std::time::Instant::now();
+    let jpeg = encode(&rgb)?;
+    let mask = masked.then(|| deflate_compress(&mask)).transpose()?;
+    times.encode += start.elapsed();
+    Ok((jpeg, mask, times))
 }
 
 pub(super) fn export(
@@ -163,65 +229,58 @@ pub(super) fn export(
     let mut colors = Blocks::default();
     let mut masks = Blocks::default();
     let mut times = StripTimes::default();
+    let lanes = jpeg_lanes(options.buffer_bytes);
+    let empty = if masked && !rings.is_empty() {
+        Some((
+            encode(&vec![0; PIXELS * 3])?,
+            deflate_compress(&vec![0; PIXELS / 8])?,
+        ))
+    } else {
+        None
+    };
     for by in 0..rows {
         let spans: Vec<_> = (0..SIDE.min(height - by * SIDE))
             .map(|y| scanline_spans(rings, (by * SIDE + y) as i32))
             .collect();
-        for bx in 0..cols {
-            let mut rgb = vec![if masked { 0 } else { 255 }; PIXELS * 3];
-            let mut mask = if masked {
-                vec![0; PIXELS / 8]
-            } else {
-                Vec::new()
-            };
-            for ty in 0..2 {
-                for tx in 0..2 {
-                    let Some(src) = files.get(&(x_min + bx * 2 + tx, y_min + by * 2 + ty)) else {
-                        continue;
-                    };
-                    let start = std::time::Instant::now();
-                    let bytes = src.bytes().map_err(e2s)?;
-                    let image = image::load_from_memory(&bytes).map_err(e2s)?.into_rgba8();
-                    times.read_decode += start.elapsed();
-                    let start = std::time::Instant::now();
-                    for y in 0..TILE_SIZE.min(image.height()) {
-                        let ly = ty * TILE_SIZE + y;
-                        let Some(row) = spans.get(ly as usize) else {
-                            continue;
-                        };
-                        for x in 0..TILE_SIZE.min(image.width()) {
-                            let lx = tx * TILE_SIZE + x;
-                            let gx = (bx * SIDE + lx) as i32;
-                            let p = image.get_pixel(x, y).0;
-                            if masked {
-                                let covered = rings.is_empty()
-                                    || row
-                                        .get(row.partition_point(|&(_, right)| right <= gx))
-                                        .is_some_and(|&(left, _)| left <= gx);
-                                if p[3] == 0 || !covered {
-                                    continue;
-                                }
-                                cover(&mut mask, (ly * SIDE + lx) as usize);
-                            }
-                            let i = ((ly * SIDE + lx) * 3) as usize;
-                            rgb[i..i + 3].copy_from_slice(&p[..3]);
+        for first in (0..cols).step_by(lanes) {
+            let end = cols.min(first + lanes as u32);
+            let blocks = (first..end)
+                .into_par_iter()
+                .map(|bx| {
+                    let left = i64::from(bx * SIDE);
+                    let right = left + i64::from(SIDE);
+                    if let Some((color, mask)) = &empty {
+                        if !spans.iter().any(|row| {
+                            row.get(row.partition_point(|&(_, stop)| i64::from(stop) <= left))
+                                .is_some_and(|&(start, _)| i64::from(start) < right)
+                        }) {
+                            return Ok((color.clone(), Some(mask.clone()), StripTimes::default()));
                         }
                     }
-                    times.assemble_crop += start.elapsed();
+                    encode_base_block(
+                        files,
+                        x_min + bx * 2,
+                        y_min + by * 2,
+                        bx * SIDE,
+                        &spans,
+                        masked,
+                        !rings.is_empty(),
+                    )
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            for (jpeg, mask, elapsed) in blocks {
+                times.read_decode += elapsed.read_decode;
+                times.assemble_crop += elapsed.assemble_crop;
+                times.encode += elapsed.encode;
+                let start = std::time::Instant::now();
+                let bytes = jpeg.len() + mask.as_ref().map_or(0, Vec::len);
+                (options.check_space)(path, (bytes + w.buffer().len()) as u64)?;
+                colors.write(&mut w, &jpeg)?;
+                if let Some(mask) = mask {
+                    masks.write(&mut w, &mask)?;
                 }
+                times.write += start.elapsed();
             }
-            let start = std::time::Instant::now();
-            let jpeg = encode(&rgb)?;
-            let mask = masked.then(|| deflate_compress(&mask)).transpose()?;
-            times.encode += start.elapsed();
-            let start = std::time::Instant::now();
-            let bytes = jpeg.len() + mask.as_ref().map_or(0, Vec::len);
-            (options.check_space)(path, (bytes + w.buffer().len()) as u64)?;
-            colors.write(&mut w, &jpeg)?;
-            if let Some(mask) = mask {
-                masks.write(&mut w, &mask)?;
-            }
-            times.write += start.elapsed();
         }
         if let Some(cb) = &mut options.progress {
             cb(by + 1, rows, stream_pos(&mut w)?, times);
@@ -247,15 +306,23 @@ pub(crate) struct Level {
     pub mask: Option<Blocks>,
 }
 
+struct ParentBlock {
+    dx: u32,
+    dy: u32,
+    width: u32,
+    height: u32,
+    jpeg: Vec<u8>,
+    mask: Option<Vec<u8>>,
+}
+
 impl Level {
-    fn child(
+    fn read_parents(
         &self,
         file: &mut std::fs::File,
         bx: u32,
         by: u32,
-    ) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
-        let mut rgb = vec![0; PIXELS * 3];
-        let mut mask = self.mask.as_ref().map(|_| vec![0; PIXELS / 8]);
+    ) -> Result<Vec<ParentBlock>, String> {
+        let mut group = Vec::with_capacity(4);
         let cols = self.width.div_ceil(SIDE);
         for dy in 0..2 {
             for dx in 0..2 {
@@ -264,60 +331,89 @@ impl Level {
                     continue;
                 }
                 let index = (u64::from(y) * u64::from(cols) + u64::from(x)) as usize;
-                let jpeg = self.color.read(file, index)?;
-                let image = image::load_from_memory(&jpeg).map_err(e2s)?.into_rgb8();
-                if image.dimensions() != (SIDE, SIDE) {
-                    return Err("JPEG TIFF 分块尺寸不符".into());
+                group.push(ParentBlock {
+                    dx,
+                    dy,
+                    width: (self.width - x * SIDE).min(SIDE),
+                    height: (self.height - y * SIDE).min(SIDE),
+                    jpeg: self.color.read(file, index)?,
+                    mask: self
+                        .mask
+                        .as_ref()
+                        .map(|blocks| blocks.read(file, index))
+                        .transpose()?,
+                });
+            }
+        }
+        Ok(group)
+    }
+}
+
+// Only the owning file handle reads and writes the locked BigTIFF. Rayon
+// workers decode and encode bounded groups entirely in memory.
+fn encode_child(
+    parents: Vec<ParentBlock>,
+    masked: bool,
+) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    let mut rgb = vec![0; PIXELS * 3];
+    let mut mask = masked.then(|| vec![0; PIXELS / 8]);
+    for ParentBlock {
+        dx,
+        dy,
+        width: w,
+        height: h,
+        jpeg,
+        mask: compressed_mask,
+    } in parents
+    {
+        let image = image::load_from_memory(&jpeg).map_err(e2s)?.into_rgb8();
+        if image.dimensions() != (SIDE, SIDE) {
+            return Err("JPEG TIFF 分块尺寸不符".into());
+        }
+        let src_mask = if let Some(data) = compressed_mask {
+            let mut m = vec![0; PIXELS / 8];
+            flate2::read::ZlibDecoder::new(Cursor::new(data))
+                .read_exact(&mut m)
+                .map_err(e2s)?;
+            Some(m)
+        } else {
+            None
+        };
+        for j in (0..h).step_by(2) {
+            for i in (0..w).step_by(2) {
+                let mut sum = [0u32; 3];
+                let mut n = 0;
+                for sy in j..(j + 2).min(h) {
+                    for sx in i..(i + 2).min(w) {
+                        if src_mask
+                            .as_ref()
+                            .is_some_and(|m| !valid(m, (sy * SIDE + sx) as usize))
+                        {
+                            continue;
+                        }
+                        for (v, c) in sum.iter_mut().zip(image.get_pixel(sx, sy).0) {
+                            *v += u32::from(c);
+                        }
+                        n += 1;
+                    }
                 }
-                let src_mask = if let Some(blocks) = &self.mask {
-                    let data = blocks.read(file, index)?;
-                    let mut m = vec![0; PIXELS / 8];
-                    flate2::read::ZlibDecoder::new(Cursor::new(data))
-                        .read_exact(&mut m)
-                        .map_err(e2s)?;
-                    Some(m)
-                } else {
-                    None
-                };
-                let w = (self.width - x * SIDE).min(SIDE);
-                let h = (self.height - y * SIDE).min(SIDE);
-                for j in (0..h).step_by(2) {
-                    for i in (0..w).step_by(2) {
-                        let mut sum = [0u32; 3];
-                        let mut n = 0;
-                        for sy in j..(j + 2).min(h) {
-                            for sx in i..(i + 2).min(w) {
-                                if src_mask
-                                    .as_ref()
-                                    .is_some_and(|m| !valid(m, (sy * SIDE + sx) as usize))
-                                {
-                                    continue;
-                                }
-                                for (v, c) in sum.iter_mut().zip(image.get_pixel(sx, sy).0) {
-                                    *v += u32::from(c);
-                                }
-                                n += 1;
-                            }
-                        }
-                        if n > 0 {
-                            let pixel = ((dy * (SIDE / 2) + j / 2) * SIDE + dx * (SIDE / 2) + i / 2)
-                                as usize;
-                            for (out, v) in rgb[pixel * 3..pixel * 3 + 3].iter_mut().zip(sum) {
-                                *out = ((v + n / 2) / n) as u8;
-                            }
-                            if let Some(mask) = &mut mask {
-                                cover(mask, pixel);
-                            }
-                        }
+                if n > 0 {
+                    let pixel =
+                        ((dy * (SIDE / 2) + j / 2) * SIDE + dx * (SIDE / 2) + i / 2) as usize;
+                    for (out, v) in rgb[pixel * 3..pixel * 3 + 3].iter_mut().zip(sum) {
+                        *out = ((v + n / 2) / n) as u8;
+                    }
+                    if let Some(mask) = &mut mask {
+                        cover(mask, pixel);
                     }
                 }
             }
         }
-        Ok((
-            encode(&rgb)?,
-            mask.map(|m| deflate_compress(&m)).transpose()?,
-        ))
     }
+    Ok((
+        encode(&rgb)?,
+        mask.map(|m| deflate_compress(&m)).transpose()?,
+    ))
 }
 
 pub(crate) fn append_levels(
@@ -335,6 +431,7 @@ pub(crate) fn append_levels(
         .log2()
         .ceil()
         .max(0.) as usize;
+    let lane_count = jpeg_lanes(export_buffer_bytes());
     while prev.width.max(prev.height) > min {
         if let Some(cb) = &opts.progress_cb {
             cb(count, levels);
@@ -343,16 +440,26 @@ pub(crate) fn append_levels(
         let mut color = Blocks::default();
         let mut mask = prev.mask.as_ref().map(|_| Blocks::default());
         for by in 0..h.div_ceil(SIDE) {
-            for bx in 0..w.div_ceil(SIDE) {
-                let (jpeg, bits) = prev.child(file, bx, by)?;
-                check_space(
-                    path,
-                    (jpeg.len() + bits.as_ref().map_or(0, Vec::len)) as u64,
-                )?;
+            let cols = w.div_ceil(SIDE);
+            for first in (0..cols).step_by(lane_count) {
+                let end = cols.min(first + lane_count as u32);
+                let parents = (first..end)
+                    .map(|bx| prev.read_parents(file, bx, by))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let children = parents
+                    .into_par_iter()
+                    .map(|group| encode_child(group, prev.mask.is_some()))
+                    .collect::<Result<Vec<_>, _>>()?;
                 file.seek(SeekFrom::End(0)).map_err(e2s)?;
-                color.write(file, &jpeg)?;
-                if let (Some(mask), Some(bits)) = (&mut mask, bits) {
-                    mask.write(file, &bits)?;
+                for (jpeg, bits) in children {
+                    check_space(
+                        path,
+                        (jpeg.len() + bits.as_ref().map_or(0, Vec::len)) as u64,
+                    )?;
+                    color.write(file, &jpeg)?;
+                    if let (Some(mask), Some(bits)) = (&mut mask, bits) {
+                        mask.write(file, &bits)?;
+                    }
                 }
             }
         }

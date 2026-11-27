@@ -22,6 +22,57 @@ use tokio_util::sync::CancellationToken;
 use crate::{tile_payload, tile_policy};
 use crate::tianditu_tokens::{self, TiandituTokens};
 
+/// Work files are authoritative for resume. Batch optional MBTiles writes on the
+/// blocking pool, using the bytes already validated and written by the downloader.
+struct DownloadCacheWrites {
+    source: SourceKey,
+    info: SourceInfo,
+    large_scan: bool,
+    saturated: bool,
+    pending: Vec<(CacheCoord, StoredTile)>,
+    pending_bytes: usize,
+    failed: usize,
+}
+
+impl DownloadCacheWrites {
+    fn new(source: SourceKey, info: SourceInfo, large_scan: bool) -> Self {
+        Self { source, info, large_scan, saturated: false, pending: Vec::new(), pending_bytes: 0, failed: 0 }
+    }
+
+    async fn record(&mut self, coord: &TileCoord, bytes: Vec<u8>) {
+        let size = bytes.len();
+        if self.saturated || size == 0 || size > 4 * 1024 * 1024 || !tcache::get_config().enabled {
+            return;
+        }
+        let content_type = TileDownloader::format_to_mime(TileDownloader::detect_format(&bytes));
+        self.pending.push((CacheCoord { z: coord.z, x: coord.x, y: coord.y }, StoredTile { bytes, content_type }));
+        self.pending_bytes += size;
+        if self.pending.len() >= 128 || self.pending_bytes >= 2 * 1024 * 1024 {
+            self.flush().await;
+        }
+    }
+
+    async fn flush(&mut self) {
+        if self.pending.is_empty() { return; }
+        let batch = std::mem::take(&mut self.pending);
+        self.pending_bytes = 0;
+        let count = batch.len();
+        let src = self.source.clone();
+        let info = self.info.clone();
+        let large_scan = self.large_scan;
+        let result = tokio::task::spawn_blocking(move ||
+            tcache::Store::global().put_download_batch(&src, batch, Some(info), large_scan)
+        ).await;
+        match result.map_err(|e| e.to_string()).and_then(|r| r) {
+            Ok(has_room) => self.saturated = !has_room,
+            Err(error) => {
+                self.failed += count;
+                log::warn!("tile_cache batch write failed: {} tiles: {}", count, error);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct RateLimitGate(std::sync::Mutex<Option<tokio::time::Instant>>);
 
@@ -453,23 +504,23 @@ impl TileDownloader {
         retrying_count: Option<&AtomicU32>,
         rate_limit: &RateLimitGate,
         tokens: Option<&TiandituTokens>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         tile_policy::ensure_offline_allowed(url)?;
         if url.starts_with("keyhole-history://") {
             let(source,z,x,y)=crate::earth_history::keyhole::parse_url(url)?;
             let bytes=crate::earth_history::keyhole::read_tile(&source,z,x,y,client.clone()).await?;
             tile_payload::validate(&bytes,Some("image/png"))?;
             if let Some(parent)=file_path.parent(){tokio::fs::create_dir_all(parent).await.map_err(|e|e.to_string())?;}
-            return tokio::fs::write(file_path,bytes).await.map_err(|e|e.to_string());
+            return tokio::fs::write(file_path,&bytes).await.map(|_|Some(bytes)).map_err(|e|e.to_string());
         }
         if url.starts_with("earth-history://") {
             return match crate::earth_history::planner::read_tile(url, client.clone()).await {
                 Ok(bytes) => {
                     tile_payload::validate(&bytes, Some("image/png"))?;
                     if let Some(parent) = file_path.parent() { tokio::fs::create_dir_all(parent).await.map_err(|e|e.to_string())?; }
-                    tokio::fs::write(file_path, bytes).await.map_err(|e|e.to_string())
+                    tokio::fs::write(file_path, &bytes).await.map(|_|Some(bytes)).map_err(|e|e.to_string())
                 }
-                Err(error) if error.starts_with("EARTH_NO_DATA:") => { let _=tokio::fs::remove_file(file_path).await; Ok(()) }
+                Err(error) if error.starts_with("EARTH_NO_DATA:") => { let _=tokio::fs::remove_file(file_path).await; Ok(None) }
                 Err(error) => Err(error),
             };
         }
@@ -517,14 +568,14 @@ impl TileDownloader {
                             match bounded_tile_body(resp, MAX_TILE_RESPONSE_BYTES).await {
                                 Ok(bytes) => {
                                     if crate::geovis::is_geovis_url(url) { crate::geovis::validate_tile(&bytes).map_err(|e|(e,false))?; }
-                                    if crate::historical_sources::is_no_data_tile(url,&bytes) {let _=tokio::fs::remove_file(file_path).await;return Ok(());}
+                                    if crate::historical_sources::is_no_data_tile(url,&bytes) {let _=tokio::fs::remove_file(file_path).await;return Ok(None);}
                                     tile_payload::validate(&bytes, content_type.as_deref())
                                         .map_err(|e| (e, false))?;
                                     match tokio::fs::write(file_path, &bytes).await {
                                     Ok(_) => {
                                         if let (Some(pool), Some(used)) = (tokens, selected.as_ref()) { pool.record_success(used); }
                                         if let Some(permit) = &provider_permit { permit.succeeded(); }
-                                        Ok(())
+                                        Ok(Some(bytes))
                                     },
                                     Err(e) => {
                                         // A failed write may leave a truncated image. Never let
@@ -546,7 +597,7 @@ impl TileDownloader {
                             // 瓦片不存在（该区域/缩放级别无数据），跳过不重试
                             // 清除可能残存的旧文件，避免断点续传误判
                             let _ = tokio::fs::remove_file(file_path).await;
-                            Ok(())
+                            Ok(None)
                         } else if status.as_u16() == 429 || status.as_u16() == 503 {
                             let delay = retry_after(resp.headers(), attempt);
                             if let Some(permit) = &provider_permit { permit.limited(delay); }
@@ -580,7 +631,7 @@ impl TileDownloader {
             // Backoff must not monopolize the limited in-flight slots.
             drop(provider_permit);
             match outcome {
-                Ok(Ok(())) => return Ok(()),
+                Ok(Ok(bytes)) => return Ok(bytes),
                 Ok(Err((e, rate_limited))) => {
                     if let Some(reason) = e.strip_prefix("TIANDITU_TOKEN_REJECTED: ") {
                         tokens.unwrap().reject(selected.as_ref().unwrap(), reason)?;
@@ -656,6 +707,8 @@ impl TileDownloader {
     {
         // Bound coordinates, cache probes and pending network registrations for a country-sized grid.
         const WINDOW: usize = 8192;
+        let (cache_src, cache_info) = self.build_cache_source();
+        let mut cache_writes = DownloadCacheWrites::new(cache_src, cache_info, total as usize > WINDOW);
         let mut files = HashMap::new();
         let (mut completed, mut failed, mut no_data) = (0, 0, 0);
         let mut first_error = None;
@@ -678,6 +731,7 @@ impl TileDownloader {
                     temp_dir,
                     cancel_token,
                     pause_control,
+                    &mut cache_writes,
                     |mut p| {
                         end = (p.completed, p.failed, p.no_data);
                         let terminal = p.status.starts_with("completed");
@@ -742,6 +796,7 @@ impl TileDownloader {
         temp_dir: &Path,
         cancel_token: Option<&CancellationToken>,
         pause_control: Option<&PauseControl>,
+        cache_writes: &mut DownloadCacheWrites,
         mut progress_callback: F,
     ) -> Result<(HashMap<(u32, u32), MergerTileSource>, Option<String>), String>
     where
@@ -834,15 +889,7 @@ impl TileDownloader {
         let mut first_failure_error: Option<String> = None;
         let retrying_counter = std::sync::Arc::new(AtomicU32::new(0));
 
-        // 缓存元信息（每任务一次构建）
-        let (cache_src, cache_info) = self.build_cache_source();
-        let cache_src = Arc::new(cache_src);
-        let cache_info = Arc::new(cache_info);
-        // 确保 metadata 表存在（仅在缓存启用且至少要写时；ensure_source 在禁用时也安全 no-op? 不安全：直接调用会创建文件）
-        if tcache::get_config().enabled {
-            let _ = tcache::Store::global().ensure_source(&cache_src, (*cache_info).clone());
-        }
-
+        let cache_src = Arc::new(cache_writes.source.clone());
         // ===== 缓存命中批量预过滤（Issue #25 + #26）=====
         // 批量查询坐标，但命中数据逐张落盘，只保留路径。
         // 大任务不能将全部主瓦片及注记的压缩字节一起留在内存。
@@ -926,6 +973,8 @@ impl TileDownloader {
             }
         }
         if cache_hit_count > 0 {
+            // Retain the LRU timestamp for warm-only windows too.
+            let _ = tcache::Store::global().ensure_source(&cache_src, cache_writes.info.clone());
             progress_callback(DownloadProgress {
                 total,
                 completed,
@@ -944,9 +993,6 @@ impl TileDownloader {
             .collect();
         let _download_guard = active_downloads::DownloadGuard::new(&active_src_key, &active_coords);
 
-        // 缓存写入失败计数器（put 在 future 闭包内异步调用，主循环通过 Arc 读取）
-        let put_fail_count = Arc::new(AtomicU32::new(0));
-
         let all_futures = need_download.into_iter().map(|tile| {
             let url = self.get_tile_url(&tile);
             let headers = self.get_headers();
@@ -955,9 +1001,6 @@ impl TileDownloader {
             let td = temp_dir.clone();
             let rc = retrying_counter.clone();
             let cs = cache_src.clone();
-            let ci = cache_info.clone();
-            let ask = active_src_key.clone();
-            let pfc = put_fail_count.clone();
 
             async move {
                 let file_path = td
@@ -965,52 +1008,20 @@ impl TileDownloader {
                     .join(format!("{}.png", tile.y));
                 let coord = CacheCoord { z: tile.z as u8, x: tile.x, y: tile.y };
 
-                // 1) 检查是否已被浏览补齐（Issue #28）
-                if !active_downloads::is_still_pending(&ask, coord) {
-                    if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
-                        if crate::historical_sources::usable_cached_tile(&url, &stored.bytes) {
-                            return (tile, persist_cached_tile(file_path, stored.bytes).await);
-                        }
-                    }
-                }
-
-                // 2) 优先查缓存，逐张落盘以限制内存占用
+                // Recheck once for tiles filled by browsing or another download since the index scan.
                 if tcache::get_config().enabled {
                     if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
                         if crate::historical_sources::usable_cached_tile(&url, &stored.bytes) {
-                            return (tile, persist_cached_tile(file_path, stored.bytes).await);
+                            return (tile, persist_cached_tile(file_path, stored.bytes).await.map(|path| (path, None)));
                         }
                     }
                 }
 
-                // 3) 网络下载
+                // 网络下载
                 let result = Self::download_one_tile(&client, &url, &headers, &file_path, retry_times, Some(&rc), &self.rate_limit, self.tianditu_tokens.as_deref()).await;
-                let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
-                    if file_path.exists() {
-                        Ok(MergerTileSource::from_path(file_path.clone()))
-                    } else {
-                        Err("no_data".to_string())
-                    }
-                });
-
-                // 4) 写回缓存（仅网络下载成功）
-                if final_result.is_ok() && tcache::get_config().enabled {
-                    if let Ok(bytes) = tokio::fs::read(&file_path).await {
-                        if !bytes.is_empty() && bytes.len() <= 4 * 1024 * 1024 {
-                            let fmt = Self::detect_format(&bytes);
-                            let stored = StoredTile {
-                                bytes,
-                                content_type: Self::format_to_mime(fmt),
-                            };
-                            if let Err(e) = tcache::Store::global().put(&cs, coord, stored, Some((*ci).clone())) {
-                                pfc.fetch_add(1, Ordering::Relaxed);
-                                log::warn!("tile_cache put failed src={} z={} x={} y={}: {}", cs.as_str(), coord.z, coord.x, coord.y, e);
-                            }
-                        }
-                    }
-                }
-
-                (tile, final_result)
+                let result = result.and_then(|bytes| bytes.ok_or_else(|| "no_data".to_string()))
+                    .map(|bytes| (MergerTileSource::from_path(file_path), Some(bytes)));
+                (tile, result)
             }
         });
 
@@ -1046,7 +1057,8 @@ impl TileDownloader {
                 _ = cancellation.cancelled() => return Err("任务已取消".into()),
                 result = tile_stream.next() => {
                     match result {
-                        Some((tile, Ok(path))) => {
+                        Some((tile, Ok((path, bytes)))) => {
+                            if let Some(bytes) = bytes { cache_writes.record(&tile, bytes).await; }
                             tile_files.insert((tile.x, tile.y), path);
                             last_good_tile = std::time::Instant::now();
                             completed += 1;
@@ -1104,7 +1116,7 @@ impl TileDownloader {
                             total, completed, failed, no_data: no_data_count, browse_filled: active_downloads::browse_filled_count() as u32, status,
                         });
                         // 一次性触发：缓存写入失败 >= 50 次时主动告警
-                        let pf = put_fail_count.load(Ordering::Relaxed);
+                        let pf = cache_writes.failed;
                         if !high_putfail_warned && pf >= 50 {
                             high_putfail_warned = true;
                             progress_callback(DownloadProgress {
@@ -1184,8 +1196,6 @@ impl TileDownloader {
                 let client = self.client.clone();
                 let td = temp_dir.clone();
                 let cs = cache_src.clone();
-                let ci = cache_info.clone();
-                let pfc = put_fail_count.clone();
 
                 async move {
                     let file_path = td.join(tile.x.to_string()).join(format!("{}.png", tile.y));
@@ -1195,38 +1205,16 @@ impl TileDownloader {
                     if tcache::get_config().enabled {
                         if let Ok(Some(stored)) = tcache::Store::global().get(&cs, coord) {
                             if crate::historical_sources::usable_cached_tile(&url, &stored.bytes) {
-                                return (tile, persist_cached_tile(file_path, stored.bytes).await);
+                                return (tile, persist_cached_tile(file_path, stored.bytes).await.map(|path| (path, None)));
                             }
                         }
                     }
 
                     // 重试轮只给 1 次重试机会
                     let result = Self::download_one_tile(&client, &url, &headers, &file_path, 1, None, &self.rate_limit, self.tianditu_tokens.as_deref()).await;
-                    let final_result: Result<MergerTileSource, String> = result.and_then(|_| {
-                        if file_path.exists() {
-                            Ok(MergerTileSource::from_path(file_path.clone()))
-                        } else {
-                            Err("no_data".to_string())
-                        }
-                    });
-
-                    if final_result.is_ok() && tcache::get_config().enabled {
-                        if let Ok(bytes) = tokio::fs::read(&file_path).await {
-                            if !bytes.is_empty() && bytes.len() <= 4 * 1024 * 1024 {
-                                let fmt = Self::detect_format(&bytes);
-                                let stored = StoredTile {
-                                    bytes,
-                                    content_type: Self::format_to_mime(fmt),
-                                };
-                                if let Err(e) = tcache::Store::global().put(&cs, coord, stored, Some((*ci).clone())) {
-                                    pfc.fetch_add(1, Ordering::Relaxed);
-                                    log::warn!("tile_cache put failed (retry) src={} z={} x={} y={}: {}", cs.as_str(), coord.z, coord.x, coord.y, e);
-                                }
-                            }
-                        }
-                    }
-
-                    (tile, final_result)
+                    let result = result.and_then(|bytes| bytes.ok_or_else(|| "no_data".to_string()))
+                        .map(|bytes| (MergerTileSource::from_path(file_path), Some(bytes)));
+                    (tile, result)
                 }
             });
 
@@ -1242,7 +1230,8 @@ impl TileDownloader {
                     if token.is_cancelled() { return Err("任务已取消".to_string()); }
                 }
                 match result {
-                    Ok(path) => {
+                    Ok((path, bytes)) => {
+                        if let Some(bytes) = bytes { cache_writes.record(&tile, bytes).await; }
                         tile_files.insert((tile.x, tile.y), path);
                         last_good_tile = std::time::Instant::now();
                         completed += 1;
@@ -1268,6 +1257,8 @@ impl TileDownloader {
 
             failed_tiles = still_failed;
         }
+
+        cache_writes.flush().await;
 
         // 报告完成
         let status = if failed == 0 && no_data_count == 0 {
@@ -1613,6 +1604,44 @@ mod tests {
     }
 
 
+
+    #[tokio::test]
+    async fn large_download_cache_budget_preserves_first_tiles_across_flushes() {
+        let _lock = tcache::CACHE_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        struct Restore(tcache::CacheConfig);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                tcache::Store::global().shutdown();
+                tcache::set_config(self.0.clone());
+            }
+        }
+        let _restore = Restore(tcache::get_config());
+        tcache::set_config(tcache::CacheConfig {
+            enabled: true, root_dir: dir.path().into(), max_total_bytes: 128 * 1024,
+        });
+        let source = SourceKey::new("bulk-budget-regression");
+        let _active = active_downloads::DownloadGuard::new(source.as_str(), &[]);
+        let mut writes = DownloadCacheWrites::new(source.clone(), Default::default(), true);
+        for x in 0..8 {
+            writes.record(&TileCoord { z: 6, x, y: 0 }, vec![x as u8; 32 * 1024]).await;
+            writes.flush().await;
+        }
+        assert_eq!(writes.failed, 0);
+        let coords: Vec<_> = (0..8).map(|x| CacheCoord { z: 6, x, y: 0 }).collect();
+        let hits = tcache::Store::global().contains_batch(&source, &coords).unwrap();
+        // SQLite page size and schema overhead can vary across builds.
+        assert!(!hits.is_empty() && hits.len() < coords.len());
+        assert!(coords[..hits.len()].iter().all(|c| hits.contains(c)));
+        assert!(writes.saturated);
+
+        let other = SourceKey::new("other-active-source");
+        let mut peer = DownloadCacheWrites::new(other.clone(), Default::default(), true);
+        peer.record(&TileCoord { z: 6, x: 7, y: 0 }, vec![1; 32 * 1024]).await;
+        peer.flush().await;
+        assert!(peer.saturated);
+        assert!(tcache::Store::global().contains_batch(&other, &coords).unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn small_network_downloads_expose_every_intermediate_completion() {

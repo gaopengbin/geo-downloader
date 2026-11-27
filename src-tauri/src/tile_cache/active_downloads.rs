@@ -51,6 +51,10 @@ pub fn unregister(source: &str) {
     }
 }
 
+pub(super) fn active_source_keys() -> Vec<String> {
+    active_sources().iter().map(|s| s.key().clone()).collect()
+}
+
 pub fn is_source_active(source: &str) -> bool {
     active_sources().get(source).is_some_and(|count| *count > 0)
 }
