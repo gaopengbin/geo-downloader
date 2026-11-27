@@ -198,6 +198,7 @@ impl Store {
             }
             let handle = self.handle(src)?;
             let mut store = handle.lock().map_err(|_| "store poisoned".to_string())?;
+            if !active_downloads::is_source_active(src.as_str()) { store.resume_browse_journal(); }
             if let Some(info) = info {
                 store.ensure_metadata(&info)?;
             } else {
@@ -259,8 +260,9 @@ impl Store {
                 if batch.is_empty() { return Ok(false); }
             }
             written_bytes = batch.iter().map(|(_, tile)| tile.bytes.len() as u64).sum();
-            let handle = self.handle_for_workload(src, true)?;
+            let handle = self.handle_for_workload(src, large_scan)?;
             let mut store = handle.lock().map_err(|_| "store poisoned".to_string())?;
+            if large_scan { store.prepare_bulk_journal(); }
             if let Some(info) = info { store.ensure_metadata(&info)?; }
             store.put_batch(&batch)?;
         }

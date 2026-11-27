@@ -12,6 +12,7 @@ use super::{xyz_to_tms_row, SourceInfo, SourceStats, StoredTile, TileCoord};
 pub struct TileStore {
     conn: Connection,
     source_key: String,
+    tried_bulk_journal: bool,
 }
 
 impl TileStore {
@@ -62,7 +63,37 @@ impl TileStore {
         Ok(Self {
             conn,
             source_key: source_key.to_string(),
+            tried_bulk_journal: fresh_bulk,
         })
+    }
+
+    // A preview, preflight or another process may already have this database
+    // open. A journal-mode change is optional and must never wait for an
+    // external reader. Restore the connection's ordinary write timeout.
+    fn try_journal_mode(&self, pragma: &str) -> Option<String> {
+        let timeout_ms = self.conn.pragma_query_value(None, "busy_timeout", |r| r.get::<_, u32>(0)).ok()?;
+        self.conn.busy_timeout(std::time::Duration::ZERO).ok()?;
+        let mode = self.conn.query_row(pragma, [], |r| r.get(0)).ok();
+        let _ = self.conn.busy_timeout(std::time::Duration::from_millis(timeout_ms.into()));
+        mode
+    }
+
+    pub(super) fn prepare_bulk_journal(&mut self) {
+        if self.tried_bulk_journal { return; }
+        self.tried_bulk_journal = true;
+        if self.conn.pragma_update(None, "synchronous", "FULL").is_ok()
+            && self.try_journal_mode("PRAGMA journal_mode=DELETE").as_deref() != Some("delete")
+        {
+            let _ = self.conn.pragma_update(None, "synchronous", "NORMAL");
+        }
+    }
+
+    pub(super) fn resume_browse_journal(&mut self) {
+        if !self.tried_bulk_journal { return; }
+        self.tried_bulk_journal = false;
+        if self.try_journal_mode("PRAGMA journal_mode=WAL").as_deref() == Some("wal") {
+            let _ = self.conn.pragma_update(None, "synchronous", "NORMAL");
+        }
     }
 
     /// 写入或更新基础元数据。仅在缺失时填入，不覆盖用户已有值（除了 last_used_at）。
@@ -407,6 +438,25 @@ mod tests {
         drop(store);
         let store = TileStore::open(&path, "download").unwrap();
         assert_eq!(store.get(coord).unwrap().unwrap().bytes, batch[0].1.bytes);
+    }
+
+    #[test]
+    fn bulk_journal_reuses_preview_database_and_respects_external_readers() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("preview.mbtiles");
+        let mut store = TileStore::open(&path, "preview").unwrap();
+        let mode = |s: &TileStore| s.conn.pragma_query_value(None, "journal_mode", |r| r.get::<_, String>(0)).unwrap();
+        store.prepare_bulk_journal();
+        assert_eq!(mode(&store), "delete");
+        store.resume_browse_journal();
+        assert_eq!(mode(&store), "wal");
+        let reader = Connection::open(&path).unwrap();
+        reader.execute_batch("BEGIN; SELECT count(*) FROM tiles;").unwrap();
+        store.prepare_bulk_journal();
+        assert_eq!(mode(&store), "wal");
+        let coord = TileCoord { z: 1, x: 1, y: 1 };
+        store.put_batch(&[(coord, StoredTile { bytes: vec![7], content_type: "image/png".into() })]).unwrap();
+        assert_eq!(store.get(coord).unwrap().unwrap().bytes, [7]);
     }
 
     /// 空入参直接返回空集，不应触碰 DB。
