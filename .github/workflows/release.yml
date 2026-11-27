@@ -43,6 +43,8 @@ jobs:
           python-version: '3.12'
       - name: Test release validation
         run: python -m unittest discover -s control/scripts -p test_validate_release.py
+      - name: Test Windows installer verification
+        run: python -m unittest discover -s control/scripts -p test_windows_release_payload.py
       - name: Test update manifest canonical links
         run: python -m unittest discover -s control/scripts -p test_update_manifest.py
       - name: Validate tag, native versions and release notes
@@ -64,7 +66,7 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             label: macOS-arm64
-          - platform: macos-latest
+          - platform: macos-15-intel
             target: x86_64-apple-darwin
             label: macOS-x64
           - platform: ubuntu-22.04
@@ -85,7 +87,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb xauth dbus-x11
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -123,6 +125,11 @@ jobs:
           echo "npm install failed after 3 attempts"
           exit 1
 
+      - name: Run frontend regressions
+        if: runner.os == 'Windows'
+        working-directory: frontend
+        run: npm test
+
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
 
@@ -130,13 +137,27 @@ jobs:
         # 用 binstall 拉预编译二进制（秒级），替代 cargo install 从源码编译（~10 分钟）
         run: cargo binstall -y --locked tauri-cli@^2
 
-      - name: Build
+      - name: Build and verify production frontend configuration
+        shell: bash
         env:
           VITE_TELEMETRY_ENDPOINT: https://laogao.xyz/geod-telemetry/v1/events
-        run: cargo tauri build --target ${{ matrix.target }} -- --locked
+        run: |
+          set -euo pipefail
+          cargo tauri build --target ${{ matrix.target }} -- --locked
+          grep -Fq "$VITE_TELEMETRY_ENDPOINT" frontend/dist/assets/*.js
 
-      - name: Verify macOS app signature
-        if: matrix.platform == 'macos-latest'
+      - name: Run native regressions on the shipping architecture
+        shell: bash
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')
+          test "$host" = "$RELEASE_TARGET"
+          cargo test --release --locked --manifest-path src-tauri/Cargo.toml --target "$RELEASE_TARGET" --lib -- --test-threads=1
+
+      - name: Verify and launch the macOS app from the release DMG
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           DMG=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -type f -name "*.dmg" | head -1)
@@ -146,15 +167,39 @@ jobs:
           hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT_DIR"
           APP=$(find "$MOUNT_DIR" -maxdepth 1 -type d -name "*.app" -print -quit)
           test -n "$APP"
+          executable=$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist")
+          lipo -verify_arch "$(uname -m)" "$APP/Contents/MacOS/$executable"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv --verbose=4 "$APP" 2>&1
+          installed=$(mktemp -d "$RUNNER_TEMP/geod-mac-app.XXXXXX")/"$(basename "$APP")"
+          ditto "$APP" "$installed"
+          python3 scripts/check_unix_release_startup.py "$installed/Contents/MacOS/$executable"
+
+      - name: Checkout the Windows installer verification tool
+        if: runner.os == 'Windows'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: release-control
+          sparse-checkout: |
+            scripts/check_windows_release_payload.py
+            scripts/test_windows_upgrade.mjs
+          sparse-checkout-cone-mode: false
 
       # Windows: 收集 .exe
       - name: Collect Windows artifacts
         if: matrix.platform == 'windows-latest'
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          GEOD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           $exeFile = Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          python release-control/scripts/check_windows_release_payload.py $exeFile.FullName "src-tauri/target/${{ matrix.target }}/release/geo-downloader.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node release-control/scripts/test_windows_upgrade.mjs $exeFile.FullName "$env:RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $newName = "GeoDownloader_${{ needs.validate.outputs.version }}_windows_x64-setup.exe"
           Copy-Item $exeFile.FullName -Destination $newName
           echo "ARTIFACT=$newName" >> $env:GITHUB_OUTPUT
@@ -162,7 +207,7 @@ jobs:
 
       # macOS: 收集 .dmg
       - name: Collect macOS artifacts
-        if: matrix.platform == 'macos-latest'
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           ARCH=$([[ "${{ matrix.target }}" == *aarch64* ]] && echo "arm64" || echo "x64")
@@ -179,6 +224,17 @@ jobs:
         run: |
           DEB=$(find src-tauri/target/${{ matrix.target }}/release/bundle/deb -name "*.deb" | head -1)
           APPIMAGE=$(find src-tauri/target/${{ matrix.target }}/release/bundle/appimage -name "*.AppImage" | head -1)
+          test "$(dpkg-deb -f "$DEB" Architecture)" = amd64
+          LC_ALL=C readelf -h "$APPIMAGE" | grep 'Machine:.*X86-64'
+          sudo apt-get install -y "./$DEB"
+          deb_binary=$(dpkg-deb --contents "$DEB" | awk '$NF ~ /^\.\/usr\/bin\/[^/]+$/ {sub(/^\./,"",$NF); print $NF}')
+          test -x "$deb_binary"
+          dbus-run-session -- xvfb-run -a python3 scripts/check_unix_release_startup.py "$deb_binary"
+          # Execute the AppImage payload on runners that do not expose /dev/fuse.
+          appimage_path=$(realpath "$APPIMAGE")
+          appimage_dir=$(mktemp -d "$RUNNER_TEMP/geod-appimage.XXXXXX")
+          (cd "$appimage_dir" && "$appimage_path" --appimage-extract > /dev/null)
+          dbus-run-session -- xvfb-run -a python3 scripts/check_unix_release_startup.py "$appimage_dir/squashfs-root/AppRun"
           DEB_NAME="GeoDownloader_${{ needs.validate.outputs.version }}_linux_amd64.deb"
           APPIMAGE_NAME="GeoDownloader_${{ needs.validate.outputs.version }}_linux_amd64.AppImage"
           cp "$DEB" "$DEB_NAME"
@@ -191,6 +247,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.label }}
+          if-no-files-found: error
           path: GeoDownloader_*
           retention-days: 3
 
