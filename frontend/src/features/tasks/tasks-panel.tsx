@@ -699,14 +699,15 @@ export function TasksPanel() {
         return status === 'paused' || status === 'pending_decision' || isCompletedWithGaps(status)
       })
       let success = 0
+      const batch = { id: crypto.randomUUID(), limit: 2 }
       for (const task of targets) {
         const status = String(task.status)
         if (status === 'paused') await togglePauseTask(task.id)
-        else await resumeTask(task.id)
+        else await resumeTask(task.id, batch)
         success += 1
       }
       for (const task of selectedResumable) {
-        await resumeTask(task.task_id)
+        await resumeTask(task.task_id, batch)
         success += 1
       }
       return success

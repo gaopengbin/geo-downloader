@@ -16,7 +16,7 @@ use crate::region_bookmarks::{
     BookmarkBounds, BookmarkPolygon, RegionBookmark, RegionBookmarkStore,
 };
 use crate::settings::{AppSettings, SettingsManager};
-use crate::task::{TaskManager, TaskInfo, TaskLog, TaskStatus, PersistedTask, PauseControl};
+use crate::task::{BatchOptions, BatchSlots, TaskManager, TaskInfo, TaskLog, TaskStatus, PersistedTask, PauseControl};
 use crate::tiles3d;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -840,6 +840,7 @@ pub async fn create_download_task(
     request: DownloadRequest,
     task_name: String,
     source_name: String,
+    batch: Option<BatchOptions>,
 ) -> Result<CreateTaskResult, String> {
     let save_path = request.save_path.clone()
         .ok_or_else(|| "未指定保存路径".to_string())?;
@@ -875,7 +876,9 @@ pub async fn create_download_task(
     ensure_download_disk_space(&request, &save_path, work_dir.as_deref())?;
     
     // 持久化任务（用于断点续传）
+    let slots = task_manager.slots_for_batch(batch.as_ref())?;
     let persisted = PersistedTask {
+        batch,
         task_id: task_id.clone(),
         task_name: task_name.clone(),
         source_name: source_name.clone(),
@@ -911,7 +914,7 @@ pub async fn create_download_task(
     tokio::spawn(async move {
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
-            request, source, save_path.clone(), work_dir,
+            request, source, save_path.clone(), work_dir, slots,
             tile_count, &task_name, &source_name,
         ).await;
 
@@ -1922,6 +1925,20 @@ fn zoom_level_save_path(save_path: &str, zoom: u8, multi_zoom: bool) -> Result<S
     Ok(zoom_dir.join(file_name).to_string_lossy().to_string())
 }
 
+async fn enter_task_batch<'a>(
+    slots: Option<&'a BatchSlots>,
+    tm: &TaskManager,
+    task_id: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+    pause: &PauseControl,
+) -> Result<Option<tokio::sync::SemaphorePermit<'a>>, String> {
+    let Some(slots) = slots else { return Ok(None) };
+    tm.set_batch_waiting(task_id, true);
+    let result = slots.enter(cancel, pause).await;
+    tm.set_batch_waiting(task_id, false);
+    result.map(Some)
+}
+
 /// 执行完整下载任务。
 ///
 /// 单级别任务直接调用 `execute_zoom_level`；多级别任务按 zoom 递增串行执行，
@@ -1936,10 +1953,13 @@ async fn execute_download_task(
     mut source: TileSource,
     save_path: String,
     work_dir: Option<PathBuf>,
+    slots: Option<Arc<BatchSlots>>,
     tile_count: u32,
     task_name: &str,
     source_name: &str,
 ) -> Result<(), String> {
+    // Hold the permit through download, export, pyramid generation and cleanup.
+    let _permit = enter_task_batch(slots.as_deref(), tm, task_id, cancel_token, pause_control).await?;
     let event_name = format!("task-progress-{}", task_id);
     validate_offline_sources(&request, &source)?;
     let app_tokens = app.clone();
@@ -2466,8 +2486,9 @@ pub fn toggle_pause_task(
 ) -> bool {
     let (ok, paused) = task_manager.toggle_pause(&task_id);
     if ok {
-        let status = if paused { "paused" } else { "downloading" };
-        let msg = if paused { "已暂停" } else { "已恢复下载" };
+        let queued = !paused && task_manager.task_status(&task_id) == Some(TaskStatus::Pending);
+        let status = if paused { "paused" } else if queued { "pending" } else { "downloading" };
+        let msg = if paused { "已暂停" } else if queued { "等待批量任务名额" } else { "已恢复下载" };
         task_log(&app, &task_manager, &task_id, "INFO", msg);
         let _ = app.emit(&format!("task-progress-{}", task_id), TaskProgressPayload {
             task_id: task_id.clone(),
@@ -2502,15 +2523,7 @@ pub fn remove_task(task_manager: State<'_, Arc<TaskManager>>, task_id: String) -
 pub fn get_resumable_tasks(task_manager: State<'_, Arc<TaskManager>>) -> Vec<PersistedTask> {
     // task_file 在下载期间始终存在，用于崩溃恢复。暂停只是当前进程内的运行状态，
     // 不能同时把它暴露成“中断任务”，否则前端恢复会以同一 ID 再启动一条下载流程。
-    let in_memory_ids: std::collections::HashSet<String> = task_manager
-        .get_all_tasks()
-        .into_iter()
-        .map(|t| t.id)
-        .collect();
-    crate::task::load_resumable_tasks()
-        .into_iter()
-        .filter(|t| !in_memory_ids.contains(&t.task_id))
-        .collect()
+    task_manager.resumable_tasks()
 }
 
 fn refresh_task_tianditu_token(request: &mut DownloadRequest, settings: &AppSettings) {
@@ -2525,6 +2538,7 @@ pub async fn resume_task(
     app: AppHandle,
     task_manager: State<'_, Arc<TaskManager>>,
     task_id: String,
+    batch: Option<BatchOptions>,
 ) -> Result<CreateTaskResult, String> {
     let _operation = task_manager.begin_task_operation(&task_id)?;
     // 暂停仍有工作线程，继续时使用 toggle_pause_task。
@@ -2536,11 +2550,15 @@ pub async fn resume_task(
     }
 
     // 读取持久化任务
-    let tasks = crate::task::load_resumable_tasks();
-    let persisted = tasks.into_iter()
-        .find(|t| t.task_id == task_id)
+    let mut persisted = crate::task::load_task_file(&task_id)
+        .filter(|saved| saved.task_id == task_id)
         .ok_or_else(|| "未找到可恢复的任务".to_string())?;
-    
+    let slots = task_manager.slots_for_batch(persisted.batch.as_ref().or(batch.as_ref()))?;
+    if persisted.batch.is_none() && batch.is_some() {
+        persisted.batch = batch;
+        crate::task::save_task_file(&persisted)?;
+    }
+
     let mut request = persisted.request.clone();
     // A resumed task must use the latest saved credentials, including clears.
     let current_settings = SettingsManager::new()?.get()?;
@@ -2593,7 +2611,7 @@ pub async fn resume_task(
     tokio::spawn(async move {
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
-            request, source, save_path.clone(), work_dir,
+            request, source, save_path.clone(), work_dir, slots,
             tile_count, &task_name, &source_name,
         ).await;
         
@@ -2711,6 +2729,54 @@ fn scan_temp_dir_for_zoom(
 }
 
 #[cfg(test)]
+mod batch_export_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "writes and verifies 800 single-tile GeoTIFFs"]
+    async fn batch_exports_800_geotiffs_with_only_two_active_at_a_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = Arc::new(TaskManager::new_with_log_dir(dir.path().join("logs")));
+        let batch = BatchOptions { id: uuid::Uuid::new_v4().to_string(), limit: 2 };
+        let tile = dir.path().join("tile.png");
+        image::RgbImage::from_pixel(256, 256, image::Rgb([44u8, 92, 124])).save(&tile).unwrap();
+        let tiles = Arc::new(HashMap::from([((0, 0), merger::TileSource::from_path(tile))]));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut jobs = tokio::task::JoinSet::new();
+        for index in 0..800 {
+            let manager = manager.clone();
+            let slots = manager.slots_for_batch(Some(&batch)).unwrap().unwrap();
+            let (active, peak, tiles) = (active.clone(), peak.clone(), tiles.clone());
+            let id = index.to_string();
+            let path = dir.path().join(format!("{id}.tif"));
+            let (cancel, pause) = manager.create_task(id.clone(), id.clone(), "test".into(),
+                "Test".into(), 1, "geotiff".into(), path.to_string_lossy().into_owned(), 1);
+            jobs.spawn(async move {
+                let _permit = enter_task_batch(Some(&slots), &manager, &id, &cancel, &pause).await.unwrap();
+                peak.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                let size = tokio::task::spawn_blocking(move || {
+                    let bounds = tile::get_merged_bounds(0, 0, 0, 0, 1);
+                    let size = streaming_tiff::merge_and_export_streaming_with_budget(
+                        &tiles, 0, 0, 0, 0, &bounds, &path, "lzw", None, 1_048_576u64,
+                    ).unwrap();
+                    let result = image::open(path).unwrap().to_rgb8();
+                    assert_eq!(result.dimensions(), (256, 256));
+                    assert_eq!(result.get_pixel(128, 128).0, [44, 92, 124]);
+                    size
+                }).await.unwrap();
+                manager.complete_task(&id, size);
+                active.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+        while let Some(result) = jobs.join_next().await { result.unwrap(); }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        assert_eq!(manager.get_all_tasks().iter().filter(|t| t.status == TaskStatus::Completed).count(), 800);
+    }
+}
+
+#[cfg(test)]
 mod resumable_tile_scan_tests {
     use super::*;
 
@@ -2773,12 +2839,16 @@ pub async fn export_partial_task(
     task_manager: State<'_, Arc<TaskManager>>,
     task_id: String,
 ) -> Result<(), String> {
-    // 1) 加载持久化任务
-    let tasks = crate::task::load_resumable_tasks();
-    let persisted = tasks
-        .into_iter()
-        .find(|t| t.task_id == task_id)
+    let _operation = task_manager.begin_task_operation(&task_id)?;
+    if !matches!(task_manager.task_status(&task_id),
+        None | Some(TaskStatus::PendingDecision | TaskStatus::CompletedWithGaps | TaskStatus::Failed)
+    ) {
+        return Err("当前任务状态无法强制导出，请刷新任务列表".into());
+    }
+    let persisted = crate::task::load_task_file(&task_id)
+        .filter(|saved| saved.task_id == task_id)
         .ok_or_else(|| "未找到可恢复的任务".to_string())?;
+    let slots = task_manager.slots_for_batch(persisted.batch.as_ref())?;
 
     let mut request = persisted.request.clone();
     // A resumed task must use the latest saved credentials, including clears.
@@ -2816,7 +2886,8 @@ pub async fn export_partial_task(
     }
 
     // 3) 校验 temp_dir
-    let base_temp_dir = std::env::temp_dir().join(format!("tif-dl-{}", task_id));
+    let base_temp_dir = crate::task::resolved_task_work_dir(&persisted)
+        .ok_or("任务缺少工作目录")?;
     if !base_temp_dir.exists() {
         return Err("临时目录不存在，缓存已被清理，无法强制导出".to_string());
     }
@@ -2846,23 +2917,10 @@ pub async fn export_partial_task(
     };
     let multi_zoom = zooms.len() > 1;
 
-    // 5) 注册任务（如未注册），让 UI 显示导出进度
-    let already_registered = task_manager
-        .get_all_tasks()
-        .iter()
-        .any(|t| t.id == task_id);
-    if !already_registered {
-        task_manager.create_task(
-            task_id.clone(),
-            task_name.clone(),
-            request.source.clone(),
-            source_name.clone(),
-            request.zoom,
-            request.format.clone(),
-            save_path.clone(),
-            total_estimated,
-        );
-    }
+    let (cancel, pause) = task_manager.create_task(
+        task_id.clone(), task_name.clone(), request.source.clone(), source_name.clone(),
+        request.zoom, request.format.clone(), save_path.clone(), total_estimated,
+    );
 
     let event_name = format!("task-progress-{}", task_id);
     let tm_arc = Arc::clone(&task_manager);
@@ -2875,6 +2933,11 @@ pub async fn export_partial_task(
 
     // 6) spawn 后台导出
     tokio::spawn(async move {
+        let _permit = match enter_task_batch(slots.as_deref(), &tm_arc, &tid, &cancel, &pause).await {
+            Ok(permit) => permit,
+            Err(_) if cancel.is_cancelled() => { tm_arc.mark_cancelled(&tid); return; }
+            Err(error) => { tm_arc.fail_task(&tid, error); return; }
+        };
         let start = std::time::Instant::now();
         task_log(&app_clone, &tm_arc, &tid, "INFO", "=== 强制按现状导出任务开始 ===");
         task_log(&app_clone, &tm_arc, &tid, "INFO", &format!(
@@ -2886,6 +2949,7 @@ pub async fn export_partial_task(
         let mut zoom_failures: Vec<u8> = Vec::new();
 
         for (idx, zoom) in zooms.iter().enumerate() {
+            if cancel.is_cancelled() { tm_arc.mark_cancelled(&tid); return; }
             tm_arc.update_progress(
                 &tid,
                 TaskStatus::Exporting,
@@ -3011,6 +3075,7 @@ pub async fn export_partial_task(
             }
         }
 
+        if cancel.is_cancelled() { tm_arc.mark_cancelled(&tid); return; }
         let elapsed = start.elapsed();
 
         if total_exported == 0 {
@@ -4268,6 +4333,7 @@ pub async fn create_wayback_task(
 
     // 持久化任务
     let persisted = PersistedTask {
+        batch: None,
         task_id: task_id.clone(),
         task_name: task_name.clone(),
         source_name: source_name.clone(),
@@ -4297,7 +4363,7 @@ pub async fn create_wayback_task(
     tokio::spawn(async move {
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
-            request, source, save_path, work_dir,
+            request, source, save_path, work_dir, None,
             tile_count, &task_name, &source_name,
         ).await;
 

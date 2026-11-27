@@ -202,6 +202,7 @@ export function BatchDialog() {
     let queueIdx = 0
     const concurrency = Math.max(1, Math.min(batchConcurrency, tasks.length))
 
+    const batch = { id: crypto.randomUUID(), limit: concurrency }
     const launchOne = async (task: (typeof tasks)[number]) => {
       const bbox = featureBbox(task.feature)
       if (!bbox) {
@@ -227,7 +228,7 @@ export function BatchDialog() {
         overlay_sources: overlays.length ? overlays : null,
       }
       try {
-        await createDownloadTask(request, task.filename, params.sourceName || params.source)
+        await createDownloadTask(request, task.filename, params.sourceName || params.source, batch)
         success++
       } catch (err) {
         failed++

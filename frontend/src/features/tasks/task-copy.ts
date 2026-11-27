@@ -22,6 +22,7 @@ export function getTaskStatusKey(status: string): string | null {
 
 export function getTaskMessage(task: TaskInfo, translate: (key: string, values?: Record<string, number | string>) => string) {
   if (task.preparation && (task.status === 'preparing' || task.status === 'paused')) return translate('tasks.labels.preparingHistory', task.preparation)
+  if (task.message === 'BATCH_TASK_QUEUED') return translate('tasks.labels.batchQueued')
   const batchPause = /^DOWNLOAD_BATCH_PAUSE:(\d+)$/.exec(task.message ?? '')
   if (batchPause) return translate('tasks.labels.batchPause', { seconds: Number(batchPause[1]) })
   if (task.source === 'osm_vector') {

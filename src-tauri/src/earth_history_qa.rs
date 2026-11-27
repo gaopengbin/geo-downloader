@@ -26,6 +26,7 @@ pub async fn qa_create_task(
         request,
         name,
         "Google Earth historical imagery".into(),
+        None,
     )
     .await?;
     let paused = if pause_immediately {

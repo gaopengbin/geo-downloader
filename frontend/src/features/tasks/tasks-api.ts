@@ -1,6 +1,6 @@
 import { invokeCommand } from '@/lib/tauri'
 import { trackTelemetry } from '@/features/telemetry/telemetry-client'
-import type { CreateTaskResult, PersistedTask, TaskInfo, TaskLog } from '@/types/api'
+import type { BatchOptions, CreateTaskResult, PersistedTask, TaskInfo, TaskLog } from '@/types/api'
 import { taskProgressState } from './task-progress-state'
 
 export function getActiveTasks() {
@@ -46,8 +46,8 @@ export function getResumableTasks() {
   return invokeCommand<PersistedTask[]>('get_resumable_tasks')
 }
 
-export function resumeTask(taskId: string) {
-  return invokeCommand<CreateTaskResult>('resume_task', { taskId }).then((result) => {
+export function resumeTask(taskId: string, batch?: BatchOptions) {
+  return invokeCommand<CreateTaskResult>('resume_task', { taskId, batch }).then((result) => {
     void trackTelemetry('task_action', { action: 'resume' })
     return result
   })

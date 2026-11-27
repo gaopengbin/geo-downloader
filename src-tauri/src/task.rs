@@ -84,6 +84,7 @@ struct TaskEntry {
     cancel_token: CancellationToken,
     pause_control: PauseControl,
     logs: Vec<TaskLog>,
+    waiting_for_batch: bool,
     token_pool: Option<Arc<crate::tianditu_tokens::TiandituTokens>>,
     log_writer: Option<Arc<Mutex<crate::task_log::TaskLogWriter>>>,
 }
@@ -96,10 +97,47 @@ impl TaskEntry {
     }
 }
 
+/// Shared by all tasks submitted from the same batch dialog and persisted for retry.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BatchOptions {
+    pub id: String,
+    pub limit: usize,
+}
+
+pub(crate) struct BatchSlots {
+    limit: usize,
+    permits: tokio::sync::Semaphore,
+}
+
+impl BatchSlots {
+    pub(crate) async fn enter(
+        &self,
+        cancel: &CancellationToken,
+        pause: &PauseControl,
+    ) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err("任务已取消".into()),
+                _ = pause.wait_if_paused() => {}
+            }
+            let permit = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err("任务已取消".into()),
+                result = self.permits.acquire() => result.map_err(|_| "批量队列已关闭")?,
+            };
+            if !pause.is_paused() {
+                return Ok(permit);
+            }
+        }
+    }
+}
+
 /// 全局任务管理器
 pub struct TaskManager {
     tasks: Arc<Mutex<HashMap<String, TaskEntry>>>,
     task_operations: Mutex<HashSet<String>>,
+    batch_slots: Mutex<HashMap<String, std::sync::Weak<BatchSlots>>>,
     log_dir: PathBuf,
     event_sink: Mutex<Option<Arc<dyn Fn(TaskInfo) + Send + Sync>>>,
     revision: std::sync::atomic::AtomicU64,
@@ -130,10 +168,45 @@ impl TaskManager {
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             task_operations: Mutex::new(HashSet::new()),
+            batch_slots: Mutex::new(HashMap::new()),
             log_dir,
             event_sink: Mutex::new(None),
             revision: std::sync::atomic::AtomicU64::new(1),
         }
+    }
+
+    pub(crate) fn slots_for_batch(
+        &self,
+        batch: Option<&BatchOptions>,
+    ) -> Result<Option<Arc<BatchSlots>>, String> {
+        let Some(batch) = batch else { return Ok(None) };
+        if uuid::Uuid::parse_str(&batch.id).is_err() || !(1..=8).contains(&batch.limit) {
+            return Err("批量任务参数无效".into());
+        }
+        let mut batches = self.batch_slots.lock().unwrap();
+        if let Some(slots) = batches.get(&batch.id).and_then(std::sync::Weak::upgrade) {
+            if slots.limit != batch.limit {
+                return Err("同一批任务的并发数不一致".into());
+            }
+            return Ok(Some(slots));
+        }
+        batches.retain(|_, slots| slots.strong_count() > 0);
+        let slots = Arc::new(BatchSlots {
+            limit: batch.limit,
+            permits: tokio::sync::Semaphore::new(batch.limit),
+        });
+        batches.insert(batch.id.clone(), Arc::downgrade(&slots));
+        Ok(Some(slots))
+    }
+
+    pub(crate) fn set_batch_waiting(&self, id: &str, waiting: bool) {
+        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
+            entry.waiting_for_batch = waiting;
+            if entry.info.status == TaskStatus::Pending {
+                entry.info.message = waiting.then(|| "BATCH_TASK_QUEUED".to_owned());
+            }
+        }
+        self.notify_changed(id);
     }
 
     /// Reserve the task through status checks and disk changes.
@@ -246,6 +319,7 @@ impl TaskManager {
             cancel_token: cancel_token.clone(),
             pause_control: pause_control.clone(),
             logs: Vec::new(),
+            waiting_for_batch: false,
             token_pool: None,
             log_writer,
         };
@@ -429,8 +503,9 @@ impl TaskManager {
                 // 恢复
                 entry.pause_control.flag.store(false, Ordering::Relaxed);
                 entry.pause_control.notify.notify_waiters();
-                entry.info.status = if entry.info.preparation.is_some() { TaskStatus::Preparing } else { TaskStatus::Downloading };
-                entry.info.message = Some("已恢复下载".to_string());
+                entry.info.status = if entry.waiting_for_batch { TaskStatus::Pending }
+                    else if entry.info.preparation.is_some() { TaskStatus::Preparing } else { TaskStatus::Downloading };
+                entry.info.message = Some(if entry.waiting_for_batch { "BATCH_TASK_QUEUED" } else { "已恢复下载" }.into());
                 (true, false)
             } else {
                 // 暂停
@@ -460,6 +535,11 @@ impl TaskManager {
                 entry.info.download_diagnostics=Some(crate::tianditu_tokens::TokenDiagnostics::execution_only(diagnostic));
             }
         }
+    }
+
+    pub fn resumable_tasks(&self) -> Vec<PersistedTask> {
+        let registered_ids = self.tasks.lock().unwrap().keys().cloned().collect();
+        load_resumable_tasks_from(&tasks_dir(), &registered_ids)
     }
 
     pub fn get_all_tasks(&self) -> Vec<TaskInfo> {
@@ -623,6 +703,37 @@ fn task_id_prefix(id: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn queued_batch_tasks_can_pause_and_cancel_without_blocking_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = TaskManager::new_with_log_dir(dir.path().into());
+        let batch = BatchOptions { id: uuid::Uuid::new_v4().to_string(), limit: 1 };
+        let slots = manager.slots_for_batch(Some(&batch)).unwrap().unwrap();
+        let incompatible = BatchOptions { limit: 2, ..batch.clone() };
+        assert!(manager.slots_for_batch(Some(&incompatible)).is_err());
+        let cancel = CancellationToken::new();
+        let running = slots.enter(&cancel, &PauseControl::new()).await.unwrap();
+        let (queued_cancel, queued_pause) = manager.create_task(
+            "queued".into(), "Queued".into(), "test".into(), "Test".into(), 1,
+            "geotiff".into(), "output".into(), 1,
+        );
+        manager.set_batch_waiting("queued", true);
+        let waiting = slots.enter(&queued_cancel, &queued_pause);
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        assert_eq!(manager.toggle_pause("queued"), (true, true));
+        drop(running);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        let other = slots.permits.try_acquire().expect("paused worker must release its slot");
+        assert_eq!(manager.toggle_pause("queued"), (true, false));
+        assert_eq!(manager.task_status("queued"), Some(TaskStatus::Pending));
+        assert!(futures::poll!(&mut waiting).is_pending());
+        manager.cancel_task("queued");
+        assert!(waiting.await.is_err());
+        drop(other);
+        assert_eq!(slots.permits.available_permits(), 1);
+    }
 
     #[test]
     fn running_retry_cannot_be_removed_and_blocks_other_task_operations() {
@@ -805,6 +916,8 @@ use crate::commands::DownloadRequest;
 /// 持久化的任务数据（用于崩溃后恢复）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistedTask {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<BatchOptions>,
     pub task_id: String,
     pub task_name: String,
     pub source_name: String,
@@ -839,18 +952,21 @@ pub fn remove_task_file(task_id: &str) {
     let _ = std::fs::remove_file(path);
 }
 
-/// 加载所有可恢复的任务
+/// 加载所有已持久化的任务，包括当前进程内正在执行的任务。
 pub fn load_resumable_tasks() -> Vec<PersistedTask> {
-    let dir = tasks_dir();
-    load_resumable_tasks_from(&dir)
+    load_resumable_tasks_from(&tasks_dir(), &HashSet::new())
 }
 
-fn load_resumable_tasks_from(dir: &Path) -> Vec<PersistedTask> {
+fn load_resumable_tasks_from(dir: &Path, registered_ids: &HashSet<String>) -> Vec<PersistedTask> {
     let mut tasks = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "json") {
+            // Polling the interrupted list must not reopen every live job on the disk.
+            if path.file_stem().and_then(|s| s.to_str()).is_some_and(|id| registered_ids.contains(id)) {
+                continue;
+            }
+            if path.extension().is_some_and(|e| e == "json") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Ok(task) = serde_json::from_str::<PersistedTask>(&content) {
                         // 工作目录即使被系统或用户清理，任务描述仍可用于从头恢复。
@@ -887,6 +1003,9 @@ pub fn resolved_task_work_dir(task: &PersistedTask) -> Option<PathBuf> {
 }
 
 pub(crate) fn load_task_file(task_id: &str) -> Option<PersistedTask> {
+    if task_id.is_empty() || !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')) {
+        return None;
+    }
     let path = tasks_dir().join(format!("{}.json", task_id));
     let content = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
@@ -998,6 +1117,7 @@ mod persistence_tests {
 
         let task: PersistedTask = serde_json::from_str(json).unwrap();
         assert!(task.work_dir.is_none());
+        assert!(task.batch.is_none());
     }
 
     #[test]
@@ -1005,6 +1125,7 @@ mod persistence_tests {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("output").join("map.tif");
         let task = PersistedTask {
+            batch: None,
             task_id: "recoverable-task".to_string(),
             task_name: "recoverable".to_string(),
             source_name: "ArcGIS".to_string(),
@@ -1023,7 +1144,8 @@ mod persistence_tests {
         let task_file = dir.path().join("recoverable-task.json");
         std::fs::write(&task_file, serde_json::to_vec(&task).unwrap()).unwrap();
 
-        let loaded = load_resumable_tasks_from(dir.path());
+        let loaded = load_resumable_tasks_from(dir.path(), &HashSet::new());
+        assert!(load_resumable_tasks_from(dir.path(), &HashSet::from([task.task_id.clone()])).is_empty());
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].task_id, "recoverable-task");

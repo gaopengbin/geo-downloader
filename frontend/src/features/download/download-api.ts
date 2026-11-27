@@ -5,6 +5,7 @@ import {
   trackTelemetry,
 } from '@/features/telemetry/telemetry-client'
 import type {
+  BatchOptions,
   Bounds,
   CreateTaskResult,
   DownloadEstimate,
@@ -49,11 +50,13 @@ export function createDownloadTask(
   request: DownloadRequest,
   taskName: string,
   sourceName: string,
+  batch?: BatchOptions,
 ) {
   return invokeCommand<CreateTaskResult>('create_download_task', {
     request,
     taskName,
     sourceName,
+    batch,
   }).then((result) => {
     const zoomCount = request.zoom_levels?.length ??
       (request.zoom_max == null ? 1 : Math.max(1, request.zoom_max - request.zoom + 1))

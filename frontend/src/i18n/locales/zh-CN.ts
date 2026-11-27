@@ -383,6 +383,7 @@ const zhCN = {
     labels: {
       progress: '下载进度',
       preparingHistory: '准备历史影像索引 {{completed}} / {{total}}',
+      batchQueued: '等待本批次的任务名额',
       batchPause: '批次停顿，约 {{seconds}} 秒后继续下载',
       select: '选择 {{name}}',
       gaps: '缺块 {{failed}} / {{total}}',
@@ -509,7 +510,7 @@ const zhCN = {
     nameField: '命名字段',
     sourceFilename: '来源文件名',
     sequence: '序号 (001, 002, ...)',
-    concurrency: '批量并发：{{count}}',
+    concurrency: '同时执行的任务数 · {{count}}',
     selected: '已选 {{selected}} / {{total}} · {{selectedArea}} / {{totalArea}} km²',
     selectAll: '全选',
     clear: '清空',

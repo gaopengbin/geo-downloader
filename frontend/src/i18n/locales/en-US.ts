@@ -390,6 +390,7 @@ const enUS = {
     labels: {
       progress: 'Download progress',
       preparingHistory: 'Preparing historical imagery index {{completed}} / {{total}}',
+      batchQueued: 'Waiting for a slot in this batch',
       batchPause: 'Batch pause. Downloads resume in about {{seconds}} seconds.',
       select: 'Select {{name}}',
       gaps: 'Missing {{failed}} / {{total}}',
@@ -516,7 +517,7 @@ const enUS = {
     nameField: 'File name field',
     sourceFilename: 'Source file name',
     sequence: 'Sequence (001, 002, ...)',
-    concurrency: 'Batch concurrency: {{count}}',
+    concurrency: 'Concurrent tasks · {{count}}',
     selected: '{{selected}} / {{total}} selected · {{selectedArea}} / {{totalArea}} km²',
     selectAll: 'Select all',
     clear: 'Clear',

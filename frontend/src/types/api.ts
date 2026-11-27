@@ -139,6 +139,11 @@ export interface SystemMemoryInfo {
   [key: string]: unknown
 }
 
+export interface BatchOptions {
+  id: string
+  limit: number
+}
+
 export interface DownloadRequest {
   bounds: Bounds
   zoom: number
