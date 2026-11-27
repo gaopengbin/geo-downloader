@@ -2,9 +2,8 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { once } from 'node:events'
-import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises'
-import net from 'node:net'
+import { DatabaseSync } from 'node:sqlite'
+import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
@@ -65,89 +64,85 @@ if (!runtime) {
 assert(runtime, 'Edge WebView2 Runtime is required to launch the desktop app')
 console.log('Using the runner account and WebView2 runtime', runtime)
 const marker = 'custom_upgrade_' + randomUUID()
+const data = path.join(process.env.LOCALAPPDATA, 'geo-downloader')
+const historyPath = path.join(data, 'history.db')
+const settingsPath = path.join(data, 'settings.json')
+const imports = path.join(data, 'history.json')
+await mkdir(data, {recursive:true})
+const source = {id:marker, name:'Saved upgrade source', url:'http://127.0.0.1:9/{z}/{x}/{y}.png',
+  max_zoom:18, subdomains:''}
+await writeFile(settingsPath, JSON.stringify({default_concurrency:13, custom_sources:[source]}), {flag:'wx'})
 
-async function smoke(version, save) {
-  const listener = net.createServer()
-  listener.listen(0, '127.0.0.1')
-  await once(listener, 'listening')
-  const port = listener.address().port
-  await new Promise(resolve => listener.close(resolve))
-  const child = spawn(exe, [], { windowsHide:true, stdio:'ignore', env:{
+function legacyRecord(version) {
+  return {id:randomUUID(), name:'Upgrade sample '+version, source:'fixture', source_name:'Migration test',
+    zoom:7, format:'geotiff', file_path:path.join(work, 'existing.tif'), file_size:1024, tile_count:2,
+    failed_count:0, created_at:new Date().toISOString(), status:'completed'}
+}
+
+// The app itself imports the records. The probe only opens its SQLite database read-only.
+function readHistory(records) {
+  const db = new DatabaseSync(historyPath, {readOnly:true})
+  try {
+    for (const row of records) {
+      const actual = db.prepare('SELECT name, tile_count, status FROM download_history WHERE id=?').get(row.id)
+      assert(actual && actual.name === row.name && actual.tile_count === row.tile_count && actual.status === row.status)
+    }
+    assert.equal(db.prepare('PRAGMA quick_check').get().quick_check, 'ok')
+  } finally { db.close() }
+}
+
+const inspectWindow = [
+  "$app=Get-Process -Id ([int]$env:GEOD_PROBE_PID) -ErrorAction Stop",
+  "$web=@(Get-CimInstance Win32_Process -Filter \u0022Name='msedgewebview2.exe'\u0022)",
+  "$front=@($app.Id); $children=@()",
+  "while($front.Count -gt 0){ $next=@($web | Where-Object { $front -contains $_.ParentProcessId -and $children -notcontains $_.ProcessId }); if(!$next.Count){break}; $front=@($next.ProcessId); $children+=$front }",
+  "$renderers=@($web | Where-Object { $children -contains $_.ProcessId -and $_.CommandLine -match '--type=renderer' })",
+  "[pscustomobject]@{title=$app.MainWindowTitle; handle=$app.MainWindowHandle.ToInt64(); executable=$app.Path; version=$app.MainModule.FileVersionInfo.ProductVersion; renderers=$renderers.Count} | ConvertTo-Json -Compress"
+].join('\n')
+
+async function smoke(version, records) {
+  const child = spawn(exe, [], {windowsHide:true, stdio:'ignore', env:{
     ...process.env, WEBVIEW2_BROWSER_EXECUTABLE_FOLDER:runtime,
     WEBVIEW2_USER_DATA_FOLDER:path.join(work,'webview'),
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1 --disable-gpu --proxy-server=http://127.0.0.1:9 --proxy-bypass-list=127.0.0.1;localhost;tauri.localhost`,
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--disable-gpu --proxy-server=http://127.0.0.1:9 --proxy-bypass-list=127.0.0.1;localhost;tauri.localhost',
     HTTPS_PROXY:'http://127.0.0.1:9', HTTP_PROXY:'http://127.0.0.1:9', NO_PROXY:'localhost,127.0.0.1,tauri.localhost',
-  } })
-  let socket
-  let lastPages = []
-  async function evaluate(expression) {
-    const id = ++evaluate.sequence
-    const answer = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => { socket.removeEventListener('message', receive); reject(Error('WebView command timed out')) }, 15000)
-      function receive({data}) {
-        const reply = JSON.parse(data)
-        if (reply.id !== id) return
-        clearTimeout(timeout)
-        socket.removeEventListener('message', receive)
-        if (reply.error || reply.result?.exceptionDetails) reject(Error(JSON.stringify(reply)))
-        else resolve(reply.result.result.value)
-      }
-      socket.addEventListener('message', receive)
-    })
-    socket.send(JSON.stringify({ id, method:'Runtime.evaluate', params:{ expression, returnByValue:true, awaitPromise:true } }))
-    return answer
-  }
-  evaluate.sequence = 0
+  }})
+  let lastEvidence
   try {
-    const deadline = Date.now() + 90000
-    while (Date.now() < deadline && !socket) {
-      assert.equal(child.exitCode, null, 'GeoD exited before opening its window')
-      const pages = await fetch(`http://127.0.0.1:${port}/json/list`, {signal:AbortSignal.timeout(2000)})
-        .then(r => r.json()).catch(() => [])
-      const target = pages.find(p => p.type === 'page' && /^https?:\/\/tauri\.localhost(?:\/|$)/.test(p.url))
-      if (pages.length) lastPages = pages.map(({type, url}) => ({type, url:url?.split('?')[0]}))
-      if (target) {
-        socket = new WebSocket(target.webSocketDebuggerUrl)
-        await once(socket, 'open', {signal:AbortSignal.timeout(10000)})
-      } else await delay(300)
-    }
-    if (!socket) {
-      console.error('GeoD PID, debugging port and CDP targets', child.pid, port, lastPages)
-      const info = execFileSync('pwsh', ['-NoProfile','-Command',
-        "Get-Process geo-downloader,msedgewebview2,explorer -ErrorAction SilentlyContinue | Select-Object Name,Id,SessionId,MainWindowTitle | Format-Table | Out-String; exit 0"],
-        {windowsHide:true,encoding:'utf8'})
-      throw Error('The installed app did not create its Tauri WebView. ' + info)
-    }
-    let ready = false
-    while (Date.now() < deadline && !ready) {
-      ready = await evaluate("!!window.__TAURI_INTERNALS__?.invoke && !!document.querySelector('[data-tour=mode-tabs]')")
-      if (!ready) await delay(250)
-    }
-    assert(ready, 'The installed map workspace did not render')
-    assert.equal(await evaluate("window.__TAURI_INTERNALS__.invoke('plugin:app|version')"), version)
-    const stored = await evaluate(`(async () => {
-      const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args)
-      const settings = await invoke('get_settings')
-      if (${save}) {
-        settings.custom_sources.push({ id:${JSON.stringify(marker)}, name:'Upgrade probe', url:'http://127.0.0.1:9/{z}/{x}/{y}.png', max_zoom:18, subdomains:'' })
-        await invoke('save_settings', {settings})
+    const deadline = Date.now()+60000
+    while (Date.now()<deadline) {
+      assert.equal(child.exitCode,null,'GeoD exited during startup')
+      const win = JSON.parse(execFileSync('pwsh',['-NoProfile','-Command',inspectWindow],{
+        windowsHide:true, encoding:'utf8', timeout:10000, env:{...process.env,GEOD_PROBE_PID:String(child.pid)}}))
+      lastEvidence = win
+      if (win.handle && (!win.title || win.title==='GeoDownloader') && win.renderers>0) {
+        assert.equal(path.resolve(win.executable).toLowerCase(),exe.toLowerCase())
+        assert.equal(win.version,version)
+        try { readHistory(records) } catch (error) { lastEvidence={win, history:error.message}; await delay(400);continue }
+        const loaded = JSON.parse(await readFile(settingsPath,'utf8'))
+        assert.equal(loaded.default_concurrency,13)
+        const stored = loaded.custom_sources.find(s=>s.id===marker)
+        assert(stored && Object.entries(source).every(([field,value])=>stored[field]===value))
+        console.log('Verified installed process and preserved data:', JSON.stringify({...win, historyRecords:records.length, sourcePreserved:true}))
+        return
       }
-      return (await invoke('get_settings')).custom_sources.some(s => s.id === ${JSON.stringify(marker)})
-    })()`)
-    assert.equal(stored, true, 'The installed app must read the setting saved by its predecessor')
-    console.log(`GeoD ${version} launched and ${save ? 'saved' : 'reloaded'} the test source via native IPC`)
-  } finally {
-    socket?.close()
-    if (child.pid && child.exitCode === null) {
-      execFileSync('taskkill.exe', ['/PID',String(child.pid),'/T','/F'], {windowsHide:true, stdio:'ignore'})
+      await delay(400)
     }
+    throw Error('Installed program did not pass window, renderer and history checks: '+JSON.stringify(lastEvidence))
+  } finally {
+    if (child.pid && child.exitCode===null)
+      execFileSync('taskkill.exe',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'})
   }
 }
 
 // No destination override on the second installation: NSIS must pick up its existing per-user location.
 execFileSync(previousInstaller, ['/S',`/D=${installDir}`], {windowsHide:true, timeout:180000})
 await stat(exe)
-await smoke(oldTag.slice(1), true)
+const oldRecord = legacyRecord(oldTag)
+await writeFile(imports, JSON.stringify([oldRecord]), {flag:'wx'})
+await smoke(oldTag.slice(1), [oldRecord])
 execFileSync(path.resolve(candidate), ['/S'], {windowsHide:true, timeout:180000})
-await smoke(releaseVersion, false)
+const newRecord = legacyRecord(releaseVersion)
+await writeFile(imports, JSON.stringify([newRecord]), {flag:'wx'})
+await smoke(releaseVersion, [oldRecord, newRecord])
 console.log(`Verified installed Windows upgrade ${oldTag} -> v${releaseVersion}`)
