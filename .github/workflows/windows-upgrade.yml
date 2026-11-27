@@ -1,0 +1,46 @@
+name: Verify published Windows upgrade
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable version to install over its predecessor
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/test_windows_upgrade.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Load the published installer and verify the upgrade
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          GEOD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw 'Expected a stable release tag' }
+          $version = $Matches[1]
+          $name = "GeoDownloader_${version}_windows_x64-setup.exe"
+          $metadata = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets,isDraft | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $metadata.isDraft) { throw 'Cannot load a public release' }
+          $asset = $metadata.assets | Where-Object name -eq $name
+          if ($asset.digest -notmatch '^sha256:([0-9a-f]{64})$') { throw 'Missing Windows installer digest' }
+          $expected = $Matches[1]
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $name --dir $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $file = Join-Path $env:RUNNER_TEMP $name
+          if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $expected) { throw 'Installer digest mismatch' }
+          node scripts/test_windows_upgrade.mjs $file $version
+          exit $LASTEXITCODE

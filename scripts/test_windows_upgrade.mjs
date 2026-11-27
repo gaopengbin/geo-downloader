@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readFile, stat } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises'
 import net from 'node:net'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -38,10 +38,32 @@ assert.equal('sha256:' + createHash('sha256').update(bytes).digest('hex'), asset
 
 const installDir = path.join(work, 'installation')
 const exe = path.join(installDir, 'geo-downloader.exe')
-const profile = path.join(work, 'profile')
-const local = path.join(profile, 'AppData', 'Local')
-const roaming = path.join(profile, 'AppData', 'Roaming')
-await Promise.all([mkdir(local, {recursive:true}), mkdir(roaming, {recursive:true})])
+async function installedWebView() {
+  const roots = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean)
+  for (const root of roots) {
+    const base = path.join(root, 'Microsoft', 'EdgeWebView', 'Application')
+    const entries = await readdir(base).catch(() => [])
+    const versions = entries.filter(name => /^\d+\.\d+\.\d+\.\d+$/.test(name)).sort((a,b) => b.localeCompare(a, 'en', {numeric:true}))
+    for (const version of versions) {
+      const folder = path.join(base, version)
+      if ((await stat(path.join(folder, 'msedgewebview2.exe')).catch(() => null))?.isFile()) return folder
+    }
+  }
+}
+let runtime = await installedWebView()
+if (!runtime) {
+  // Install Microsoft's Evergreen Runtime on images that do not carry it.
+  const installer = path.join(work, 'MicrosoftEdgeWebView2Setup.exe')
+  execFileSync('curl.exe', ['--fail','--location','--silent','--show-error','--retry','2','--output',installer,
+    'https://go.microsoft.com/fwlink/p/?LinkId=2124703'], {windowsHide:true,timeout:120000})
+  execFileSync('pwsh', ['-NoProfile','-Command',
+    "$s=Get-AuthenticodeSignature -LiteralPath $env:GEOD_WEBVIEW_SETUP; if($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Unexpected WebView2 bootstrapper signature' }"],
+    {windowsHide:true,env:{...process.env,GEOD_WEBVIEW_SETUP:installer}})
+  execFileSync(installer, ['/silent','/install'], {windowsHide:true,timeout:240000})
+  runtime = await installedWebView()
+}
+assert(runtime, 'Edge WebView2 Runtime is required to launch the desktop app')
+console.log('Using the runner account and WebView2 runtime', runtime)
 const marker = 'custom_upgrade_' + randomUUID()
 
 async function smoke(version, save) {
@@ -51,12 +73,13 @@ async function smoke(version, save) {
   const port = listener.address().port
   await new Promise(resolve => listener.close(resolve))
   const child = spawn(exe, [], { windowsHide:true, stdio:'ignore', env:{
-    ...process.env, USERPROFILE:profile, APPDATA:roaming, LOCALAPPDATA:local,
+    ...process.env, WEBVIEW2_BROWSER_EXECUTABLE_FOLDER:runtime,
     WEBVIEW2_USER_DATA_FOLDER:path.join(work,'webview'),
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1 --proxy-server=http://127.0.0.1:9 --proxy-bypass-list=127.0.0.1;localhost;tauri.localhost`,
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port} --remote-debugging-address=127.0.0.1 --disable-gpu --proxy-server=http://127.0.0.1:9 --proxy-bypass-list=127.0.0.1;localhost;tauri.localhost`,
     HTTPS_PROXY:'http://127.0.0.1:9', HTTP_PROXY:'http://127.0.0.1:9', NO_PROXY:'localhost,127.0.0.1,tauri.localhost',
   } })
   let socket
+  let lastPages = []
   async function evaluate(expression) {
     const id = ++evaluate.sequence
     const answer = new Promise((resolve, reject) => {
@@ -82,12 +105,19 @@ async function smoke(version, save) {
       const pages = await fetch(`http://127.0.0.1:${port}/json/list`, {signal:AbortSignal.timeout(2000)})
         .then(r => r.json()).catch(() => [])
       const target = pages.find(p => p.type === 'page' && /^https?:\/\/tauri\.localhost(?:\/|$)/.test(p.url))
+      if (pages.length) lastPages = pages.map(({type, url}) => ({type, url:url?.split('?')[0]}))
       if (target) {
         socket = new WebSocket(target.webSocketDebuggerUrl)
         await once(socket, 'open', {signal:AbortSignal.timeout(10000)})
       } else await delay(300)
     }
-    assert(socket, 'The installed app must create its Tauri WebView')
+    if (!socket) {
+      console.error('GeoD PID, debugging port and CDP targets', child.pid, port, lastPages)
+      const info = execFileSync('pwsh', ['-NoProfile','-Command',
+        "Get-Process geo-downloader,msedgewebview2,explorer -ErrorAction SilentlyContinue | Select-Object Name,Id,SessionId,MainWindowTitle | Format-Table | Out-String; exit 0"],
+        {windowsHide:true,encoding:'utf8'})
+      throw Error('The installed app did not create its Tauri WebView. ' + info)
+    }
     let ready = false
     while (Date.now() < deadline && !ready) {
       ready = await evaluate("!!window.__TAURI_INTERNALS__?.invoke && !!document.querySelector('[data-tour=mode-tabs]')")
