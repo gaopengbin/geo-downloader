@@ -65,6 +65,10 @@ gdal = { version = "0.17", optional = true }
 # Logging
 log = "0.4"
 
+# Disk headroom, exclusive overview updates and staged outputs
+fs2 = "0.4.3"
+tempfile = "3"
+
 # Error handling
 thiserror = "2"
 anyhow = "1"
@@ -94,6 +98,3 @@ ttf-parser = "0.25.1"
 [features]
 default = []
 geotiff = ["gdal"]
-
-[dev-dependencies]
-tempfile = "3"

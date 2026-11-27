@@ -707,7 +707,7 @@ fn estimate_download_with_settings(
         match kind {
             SourceKind::Satellite => {
                 if comp != "none" {
-                    notes.push("卫星影像压缩效率低（通常 0.85~0.95）".to_string());
+                    notes.push("压缩体积为粗估，导出时按已写入的瓦片行更新估算".to_string());
                 }
             }
             SourceKind::Vector | SourceKind::Label => {
@@ -771,11 +771,26 @@ fn estimate_download_with_settings(
     }
 }
 
+fn uses_measured_tiff_space(format: &str, compression: &str) -> bool {
+    ExportFormat::from_str(format) == ExportFormat::GeoTiff
+        && matches!(compression, "lzw" | "deflate")
+}
+
 fn ensure_download_disk_space(
     request: &DownloadRequest,
     save_path: &str,
     work_dir: Option<&Path>,
 ) -> Result<(), String> {
+    let check_path = work_dir.unwrap_or_else(|| Path::new(save_path));
+    check_download_disk_space(request, check_path, crate::fs_util::available_space_for_path(check_path)?)
+}
+
+fn check_download_disk_space(request: &DownloadRequest, check_path: &Path, available: u64) -> Result<(), String> {
+    if uses_measured_tiff_space(&request.format, &request.compression) {
+        // The compressed size is unknown until image data has been encoded.
+        // Both tile acquisition and the TIFF writer monitor their actual volumes.
+        return crate::fs_util::check_write_space(available, 0);
+    }
     let estimate = estimate_download(
         request.bounds,
         request.zoom,
@@ -798,12 +813,11 @@ fn ensure_download_disk_space(
     };
     let required = (peak_mb * 1.15 * 1024.0 * 1024.0).ceil() as u64
         + crate::fs_util::MIN_FREE_SPACE_BYTES;
-    let check_path = work_dir.unwrap_or_else(|| Path::new(save_path));
-    let available = crate::fs_util::available_space_for_path(check_path)?;
     if available < required {
         return Err(format!(
-            "磁盘空间不足：预计任务峰值占用约 {:.1} GB，{} 当前可用 {:.1} GB。请更换保存目录或释放空间后重试。",
+            "磁盘空间不足：预计任务峰值占用约 {:.1} GB，含预留需 {:.1} GB，{} 当前可用 {:.1} GB。请更换保存目录或释放空间后重试。",
             peak_mb / 1024.0,
+            required as f64 / 1_073_741_824.0,
             check_path.display(),
             available as f64 / 1024.0 / 1024.0 / 1024.0
         ));
@@ -998,6 +1012,40 @@ struct ZoomLevelResult {
 
 fn real_failure_count(missing_count: u32, no_data_count: u32) -> u32 {
     missing_count.saturating_sub(no_data_count)
+}
+
+fn tiff_progress(
+    app: &AppHandle, tm: &Arc<TaskManager>, task_id: &str, range: std::ops::Range<f64>,
+    completed: u32, failed: u32, total_tiles: u32,
+) -> streaming_tiff::StripWriteOptions {
+    let app = app.clone();
+    let tm = Arc::clone(tm);
+    let id = task_id.to_owned();
+    let event = format!("task-progress-{id}");
+    let start = std::time::Instant::now();
+    let mut reporter = crate::overlay::TileStageReporter::new(range.start, range.end, "GeoTIFF 瓦片行");
+    streaming_tiff::StripWriteOptions::reporting(Box::new(move |rows, total, bytes, times| {
+        let Some(update) = reporter.update(rows as usize, total as usize) else { return };
+        let written_mb = bytes as f64 / 1_048_576.0;
+        let mut message = format!("{}，已写 {:.1} MB，耗时 {}s", update.message, written_mb, start.elapsed().as_secs());
+        if rows < total {
+            let projected_mb = written_mb * f64::from(total) / f64::from(rows);
+            message.push_str(&format!("，按已写行估计主图 {:.1} MB", projected_mb));
+        }
+        if update.log { task_log(&app, &tm, &id, "INFO", &message); }
+        if rows == total {
+            task_log(&app, &tm, &id, "INFO", &format!(
+                "GeoTIFF 各阶段累计耗时：读取解码 {:.2}s，拼接裁剪 {:.2}s，编码 {:.2}s，条带写入 {:.2}s（写入与处理可并行）",
+                times.read_decode.as_secs_f64(), times.assemble_crop.as_secs_f64(),
+                times.encode.as_secs_f64(), times.write.as_secs_f64(),
+            ));
+        }
+        tm.update_progress(&id, TaskStatus::Exporting, update.percent, completed, failed, Some(message.clone()));
+        let _ = app.emit(&event, TaskProgressPayload {
+            task_id: id.clone(), status: "exporting".into(), progress: update.percent,
+            completed, total: total_tiles, message: Some(message),
+        });
+    }))
 }
 
 /// 执行单个 zoom 级别的下载（核心逻辑，被 execute_download_task 循环调用）
@@ -1460,6 +1508,7 @@ async fn execute_zoom_level(
         _ => None,
     };
 
+    let export_start = std::time::Instant::now();
     let file_size;
 
     if format == ExportFormat::Tiles && request.crop_to_shape {
@@ -1636,20 +1685,21 @@ async fn execute_zoom_level(
             None
         };
         
+        let end = if request.build_pyramid && is_geotiff { 95.0 } else { 99.0 };
+        let progress = is_geotiff.then(|| tiff_progress(
+            app, tm, task_id, p_export..map_progress(end), completed_after_download,
+            failed_after_download, total_tiles,
+        ));
         file_size = tokio::task::spawn_blocking(move || {
             let poly_slices: Option<&[Vec<merger::PolygonPoint>]> = polygon_data.as_deref();
-            if is_dem {
-                streaming_tiff::merge_and_export_dem_streaming(
-                    &tile_files, x_min, y_min, x_max, y_max,
-                    &merged_bounds, Path::new(&sp), &compression,
-                    poly_slices,
-                )
-            } else if is_geotiff {
-                streaming_tiff::merge_and_export_streaming(
-                    &tile_files, x_min, y_min, x_max, y_max,
-                    &merged_bounds, Path::new(&sp), &compression,
-                    poly_slices,
-                )
+            if let Some(options) = progress {
+                let write = if is_dem {
+                    streaming_tiff::merge_and_export_dem_streaming_with_budget
+                } else {
+                    streaming_tiff::merge_and_export_streaming_with_budget
+                };
+                write(&tile_files, x_min, y_min, x_max, y_max, &merged_bounds,
+                    Path::new(&sp), &compression, poly_slices, options)
             } else {
                 streaming_raster::merge_and_export_streaming_png(
                     &tile_files, x_min, y_min, x_max, y_max,
@@ -1729,6 +1779,11 @@ async fn execute_zoom_level(
         }).await.map_err(|e| format!("导出失败: {}", e))??;
     }
     
+    task_log(app, tm, task_id, "INFO", &format!(
+        "z{} 主图导出完成，耗时 {:.1}s，大小 {:.1} MB",
+        current_zoom, export_start.elapsed().as_secs_f64(), file_size as f64 / 1_048_576.0,
+    ));
+
     if crate::earth_history::is_source(&source.id) {
         let grid=tile::get_merged_bounds(x_min,y_min,x_max,y_max,current_zoom);
         crate::earth_history::write_manifest_for_grid(Path::new(&save_path), &source.id,&grid,cols*config::TILE_SIZE,rows*config::TILE_SIZE,current_zoom)?;
@@ -1757,6 +1812,7 @@ async fn execute_zoom_level(
         let pyramid_task_id = task_id.to_string();
         let pyramid_completed = completed_after_download;
         let pyramid_total = total_tiles;
+        let pyramid_tm = Arc::clone(tm);
 
         let pyr_off = prog_off;
         let pyr_span = prog_span;
@@ -1768,13 +1824,16 @@ async fn execute_zoom_level(
                     progress_cb: Some(Box::new(move |current, total| {
                         let local_p = 95.0 + (current as f64 / total as f64) * 4.0;
                         let mapped_p = pyr_off + local_p * pyr_span / 100.0;
+                        let message = format!("构建金字塔 {}/{}...", (current + 1).min(total), total);
+                        pyramid_tm.update_progress(&pyramid_task_id, TaskStatus::Exporting, mapped_p,
+                            pyramid_completed, failed_after_download, Some(message.clone()));
                         let _ = app_clone.emit(&event_clone, TaskProgressPayload {
                             task_id: pyramid_task_id.clone(),
                             status: "building_pyramid".to_string(),
                             progress: mapped_p,
                             completed: pyramid_completed,
                             total: pyramid_total,
-                            message: Some(format!("构建金字塔 {}/{}...", current + 1, total)),
+                            message: Some(message),
                         });
                     })),
                     ..Default::default()
@@ -2896,18 +2955,21 @@ pub async fn export_partial_task(
             let earth_source_id = req_clone.source.clone();
             let output_zoom = *zoom;
 
+            let span = 100.0 / zooms.len() as f64;
+            let progress = (zoom_is_dem || zoom_format == ExportFormat::GeoTiff).then(|| tiff_progress(
+                &app_clone, &tm_arc, &tid, (idx as f64 * span)..((idx + 1) as f64 * span).min(99.0),
+                total_exported, 0, total_estimated,
+            ));
             let result = tokio::task::spawn_blocking(move || -> Result<u64, String> {
                 let polygons = polygons_owned.as_deref();
-                let size = if zoom_is_dem {
-                    streaming_tiff::merge_and_export_dem_streaming(
-                        &tile_files, x_min, y_min, x_max, y_max,
-                        &merged_bounds, &save_p, &compression, polygons,
-                    )
-                } else if zoom_format == ExportFormat::GeoTiff {
-                    streaming_tiff::merge_and_export_streaming(
-                        &tile_files, x_min, y_min, x_max, y_max,
-                        &merged_bounds, &save_p, &compression, polygons,
-                    )
+                let size = if let Some(options) = progress {
+                    let write = if zoom_is_dem {
+                        streaming_tiff::merge_and_export_dem_streaming_with_budget
+                    } else {
+                        streaming_tiff::merge_and_export_streaming_with_budget
+                    };
+                    write(&tile_files, x_min, y_min, x_max, y_max, &merged_bounds,
+                        &save_p, &compression, polygons, options)
                 } else {
                     streaming_raster::merge_and_export_streaming_png(
                         &tile_files, x_min, y_min, x_max, y_max,
@@ -4811,6 +4873,34 @@ mod memory_budget_tests {
             assert!(result.warning.is_none(), "budget warning is displayed separately");
             assert!(!check.suggestions.is_empty());
         }
+    }
+
+    #[test]
+    fn county_compressed_geotiff_uses_real_free_space() {
+        let nw = tile::tile_to_latlng(200000, 100000, 18);
+        let se = tile::tile_to_latlng(200551, 100745, 18);
+        let bounds = Bounds {
+            north: (nw.north + nw.south) / 2.0, south: (se.north + se.south) / 2.0,
+            west: (nw.west + nw.east) / 2.0, east: (se.west + se.east) / 2.0,
+        };
+        let mut req: DownloadRequest = serde_json::from_value(serde_json::json!({
+            "bounds": bounds, "zoom": 18, "source": "arcgis_satellite",
+            "format": "geotiff", "crop_to_shape": true, "compression": "lzw",
+        })).unwrap();
+        let estimate = estimate_download_with_settings(bounds, 18, None, Some(req.format.clone()),
+            Some(true), None, Some(req.source.clone()), Some(false), Some(req.compression.clone()),
+            &AppSettings::default());
+        assert_eq!(estimate.tile_count, 411_792);
+        let peak_gib = (estimate.tile_download_mb + estimate.estimated_output_mb) / 1024.0;
+        assert_eq!(format!("{peak_gib:.1}"), "117.1");
+        let free = (60.3 * 1_073_741_824.0) as u64;
+        for compression in ["lzw", "deflate"] {
+            req.compression = compression.into();
+            assert!(check_download_disk_space(&req, Path::new("."), free).is_ok());
+            assert!(check_download_disk_space(&req, Path::new("."), crate::fs_util::MIN_FREE_SPACE_BYTES - 1).is_err());
+        }
+        req.compression = "none".into();
+        assert!(check_download_disk_space(&req, Path::new("."), free).is_err());
     }
 
     #[test]

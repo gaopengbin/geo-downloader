@@ -23,6 +23,87 @@ fn export_buffer_bytes() -> u64 {
     mb.max(1) * 1024 * 1024
 }
 
+#[derive(Default, Clone, Copy)]
+pub struct StripTimes {
+    pub read_decode: std::time::Duration,
+    pub assemble_crop: std::time::Duration,
+    pub encode: std::time::Duration,
+    pub write: std::time::Duration,
+}
+
+struct EncodedStrip {
+    data: Vec<u8>,
+    times: StripTimes,
+}
+
+pub type StripProgress = Box<dyn FnMut(u32, u32, u64, StripTimes) + Send>;
+
+pub struct StripWriteOptions {
+    buffer_bytes: u64,
+    progress: Option<StripProgress>,
+    check_space: fn(&Path, u64) -> Result<(), String>,
+}
+
+impl From<u64> for StripWriteOptions {
+    fn from(buffer_bytes: u64) -> Self {
+        Self { buffer_bytes, progress: None, check_space: crate::fs_util::ensure_write_space }
+    }
+}
+
+impl StripWriteOptions {
+    pub fn reporting(progress: StripProgress) -> Self {
+        Self { progress: Some(progress), ..Self::from(export_buffer_bytes()) }
+    }
+}
+
+fn staged_tiff(path: &Path) -> Result<(std::fs::File, tempfile::TempPath), String> {
+    let directory = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    tempfile::Builder::new().prefix(".geod-tiff-").tempfile_in(directory)
+        .map(|file| file.into_parts()).map_err(|e| format!("创建临时 GeoTIFF 失败: {e}"))
+}
+
+fn commit_tiff(
+    mut writer: BufWriter<std::fs::File>, staged: tempfile::TempPath, path: &Path, ifd: u64,
+) -> Result<u64, String> {
+    writer.flush().map_err(e2s)?;
+    writer.get_ref().sync_all().map_err(e2s)?;
+    let size = writer.get_ref().metadata().map_err(e2s)?.len();
+    drop(writer);
+    validate_bigtiff_header(&staged, ifd)?;
+    staged.persist(path).map_err(|e| format!("提交 GeoTIFF 失败: {e}"))?;
+    Ok(size)
+}
+
+// The single producer sends strips in raster order. Report only writes accepted
+// by the writer. Never allocate an image-sized file from a compression forecast.
+fn write_strips(
+    mut w: BufWriter<std::fs::File>, rx: std::sync::mpsc::Receiver<EncodedStrip>,
+    total: u32, path: std::path::PathBuf, mut options: StripWriteOptions,
+) -> Result<(BufWriter<std::fs::File>, Vec<u64>, Vec<u64>), String> {
+    let mut offsets = Vec::with_capacity(total as usize);
+    let mut counts = Vec::with_capacity(total as usize);
+    let mut end = stream_pos(&mut w)?;
+    let mut elapsed = StripTimes::default();
+    for EncodedStrip { data, times } in rx {
+        let size = data.len() as u64;
+        let row = offsets.len() as u32 + 1;
+        // The final directory contains two u64 arrays plus fixed GeoTIFF tags.
+        let footer = if row == total { 16 * u64::from(total) + 1024 } else { 0 };
+        (options.check_space)(&path, size + footer + w.buffer().len() as u64)?;
+        offsets.push(end);
+        let start = std::time::Instant::now();
+        w.write_all(&data).map_err(|e| format!("写入 GeoTIFF 失败: {e}"))?;
+        elapsed.write += start.elapsed();
+        elapsed.read_decode += times.read_decode;
+        elapsed.assemble_crop += times.assemble_crop;
+        elapsed.encode += times.encode;
+        counts.push(size);
+        end += size;
+        if let Some(callback) = &mut options.progress { callback(row, total, end, elapsed); }
+    }
+    Ok((w, offsets, counts))
+}
+
 /// 根据 strip 字节数与总 budget 算出 bounded channel 槽位数。
 /// 保证至少 1 槽、最多 256 槽（超过 256 后的加速收益递减，反而增加线程调度开销）。
 fn pipeline_slots(strip_byte_size: u64, budget_bytes: u64, num_strips: u32) -> usize {
@@ -55,6 +136,12 @@ pub(crate) fn grid_dims(
         .checked_mul(TILE_SIZE)
         .ok_or_else(|| format!("导出高度溢出: {} 行瓦片超出上限", rows))?;
     Ok((cols, rows, width, height))
+}
+
+fn scanline_intersection(xi: i32, yi: i32, xj: i32, yj: i32, y: i32) -> i32 {
+    let dx = i64::from(xj) - i64::from(xi);
+    let dy = i64::from(yj) - i64::from(yi);
+    (i128::from(xi) + i128::from(dx) * i128::from(i64::from(y) - i64::from(yi)) / i128::from(dy)) as i32
 }
 
 /// LZW 压缩一个 strip（TIFF 规范：MSB 位序，最小码长 8，early code size switch）
@@ -114,8 +201,9 @@ pub fn merge_and_export_streaming_with_budget(
     save_path: &Path,
     compression: &str,
     polygons: Option<&[Vec<PolygonPoint>]>,
-    budget_bytes: u64,
+    options: impl Into<StripWriteOptions>,
 ) -> Result<u64, String> {
+    let options = options.into();
     let (_cols, rows, width, height) = grid_dims(x_min, y_min, x_max, y_max)?;
     let rows_per_strip = TILE_SIZE;
     let num_strips = rows; // 每行瓦片 = 一个 strip
@@ -148,8 +236,7 @@ pub fn merge_and_export_streaming_with_budget(
     // 用 u64 计算字节大小，防止 u32 溢出
     let strip_byte_size_u64 = width as u64 * rows_per_strip as u64 * channels as u64;
 
-    let file = std::fs::File::create(save_path)
-        .map_err(|e| format!("创建文件失败: {}", e))?;
+    let (file, staged) = staged_tiff(save_path)?;
     let mut w = BufWriter::new(file);
 
     // ===== 1. 写 BigTIFF Header =====
@@ -163,36 +250,10 @@ pub fn merge_and_export_streaming_with_budget(
 
     // ===== 2. 流水线：strip 内 rayon 并行 + writer 线程异步落盘 =====
     let strip_byte_size = strip_byte_size_u64 as usize;
-    let slot_count = pipeline_slots(strip_byte_size_u64, budget_bytes, num_strips);
-
-    let (tx, rx) = std::sync::mpsc::sync_channel::<(u32, Vec<u8>)>(slot_count);
-
-    let writer_handle = std::thread::spawn(move || -> Result<(BufWriter<std::fs::File>, Vec<u64>, Vec<u64>), String> {
-        let mut strip_offsets: Vec<u64> = vec![0; num_strips as usize];
-        let mut strip_counts: Vec<u64> = vec![0; num_strips as usize];
-        let mut pending: std::collections::BTreeMap<u32, Vec<u8>> = std::collections::BTreeMap::new();
-        let mut next_expected: u32 = 0;
-
-        while let Ok((idx, compressed)) = rx.recv() {
-            pending.insert(idx, compressed);
-            // 顺序冲刷：尽可能多地写出已就位的连续 strip
-            while let Some(bytes) = pending.remove(&next_expected) {
-                let offset = stream_pos(&mut w)?;
-                w.write_all(&bytes).map_err(e2s)?;
-                strip_offsets[next_expected as usize] = offset;
-                strip_counts[next_expected as usize] = bytes.len() as u64;
-                next_expected += 1;
-            }
-        }
-        // tx 已全部 drop，说明生产者结束；若还有残留说明生产者出错/缺席
-        if next_expected != num_strips {
-            return Err(format!(
-                "写入线程提前退出：期望 {} 个 strip，仅写入 {}",
-                num_strips, next_expected
-            ));
-        }
-        Ok((w, strip_offsets, strip_counts))
-    });
+    let slot_count = pipeline_slots(strip_byte_size_u64, options.buffer_bytes, num_strips);
+    let (tx, rx) = std::sync::mpsc::sync_channel(slot_count);
+    let output_path = staged.to_path_buf();
+    let writer_handle = std::thread::spawn(move || write_strips(w, rx, num_strips, output_path, options));
 
     let channels_u = channels as usize;
     let width_u = width as usize;
@@ -209,6 +270,7 @@ pub fn merge_and_export_streaming_with_budget(
             vec![255u8; strip_byte_size]
         };
 
+        let read_started = std::time::Instant::now();
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
         let decoded: Vec<Option<(usize, image::RgbaImage)>> = tile_xs
             .par_iter()
@@ -217,10 +279,12 @@ pub fn merge_and_export_streaming_with_budget(
                 let bytes = source.bytes().ok()?;
                 let img = image::load_from_memory(&bytes).ok()?;
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
-                Some((px, img.to_rgba8()))
+                Some((px, img.into_rgba8()))
             })
             .collect();
 
+        let read_decode = read_started.elapsed();
+        let assemble_started = std::time::Instant::now();
         for item in &decoded {
             if let Some((px, rgb)) = item {
                 let tile_w = rgb.width().min(TILE_SIZE) as usize;
@@ -259,7 +323,7 @@ pub fn merge_and_export_streaming_with_budget(
                         let (xi, yi) = ring[i];
                         let (xj, yj) = ring[j];
                         if (yi > global_y) != (yj > global_y) {
-                            let x_int = (xj - xi) * (global_y - yi) / (yj - yi) + xi;
+                            let x_int = scanline_intersection(xi, yi, xj, yj, global_y);
                             intersections.push(x_int);
                         }
                         j = i;
@@ -267,38 +331,24 @@ pub fn merge_and_export_streaming_with_budget(
                 }
                 intersections.sort_unstable();
 
-                // 构造本行 inside 掩码（与 DEM 路径一致），环外整像素清零。
-                let mut inside = vec![false; width_u];
-                let mut k = 0;
-                while k + 1 < intersections.len() {
-                    let x0 = (intersections[k].max(0) as usize).min(width_u);
-                    let x1 = (intersections[k + 1].max(0) as usize).min(width_u);
-                    for x in x0..x1 {
-                        if x < inside.len() { inside[x] = true; }
-                    }
-                    k += 2;
+                let row_start = local_row as usize * width_u * channels_u;
+                let line = &mut strip[row_start..row_start + width_u * channels_u];
+                let mut cursor = 0;
+                for span in intersections.chunks_exact(2) {
+                    let left = (span[0].max(0) as usize).min(width_u) * channels_u;
+                    let right = (span[1].max(0) as usize).min(width_u) * channels_u;
+                    line[cursor..left].fill(0);
+                    cursor = right;
                 }
-
-                let row_offset = local_row as usize * width_u * channels_u;
-                for x in 0..width_u {
-                    let di = row_offset + x * channels_u;
-                    if di + channels_u - 1 >= strip.len() { continue; }
-                    if inside[x] {
-                        // Keep source coverage alpha inside the polygon, including real NoData.
-                    } else {
-                        // 环外：整像素清零（RGB+alpha），与内存版 mask_image_by_polygons 一致。
-                        // 仅清 alpha 会残留整张外接矩形 RGB → 群友报告的「外接矩形/黑边里有数据」。
-                        strip[di] = 0;
-                        strip[di + 1] = 0;
-                        strip[di + 2] = 0;
-                        strip[di + 3] = 0;
-                    }
-                }
+                line[cursor..].fill(0);
             }
         }
 
-        let (compressed, _tag) = compress_strip(&strip, compression)?;
-        tx.send((strip_idx, compressed))
+        let assemble_crop = assemble_started.elapsed();
+        let encode_started = std::time::Instant::now();
+        let (data, _) = compress_strip(&strip, compression)?;
+        let times = StripTimes { read_decode, assemble_crop, encode: encode_started.elapsed(), ..Default::default() };
+        tx.send(EncodedStrip { data, times })
             .map_err(|e| format!("发送 strip 失败: {}", e))?;
       }
       Ok(())
@@ -307,8 +357,9 @@ pub fn merge_and_export_streaming_with_budget(
     drop(tx);
 
     let writer_res = writer_handle.join().map_err(|_| "写入线程异常退出".to_string())?;
-    producer_result?;
     let (mut w, strip_offsets, strip_counts) = writer_res?;
+    producer_result?;
+    if strip_counts.len() != num_strips as usize { return Err("GeoTIFF 瓦片行写入不完整".into()); }
 
     // ===== 3. 写入 IFD 所需的额外数据 =====
     // BitsPerSample: RGB=[8,8,8], RGBA=[8,8,8,8]
@@ -406,17 +457,7 @@ pub fn merge_and_export_streaming_with_budget(
     w.seek(SeekFrom::Start(ifd_offset_pos)).map_err(e2s)?;
     write_u64(&mut w, ifd_pos)?;
 
-    w.flush().map_err(e2s)?;
-    drop(w);
-
-    let file_size = std::fs::metadata(save_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-    
-    // 验证 BigTIFF 文件头完整性
-    validate_bigtiff_header(save_path, ifd_pos)?;
-    
-    Ok(file_size)
+    commit_tiff(w, staged, save_path, ifd_pos)
 }
 
 /// 验证 BigTIFF 文件头是否完整写入
@@ -519,8 +560,9 @@ pub fn merge_and_export_dem_streaming_with_budget(
     save_path: &Path,
     compression: &str,
     polygons: Option<&[Vec<PolygonPoint>]>,
-    budget_bytes: u64,
+    options: impl Into<StripWriteOptions>,
 ) -> Result<u64, String> {
+    let options = options.into();
     let (_cols, rows, width, height) = grid_dims(x_min, y_min, x_max, y_max)?;
     let rows_per_strip = TILE_SIZE;
     let num_strips = rows;
@@ -552,8 +594,7 @@ pub fn merge_and_export_dem_streaming_with_budget(
         Vec::new()
     };
 
-    let file = std::fs::File::create(save_path)
-        .map_err(|e| format!("创建文件失败: {}", e))?;
+    let (file, staged) = staged_tiff(save_path)?;
     let mut w = BufWriter::new(file);
 
     // ===== 1. BigTIFF Header =====
@@ -565,33 +606,10 @@ pub fn merge_and_export_dem_streaming_with_budget(
     write_u64(&mut w, 0)?;
 
     // ===== 2. 流水线：strip 内 rayon 并行 + writer 线程异步落盘 =====
-    let slot_count = pipeline_slots(strip_byte_size_u64, budget_bytes, num_strips);
-    let (tx, rx) = std::sync::mpsc::sync_channel::<(u32, Vec<u8>)>(slot_count);
-
-    let writer_handle = std::thread::spawn(move || -> Result<(BufWriter<std::fs::File>, Vec<u64>, Vec<u64>), String> {
-        let mut strip_offsets: Vec<u64> = vec![0; num_strips as usize];
-        let mut strip_counts: Vec<u64> = vec![0; num_strips as usize];
-        let mut pending: std::collections::BTreeMap<u32, Vec<u8>> = std::collections::BTreeMap::new();
-        let mut next_expected: u32 = 0;
-
-        while let Ok((idx, compressed)) = rx.recv() {
-            pending.insert(idx, compressed);
-            while let Some(bytes) = pending.remove(&next_expected) {
-                let offset = stream_pos(&mut w)?;
-                w.write_all(&bytes).map_err(e2s)?;
-                strip_offsets[next_expected as usize] = offset;
-                strip_counts[next_expected as usize] = bytes.len() as u64;
-                next_expected += 1;
-            }
-        }
-        if next_expected != num_strips {
-            return Err(format!(
-                "写入线程提前退出：期望 {} 个 strip，仅写入 {}",
-                num_strips, next_expected
-            ));
-        }
-        Ok((w, strip_offsets, strip_counts))
-    });
+    let slot_count = pipeline_slots(strip_byte_size_u64, options.buffer_bytes, num_strips);
+    let (tx, rx) = std::sync::mpsc::sync_channel(slot_count);
+    let output_path = staged.to_path_buf();
+    let writer_handle = std::thread::spawn(move || write_strips(w, rx, num_strips, output_path, options));
 
     let nodata_bytes = NODATA.to_le_bytes();
     let width_u = width as usize;
@@ -605,6 +623,7 @@ pub fn merge_and_export_dem_streaming_with_budget(
             chunk.copy_from_slice(&nodata_bytes);
         }
 
+        let read_started = std::time::Instant::now();
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
         let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs
             .par_iter()
@@ -617,6 +636,8 @@ pub fn merge_and_export_dem_streaming_with_budget(
             })
             .collect();
 
+        let read_decode = read_started.elapsed();
+        let assemble_started = std::time::Instant::now();
         for item in &decoded {
             if let Some((px, rgb)) = item {
                 let tile_w = rgb.width().min(TILE_SIZE) as usize;
@@ -655,7 +676,7 @@ pub fn merge_and_export_dem_streaming_with_budget(
                         let (xi, yi) = ring[i];
                         let (xj, yj) = ring[j];
                         if (yi > global_y) != (yj > global_y) {
-                            let x_int = (xj - xi) * (global_y - yi) / (yj - yi) + xi;
+                            let x_int = scanline_intersection(xi, yi, xj, yj, global_y);
                             intersections.push(x_int);
                         }
                         j = i;
@@ -686,8 +707,11 @@ pub fn merge_and_export_dem_streaming_with_budget(
             }
         }
 
-        let (compressed, _) = compress_strip(&strip, compression)?;
-        tx.send((strip_idx, compressed))
+        let assemble_crop = assemble_started.elapsed();
+        let encode_started = std::time::Instant::now();
+        let (data, _) = compress_strip(&strip, compression)?;
+        let times = StripTimes { read_decode, assemble_crop, encode: encode_started.elapsed(), ..Default::default() };
+        tx.send(EncodedStrip { data, times })
             .map_err(|e| format!("发送 strip 失败: {}", e))?;
       }
       Ok(())
@@ -696,8 +720,9 @@ pub fn merge_and_export_dem_streaming_with_budget(
     drop(tx);
 
     let writer_res = writer_handle.join().map_err(|_| "写入线程异常退出".to_string())?;
-    producer_result?;
     let (mut w, strip_offsets, strip_counts) = writer_res?;
+    producer_result?;
+    if strip_counts.len() != num_strips as usize { return Err("GeoTIFF 瓦片行写入不完整".into()); }
 
     // ===== 3. IFD 外数据 =====
     let res_inline: u64 = 72u64 | (1u64 << 32);
@@ -786,16 +811,7 @@ pub fn merge_and_export_dem_streaming_with_budget(
     w.seek(SeekFrom::Start(ifd_offset_pos)).map_err(e2s)?;
     write_u64(&mut w, ifd_pos)?;
 
-    w.flush().map_err(e2s)?;
-    drop(w);
-
-    let file_size = std::fs::metadata(save_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    validate_bigtiff_header(save_path, ifd_pos)?;
-
-    Ok(file_size)
+    commit_tiff(w, staged, save_path, ifd_pos)
 }
 
 // ============================================================
@@ -807,6 +823,56 @@ mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
     use std::sync::Arc;
+
+    #[test]
+    fn county_scale_mask_intersections_keep_the_correct_diagonal() {
+        assert_eq!(scanline_intersection(0, 0, 160_000, 160_000, 100_000), 100_000);
+        assert_eq!(scanline_intersection(160_000, 0, 0, 160_000, 100_000), 60_000);
+    }
+
+    #[test]
+    fn low_space_during_export_preserves_files_and_retry_writes_readable_tiff() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("tile.png");
+        std::fs::write(&input, make_solid_tile(40, 60, 90)).unwrap();
+        let tiles = (0..6).map(|y| ((0,y), TileSource::from_path(input.clone()))).collect();
+        let output = dir.path().join("影像.tif");
+        std::fs::write(&output, b"previous output").unwrap();
+        // Stop once the writer has actually flushed at least one strip to disk.
+        fn low_space_after_first_strip(path: &Path, next: u64) -> Result<(), String> {
+            let available = if path.metadata().unwrap().len() > 16 {
+                crate::fs_util::MIN_FREE_SPACE_BYTES
+            } else { u64::MAX };
+            crate::fs_util::check_write_space(available, next)
+        }
+        let options = StripWriteOptions { check_space: low_space_after_first_strip, ..StripWriteOptions::from(1) };
+        let error = merge_and_export_streaming_with_budget(
+            &tiles, 0, 0, 0, 5, &dummy_bounds(), &output, "none", None, options,
+        ).unwrap_err();
+        assert!(error.contains("磁盘空间不足"), "{error}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous output");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+
+        let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&updates);
+        let options = StripWriteOptions::reporting(Box::new(move |row, rows, size, _| {
+            captured.lock().unwrap().push((row, rows, size));
+        }));
+        let size = merge_and_export_streaming_with_budget(
+            &tiles, 0, 0, 0, 5, &dummy_bounds(), &output, "lzw", None, options,
+        ).unwrap();
+        assert_eq!(size, output.metadata().unwrap().len());
+        let image = image::open(&output).unwrap().into_rgb8();
+        assert_eq!(image.dimensions(), (256, 1536));
+        assert_eq!(image.get_pixel(255, 1535).0, [40, 60, 90]);
+        let updates = updates.lock().unwrap();
+        assert_eq!(updates.len(), 6);
+        for (index, &(row, rows, bytes)) in updates.iter().enumerate() {
+            assert_eq!((row, rows), (index as u32 + 1, 6));
+            assert!(bytes < size && (index == 0 || bytes > updates[index - 1].2));
+        }
+        assert!(input.exists());
+    }
 
     /// 生成一张 256×256 PNG 瓦片，每个像素 = (tx, ty, (tx+ty) & 0xFF)，
     /// 让不同 (tx, ty) 产生不同字节，便于发现行错位 bug。

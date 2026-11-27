@@ -51,7 +51,7 @@ pub fn nearest_existing_parent(path: &Path) -> Option<PathBuf> {
 pub fn available_space_for_path(path: &Path) -> Result<u64, String> {
     let existing = nearest_existing_parent(path)
         .ok_or_else(|| format!("找不到可用的磁盘路径: {}", path.display()))?;
-    let directory=if existing.is_file(){existing.parent().unwrap_or(&existing)}else{&existing};
+    let directory = if existing.is_file() { existing.parent().unwrap_or(&existing) } else { &existing };
     available_space_for_existing_path(directory)
 }
 
@@ -62,6 +62,25 @@ pub fn ensure_minimum_free_space(path: &Path) -> Result<(), String> {
             "磁盘空间不足：{} 可用空间仅 {:.1} MB，至少需要保留 512 MB。任务数据已保留，释放空间后可继续。",
             path.display(),
             available as f64 / 1024.0 / 1024.0
+        ));
+    }
+    Ok(())
+}
+
+/// Check the next actual write, leaving the recovery reserve on the output volume.
+pub(crate) fn ensure_write_space(path: &Path, write_bytes: u64) -> Result<(), String> {
+    check_write_space(available_space_for_path(path)?, write_bytes)
+}
+
+pub(crate) fn check_write_space(available: u64, write_bytes: u64) -> Result<(), String> {
+    if write_bytes == 0 && available < MIN_FREE_SPACE_BYTES {
+        return Err(format!("磁盘空间不足：当前可用 {:.1} MB，至少需要保留 512 MB。",
+            available as f64 / 1_048_576.0));
+    }
+    if available < write_bytes.saturating_add(MIN_FREE_SPACE_BYTES) {
+        return Err(format!(
+            "磁盘空间不足：本次写入需要 {:.1} MB，另需保留 512 MB，当前可用 {:.1} MB。",
+            write_bytes as f64 / 1_048_576.0, available as f64 / 1_048_576.0,
         ));
     }
     Ok(())
@@ -107,25 +126,5 @@ fn available_space_for_existing_path(path: &Path) -> Result<u64, String> {
 
 #[cfg(not(windows))]
 fn available_space_for_existing_path(path: &Path) -> Result<u64, String> {
-    let output = std::process::Command::new("df")
-        .args(["-Pk"])
-        .arg(path)
-        .output()
-        .map_err(|e| format!("执行 df 失败: {}", e))?;
-    if !output.status.success() {
-        return Err("读取目标磁盘空间失败".to_string());
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .last()
-        .ok_or("df 未返回磁盘信息")?;
-    let fields: Vec<&str> = line.split_whitespace().collect();
-    let available_kb = fields
-        .get(3)
-        .ok_or("df 返回格式异常")?
-        .parse::<u64>()
-        .map_err(|e| format!("解析磁盘空间失败: {}", e))?;
-    Ok(available_kb.saturating_mul(1024))
+    fs2::available_space(path).map_err(|e| format!("读取目标磁盘空间失败: {e}"))
 }

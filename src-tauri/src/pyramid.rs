@@ -297,14 +297,22 @@ pub fn build_pyramid<P: AsRef<Path>>(
     path: P,
     opts: PyramidOptions,
 ) -> Result<PyramidStats, String> {
+    build_with_space_check(path.as_ref(), opts, crate::fs_util::ensure_write_space)
+}
+
+fn build_with_space_check(
+    path: &Path, opts: PyramidOptions, check_space: impl Fn(&Path, u64) -> Result<(), String>,
+) -> Result<PyramidStats, String> {
     let start = std::time::Instant::now();
-    let path = path.as_ref();
 
     // 验证 BigTIFF
     let mut file = std::fs::OpenOptions::new()
         .read(true).write(true)
         .open(path)
         .map_err(|e| format!("打开文件失败: {}", e))?;
+
+    fs2::FileExt::try_lock_exclusive(&file)
+        .map_err(|e| format!("无法独占写入金字塔: {e}"))?;
 
     // 读 header
     let mut header = [0u8; 16];
@@ -348,6 +356,43 @@ pub fn build_pyramid<P: AsRef<Path>>(
 
     let file_size_before = file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
 
+    let root_link = ifd0.next_ifd_field_pos;
+    file.seek(SeekFrom::Start(root_link)).map_err(|e| e.to_string())?;
+    let original_link = read_u64(&mut file)?;
+    let result = append_levels(&mut file, path, &opts, ifd0, compression_str, level_count, check_space);
+    match result {
+        Ok((levels, first_ifd)) => {
+            if let Some(first) = first_ifd {
+                let commit = file.seek(SeekFrom::Start(root_link))
+                    .and_then(|_| file.write_all(&first.to_le_bytes()))
+                    .and_then(|_| file.sync_data());
+                if let Err(error) = commit {
+                    file.seek(SeekFrom::Start(root_link)).and_then(|_| file.write_all(&original_link.to_le_bytes()))
+                        .and_then(|_| file.sync_data()).map_err(|e| format!("恢复金字塔索引失败: {e}"))?;
+                    file.set_len(file_size_before).map_err(|e| format!("回收金字塔空间失败: {e}"))?;
+                    return Err(format!("提交金字塔失败: {error}"));
+                }
+            }
+            if let Some(cb) = &opts.progress_cb { cb(level_count, level_count); }
+            Ok(PyramidStats {
+                levels_generated: levels,
+                size_added_bytes: file.metadata().map_err(|e| e.to_string())?.len() - file_size_before,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            })
+        }
+        Err(error) => {
+            file.set_len(file_size_before).map_err(|e| format!("{error}；回收金字塔空间失败: {e}"))?;
+            Err(error)
+        }
+    }
+}
+
+fn append_levels(
+    mut file: &mut std::fs::File, path: &Path, opts: &PyramidOptions,
+    ifd0: IfdInfo, compression_str: &str, level_count: usize,
+    check_space: impl Fn(&Path, u64) -> Result<(), String>,
+) -> Result<(usize, Option<u64>), String> {
+    let mut first_ifd = None;
     // 当前层的元信息，初始为 IFD 0
     let mut prev_width = ifd0.width;
     let mut prev_height = ifd0.height;
@@ -356,7 +401,7 @@ pub fn build_pyramid<P: AsRef<Path>>(
     let mut prev_rows_per_strip = ifd0.rows_per_strip;
     let mut prev_strip_offsets = ifd0.strip_offsets.clone();
     let mut prev_strip_byte_counts = ifd0.strip_byte_counts.clone();
-    let mut prev_next_ifd_field_pos = ifd0.next_ifd_field_pos;
+    let mut prev_next_ifd_field_pos = None;
 
     let mut levels_generated = 0usize;
 
@@ -410,6 +455,7 @@ pub fn build_pyramid<P: AsRef<Path>>(
             // 追加到文件末尾
             file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
             let offset = file.stream_position().map_err(|e| e.to_string())?;
+            check_space(path, compressed.len() as u64)?;
             file.write_all(&compressed).map_err(|e| format!("写入 strip: {}", e))?;
             new_strip_offsets.push(offset);
             new_strip_byte_counts.push(compressed.len() as u64);
@@ -448,6 +494,7 @@ pub fn build_pyramid<P: AsRef<Path>>(
                 let compressed = compress_strip(&downsampled, compression_str)?;
                 file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
                 let offset = file.stream_position().map_err(|e| e.to_string())?;
+                check_space(path, compressed.len() as u64)?;
                 file.write_all(&compressed).map_err(|e| format!("写入 strip: {}", e))?;
                 new_strip_offsets.push(offset);
                 new_strip_byte_counts.push(compressed.len() as u64);
@@ -460,6 +507,7 @@ pub fn build_pyramid<P: AsRef<Path>>(
 
         // 写 StripOffsets / StripByteCounts 数组（count>1 外部存储，count==1 inline）
         let num_new_strips = new_strip_offsets.len() as u64;
+        check_space(path, num_new_strips * 16 + 1024)?;
         let (strip_offsets_val, strip_counts_val);
 
         if num_new_strips == 1 {
@@ -517,8 +565,12 @@ pub fn build_pyramid<P: AsRef<Path>>(
         write_u64(&mut file, 0)?; // NextIFDOffset = 0（后续层会覆写）
 
         // 回填前一个 IFD 的 NextIFDOffset 指向新 IFD
-        file.seek(SeekFrom::Start(prev_next_ifd_field_pos)).map_err(|e| e.to_string())?;
-        write_u64(&mut file, new_ifd_pos)?;
+        if let Some(link) = prev_next_ifd_field_pos {
+            file.seek(SeekFrom::Start(link)).map_err(|e| e.to_string())?;
+            write_u64(&mut file, new_ifd_pos)?;
+        } else {
+            first_ifd = Some(new_ifd_pos);
+        }
 
         // 更新循环状态
         prev_width = new_w;
@@ -527,22 +579,12 @@ pub fn build_pyramid<P: AsRef<Path>>(
         prev_compression_tag = match compression_str { "lzw" => 5, "deflate" => 8, _ => 1 };
         prev_strip_offsets = new_strip_offsets;
         prev_strip_byte_counts = new_strip_byte_counts;
-        prev_next_ifd_field_pos = this_next_ifd_pos;
+        prev_next_ifd_field_pos = Some(this_next_ifd_pos);
         levels_generated += 1;
     }
 
-    if let Some(ref cb) = opts.progress_cb {
-        cb(level_count, level_count);
-    }
-
-    file.flush().map_err(|e| format!("flush: {}", e))?;
-    let file_size_after = file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
-
-    Ok(PyramidStats {
-        levels_generated,
-        size_added_bytes: file_size_after - file_size_before,
-        elapsed_ms: start.elapsed().as_millis() as u64,
-    })
+    file.sync_data().map_err(|e| format!("写入金字塔数据失败: {e}"))?;
+    Ok((levels_generated, first_ifd))
 }
 
 fn read_strip_data(file: &mut std::fs::File, offset: u64, size: usize) -> Result<Vec<u8>, String> {
@@ -550,4 +592,36 @@ fn read_strip_data(file: &mut std::fs::File, offset: u64, size: usize) -> Result
     let mut buf = vec![0u8; size];
     file.read_exact(&mut buf).map_err(|e| format!("读取 strip: {}", e))?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn failed_pyramid_append_restores_original_file_and_can_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("影像.tif");
+        let bounds = crate::tile::get_merged_bounds(0, 0, 1, 3, 4);
+        crate::streaming_tiff::merge_and_export_streaming_with_budget(
+            &Default::default(), 0, 0, 1, 3, &bounds, &path, "deflate", None, 1024,
+        ).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let result = build_with_space_check(&path, PyramidOptions::default(), |_, next| {
+            checks.set(checks.get() + 1);
+            if checks.get() == 1 { return Ok(()); }
+            crate::fs_util::check_write_space(crate::fs_util::MIN_FREE_SPACE_BYTES, next)
+        });
+        assert!(result.err().unwrap().contains("磁盘空间不足"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let stats = build_pyramid(&path, PyramidOptions::default()).unwrap();
+        assert_eq!(stats.levels_generated, 1);
+        assert_eq!(path.metadata().unwrap().len(), original.len() as u64 + stats.size_added_bytes);
+        let mut tiff = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
+        assert_eq!(tiff.dimensions().unwrap(), (512, 1024));
+        tiff.next_image().unwrap();
+        assert_eq!(tiff.dimensions().unwrap(), (256, 512));
+        tiff.read_image().unwrap();
+    }
 }
