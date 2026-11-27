@@ -321,8 +321,8 @@ fn plan_with_profile(request: &Request, profile: JobProfile) -> Result<serde_jso
                 "imagery.format must be png, jpeg, geotiff, tiles, mbtiles, or gpkg".into(),
             );
         }
-        if !["none", "lzw", "deflate"].contains(&i.compression.as_str()) {
-            return Err("imagery.compression must be none, lzw, or deflate".into());
+        if !["none", "lzw", "deflate", "jpeg75"].contains(&i.compression.as_str()) {
+            return Err("imagery.compression must be none, lzw, deflate, or jpeg75".into());
         }
         if i.generate_sidecars && i.format != "geotiff" {
             return Err("imagery.generateSidecars requires geotiff".into());

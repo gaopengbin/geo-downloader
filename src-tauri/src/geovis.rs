@@ -96,6 +96,7 @@ pub fn source(id: &str) -> Option<TileSource> {
         _ => return None,
     };
     Some(TileSource {
+        cache_namespace: None,
         headers: Default::default(),
         id: id.into(),
         name: name.into(),

@@ -33,6 +33,7 @@ pub struct RegionBookmark {
     pub name: String,
     pub bounds: BookmarkBounds,
     pub polygon: Option<BookmarkPolygon>,
+    pub areas: Option<crate::selection_areas::SelectionAreas>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -74,7 +75,8 @@ impl RegionBookmarkStore {
             db_path: data_dir.join("region-bookmarks.db"),
         };
         store.with_connection(|connection| {
-            connection.execute_batch(
+            let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS region_bookmarks (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -86,7 +88,12 @@ impl RegionBookmarkStore {
                 CREATE INDEX IF NOT EXISTS idx_region_bookmarks_updated_at
                     ON region_bookmarks(updated_at DESC);",
             )?;
-            Ok(())
+            let has_areas: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('region_bookmarks') WHERE name='areas_json')",
+                [], |row| row.get(0),
+            )?;
+            if !has_areas { tx.execute("ALTER TABLE region_bookmarks ADD COLUMN areas_json TEXT", [])?; }
+            tx.commit()
         })?;
         Ok(store)
     }
@@ -117,7 +124,7 @@ impl RegionBookmarkStore {
     pub fn list(&self) -> Result<Vec<RegionBookmark>, String> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, name, bounds_json, polygon_json, created_at, updated_at
+                "SELECT id, name, bounds_json, polygon_json, created_at, updated_at, areas_json
                  FROM region_bookmarks
                  ORDER BY updated_at DESC, rowid DESC",
             )?;
@@ -131,6 +138,7 @@ impl RegionBookmarkStore {
         name: String,
         bounds: BookmarkBounds,
         polygon: Option<BookmarkPolygon>,
+        areas: Option<crate::selection_areas::SelectionAreas>,
     ) -> Result<RegionBookmark, String> {
         let name = validate_name(name)?;
         validate_bounds(&bounds)?;
@@ -142,6 +150,7 @@ impl RegionBookmarkStore {
             name,
             bounds,
             polygon,
+            areas,
             created_at: now,
             updated_at: now,
         };
@@ -153,13 +162,14 @@ impl RegionBookmarkStore {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|error| format!("序列化范围书签几何失败: {error}"))?;
-        validate_geometry_size(&bounds_json, polygon_json.as_deref())?;
+        let areas_json = bookmark.areas.as_ref().map(serde_json::to_string).transpose().map_err(|e| e.to_string())?;
+        validate_geometry_size(&bounds_json, polygon_json.as_deref(), areas_json.as_deref())?;
 
         self.with_connection(|connection| {
             connection.execute(
                 "INSERT INTO region_bookmarks
-                 (id, name, bounds_json, polygon_json, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 (id, name, bounds_json, polygon_json, created_at, updated_at, areas_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     bookmark.id,
                     bookmark.name,
@@ -167,6 +177,7 @@ impl RegionBookmarkStore {
                     polygon_json,
                     bookmark.created_at.to_rfc3339(),
                     bookmark.updated_at.to_rfc3339(),
+                    areas_json,
                 ],
             )?;
             Ok(())
@@ -203,7 +214,7 @@ impl RegionBookmarkStore {
     fn get(&self, id: &str) -> Result<Option<RegionBookmark>, String> {
         self.with_connection(|connection| {
             let mut statement = connection.prepare(
-                "SELECT id, name, bounds_json, polygon_json, created_at, updated_at
+                "SELECT id, name, bounds_json, polygon_json, created_at, updated_at, areas_json
                  FROM region_bookmarks WHERE id = ?1",
             )?;
             let mut rows = statement.query(params![id])?;
@@ -222,6 +233,7 @@ fn row_to_bookmark(row: &Row<'_>) -> rusqlite::Result<RegionBookmark> {
         name: row.get(1)?,
         bounds: parse_json(bounds_json, 2)?,
         polygon: polygon_json.map(|value| parse_json(value, 3)).transpose()?,
+        areas: row.get::<_, Option<String>>(6)?.map(|value| parse_json(value, 6)).transpose()?,
         created_at: parse_datetime(created_at, 4)?,
         updated_at: parse_datetime(updated_at, 5)?,
     })
@@ -288,8 +300,8 @@ fn validate_polygon(polygon: Option<&BookmarkPolygon>) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_geometry_size(bounds_json: &str, polygon_json: Option<&str>) -> Result<(), String> {
-    let size = bounds_json.len() + polygon_json.map(str::len).unwrap_or_default();
+fn validate_geometry_size(bounds_json: &str, polygon_json: Option<&str>, areas_json: Option<&str>) -> Result<(), String> {
+    let size = bounds_json.len() + polygon_json.map(str::len).unwrap_or_default() + areas_json.map(str::len).unwrap_or_default();
     if size > MAX_GEOMETRY_BYTES {
         return Err("当前范围过于复杂，无法保存为书签".to_string());
     }
@@ -330,7 +342,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = RegionBookmarkStore::open_at(temp.path()).unwrap();
         let created = store
-            .create(" 永寿县 ".to_string(), bounds(), Some(polygon(4)))
+            .create(" 永寿县 ".to_string(), bounds(), Some(polygon(4)), None)
             .unwrap();
 
         assert_eq!(created.name, "永寿县");
@@ -344,11 +356,30 @@ mod tests {
     }
 
     #[test]
+    fn legacy_table_adds_optional_hole_geometry_and_preserves_existing_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Connection::open(dir.path().join("region-bookmarks.db")).unwrap();
+        db.execute_batch("CREATE TABLE region_bookmarks(id TEXT PRIMARY KEY, name TEXT NOT NULL,
+            bounds_json TEXT NOT NULL, polygon_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)").unwrap();
+        let now = Utc::now().to_rfc3339();
+        db.execute("INSERT INTO region_bookmarks VALUES ('a','old',?1,NULL,?2,?2)",
+            params![serde_json::to_string(&bounds()).unwrap(),now]).unwrap();
+        drop(db);
+        let store = RegionBookmarkStore::open_at(dir.path()).unwrap();
+        assert!(store.list().unwrap()[0].areas.is_none());
+        let areas = serde_json::from_value(serde_json::json!([
+            [[[0,0],[5,0],[5,5],[0,5]],[[1,1],[2,1],[2,2]]]
+        ])).unwrap();
+        let saved = store.create("with hole".into(), bounds(), None, Some(areas)).unwrap();
+        assert_eq!(store.get(&saved.id).unwrap().unwrap().areas, saved.areas);
+    }
+
+    #[test]
     fn persists_large_imported_boundaries_across_reopen() {
         let temp = TempDir::new().unwrap();
         let created = RegionBookmarkStore::open_at(temp.path())
             .unwrap()
-            .create("大型 KML".to_string(), bounds(), Some(polygon(15_000)))
+            .create("大型 KML".to_string(), bounds(), Some(polygon(15_000)), None)
             .unwrap();
 
         let reopened = RegionBookmarkStore::open_at(temp.path()).unwrap();
@@ -361,9 +392,9 @@ mod tests {
     fn rejects_blank_and_oversized_names() {
         let temp = TempDir::new().unwrap();
         let store = RegionBookmarkStore::open_at(temp.path()).unwrap();
-        assert!(store.create("  ".to_string(), bounds(), None).is_err());
+        assert!(store.create("  ".to_string(), bounds(), None, None).is_err());
         assert!(store
-            .create("a".repeat(MAX_NAME_CHARS + 1), bounds(), None)
+            .create("a".repeat(MAX_NAME_CHARS + 1), bounds(), None, None)
             .is_err());
     }
 }

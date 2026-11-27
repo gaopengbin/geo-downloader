@@ -17,6 +17,7 @@ import { isOsmOfflineBlocked } from '@/features/sources/osm-download-policy'
 export interface CachedTileLayerOptions extends L.TileLayerOptions {
   /** 缓存的 source key（建议用稳定的英文标识，如 'world_imagery' 或 'wayback_2024-03-14'）*/
   sourceKey: string
+  cacheNamespace?: string
   /** 用于回填 mbtiles metadata 的展示名（中文） */
   displayName?: string
   /** 用于元数据记录的 URL 模板（含占位符），缺省取传入的 url */
@@ -35,7 +36,8 @@ const CachedTileLayerImpl = L.TileLayer.extend({
   initialize: function (urlTemplate: string, options: CachedTileLayerOptions) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(L.TileLayer.prototype as any).initialize.call(this, urlTemplate, options)
-    this._cacheSourceKey = options.sourceKey
+    this._sourceId = options.sourceKey
+    this._cacheSourceKey = options.cacheNamespace ?? options.sourceKey
     this._cacheUrlTemplate = options.urlTemplate ?? urlTemplate
     this._cacheDisplayName = options.displayName ?? options.sourceKey
     this._cacheFormat = options.format
@@ -85,7 +87,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
     const onLoadFromNetwork = () => {
       done(undefined, tile)
       if (this._requiresHeaders || this._skipPersistentCache) return
-      if (!this._cacheReadOnly && TAURI && !this._cacheSourceKey.startsWith('geovis_') && !this._cacheSourceKey.startsWith('earth_history_') && !this._cacheSourceKey.startsWith('earth_keyhole_')) {
+      if (!this._cacheReadOnly && TAURI && !this._sourceId.startsWith('geovis_') && !this._sourceId.startsWith('earth_history_') && !this._sourceId.startsWith('earth_keyhole_')) {
         // 异步回写，不阻塞渲染
         this._writeBackTile(tile, coords).catch(() => {
           /* swallow */
@@ -93,7 +95,7 @@ const CachedTileLayerImpl = L.TileLayer.extend({
       }
     }
 
-    if (this._requiresHeaders || this._skipPersistentCache || (TAURI && this._cacheSourceKey.startsWith('earth_keyhole_'))) {
+    if (this._requiresHeaders || this._skipPersistentCache || (TAURI && this._sourceId.startsWith('earth_keyhole_'))) {
       this._loadFromNetwork(tile, coords, onLoadFromNetwork, onError)
     } else if (TAURI) {
       // 先尝试缓存：直接走 gdcache 自定义协议（避免 base64 中转）
@@ -134,22 +136,22 @@ const CachedTileLayerImpl = L.TileLayer.extend({
       tile.onload = onLoad
       tile.onerror = onError
       void invokeCommand<string>('source_preview_tile', {
-        sourceKey: this._cacheSourceKey, z: this._getZoomForUrl(), x: coords.x, y: coords.y,
+        sourceKey: this._sourceId, z: this._getZoomForUrl(), x: coords.x, y: coords.y,
       }).then((dataUrl) => { if (!image.headersUnloaded) tile.src = dataUrl })
         .catch(() => { if (!image.headersUnloaded) onError() })
       return
     }
-    if (this._cacheSourceKey.startsWith('earth_keyhole_')) {
+    if (this._sourceId.startsWith('earth_keyhole_')) {
       if (!TAURI) { onError(); return }
       const image = tile as HTMLImageElement & { earthAbort?: AbortController; earthRequest?: string; earthBlob?: string }
       const controller = new AbortController()
       const requestId = crypto.randomUUID()
       image.earthAbort = controller
       image.earthRequest = requestId
-      image.dataset.earthSource = this._cacheSourceKey
+      image.dataset.earthSource = this._sourceId
       image.dataset.earthCoords = `${coords.z}/${coords.x}/${coords.y}`
       const prefix = navigator.userAgent.toLowerCase().includes('windows') ? 'http://keyhole.localhost' : 'keyhole://localhost'
-      const url = `${prefix}/${encodeURIComponent(this._cacheSourceKey)}/${coords.z}/${coords.x}/${coords.y}?request=${requestId}`
+      const url = `${prefix}/${encodeURIComponent(this._sourceId)}/${coords.z}/${coords.x}/${coords.y}?request=${requestId}`
       tile.onload = () => { image.earthRequest = undefined; onLoad(); if (image.earthBlob) { URL.revokeObjectURL(image.earthBlob); image.earthBlob = undefined } }
       tile.onerror = onError
       void fetch(url, { signal: controller.signal }).then(async (response) => {
@@ -161,13 +163,13 @@ const CachedTileLayerImpl = L.TileLayer.extend({
       }).catch(() => { image.earthRequest = undefined; if (!controller.signal.aborted) onError() })
       return
     }
-    if (this._cacheSourceKey.startsWith('geovis_') || this._cacheSourceKey.startsWith('earth_history_')) {
+    if (this._sourceId.startsWith('geovis_') || this._sourceId.startsWith('earth_history_')) {
       // The native client attaches the Key. Never expose it to Leaflet or the DOM.
       tile.onload = onLoad
       tile.onerror = onError
       if (!TAURI) { onError(); return }
-      void invokeCommand<string>(this._cacheSourceKey.startsWith('earth_history_') ? 'earth_history_preview_tile' : 'geovis_preview_tile', {
-        sourceKey: this._cacheSourceKey, z: coords.z, x: coords.x, y: coords.y,
+      void invokeCommand<string>(this._sourceId.startsWith('earth_history_') ? 'earth_history_preview_tile' : 'geovis_preview_tile', {
+        sourceKey: this._sourceId, z: coords.z, x: coords.x, y: coords.y,
       }).then((dataUrl) => { tile.src = dataUrl }).catch(onError)
       return
     }

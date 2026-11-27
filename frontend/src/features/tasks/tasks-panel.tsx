@@ -415,8 +415,7 @@ function TaskRow({
                   {t('tasks.cardActions.retry')}
                 </TaskCardAction>
               )}
-              {/* Issue #31：暂停 / 待决策态加「强制按现状导出」入口 */}
-              {(status === 'paused' || status === 'pending_decision') && !task.preparation && (
+              {status === 'pending_decision' && !task.preparation && ['geotiff', 'tif', 'tiff', 'png'].includes((task.format ?? '').toLowerCase()) && (
                 <TaskCardAction
                   icon={Download}
                   onClick={() => exportPartialMutation.mutate()}

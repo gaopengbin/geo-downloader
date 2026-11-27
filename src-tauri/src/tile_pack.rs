@@ -64,7 +64,8 @@ fn gzip_if_needed(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 /// 失败时返回空 Vec，调用方可继续。
 fn extract_mvt_layer_names(bytes: &[u8]) -> Vec<String> {
     // 解压 gzip 头
-    let plain: Vec<u8> = if bytes.len() >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B {
+    let inflated;
+    let plain = if bytes.len() >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B {
         use flate2::read::GzDecoder;
         use std::io::Read;
         let mut d = GzDecoder::new(bytes);
@@ -72,9 +73,10 @@ fn extract_mvt_layer_names(bytes: &[u8]) -> Vec<String> {
         if d.read_to_end(&mut v).is_err() {
             return Vec::new();
         }
-        v
+        inflated = v;
+        inflated.as_slice()
     } else {
-        bytes.to_vec()
+        bytes
     };
     // 极简 protobuf 解析：遍历 Tile 顶层字段，找 tag=3 (layers, length-delimited)
     let mut names = Vec::new();
@@ -115,7 +117,7 @@ fn extract_mvt_layer_names(bytes: &[u8]) -> Vec<String> {
                 };
                 i += n2;
                 let len = len as usize;
-                if i + len > plain.len() {
+                if len > plain.len() - i {
                     return names;
                 }
                 if field_no == 3 {
@@ -147,7 +149,7 @@ fn extract_mvt_layer_names(bytes: &[u8]) -> Vec<String> {
                                 };
                                 j += sn;
                                 let slen = slen as usize;
-                                if j + slen > layer.len() {
+                                if slen > layer.len() - j {
                                     break;
                                 }
                                 if lfn == 1 {
@@ -323,7 +325,7 @@ pub fn append_zoom_to_mbtiles(
         });
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-    let mut sample_layers: Vec<String> = Vec::new();
+    let mut layer_names = std::collections::BTreeSet::new();
     {
         let mut stmt = tx
             .prepare(
@@ -338,9 +340,7 @@ pub fn append_zoom_to_mbtiles(
             };
             // MVT/PBF 在 MBTiles 1.3 规范里要求 tile_data 为 gzip 压缩的 protobuf
             let stored = if is_pbf {
-                if sample_layers.is_empty() {
-                    sample_layers = extract_mvt_layer_names(&bytes);
-                }
+                layer_names.extend(extract_mvt_layer_names(&bytes));
                 gzip_if_needed(bytes)?
             } else {
                 bytes
@@ -350,36 +350,56 @@ pub fn append_zoom_to_mbtiles(
                 .map_err(|e| e.to_string())?;
         }
     }
-    tx.commit().map_err(|e| e.to_string())?;
-
-    // 矢量瓦片库写入 / 更新 metadata.json (vector_layers)
-    if is_pbf {
-        let existing: Option<String> = conn
-            .query_row(
-                "SELECT value FROM metadata WHERE name='json'",
-                [],
-                |r| r.get(0),
-            )
-            .ok();
-        if existing.is_none() && !sample_layers.is_empty() {
-            // 极简 vector_layers 描述：QGIS 会基于此识别 source-layer
-            let layers_json: Vec<String> = sample_layers
-                .iter()
-                .map(|n| {
-                    format!(
-                        "{{\"id\":{},\"description\":\"\",\"minzoom\":0,\"maxzoom\":22,\"fields\":{{}}}}",
-                        serde_json::to_string(n).unwrap_or_else(|_| "\"\"".to_string())
-                    )
-                })
-                .collect();
-            let json_value = format!("{{\"vector_layers\":[{}]}}", layers_json.join(","));
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata (name, value) VALUES ('json', ?1)",
-                params![json_value],
-            )
+    if !layer_names.is_empty() {
+        use rusqlite::OptionalExtension;
+        let existing: Option<String> = tx
+            .query_row("SELECT value FROM metadata WHERE name='json'", [], |row| {
+                row.get(0)
+            })
+            .optional()
             .map_err(|e| e.to_string())?;
+        let mut metadata = match existing {
+            Some(text) => {
+                serde_json::from_str(&text).map_err(|e| format!("MBTiles metadata.json: {e}"))?
+            }
+            None => serde_json::json!({}),
+        };
+        let layers = metadata
+            .as_object_mut()
+            .ok_or("invalid MBTiles metadata.json")?
+            .entry("vector_layers")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .ok_or("invalid MBTiles vector_layers")?;
+        for existing in layers.iter_mut() {
+            if existing["id"]
+                .as_str()
+                .is_some_and(|name| layer_names.remove(name))
+            {
+                for (key, is_minimum) in [("minzoom", true), ("maxzoom", false)] {
+                    if let Some(old) = existing[key].as_u64() {
+                        existing[key] = if is_minimum {
+                            old.min(zoom as u64)
+                        } else {
+                            old.max(zoom as u64)
+                        }
+                        .into();
+                    }
+                }
+            }
         }
+        layers.extend(layer_names.into_iter().map(|name| {
+            serde_json::json!({
+                "id": name, "description": "", "fields": {}, "minzoom": zoom, "maxzoom": zoom,
+            })
+        }));
+        tx.execute(
+            "INSERT OR REPLACE INTO metadata (name, value) VALUES ('json', ?1)",
+            params![metadata.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
     }
+    tx.commit().map_err(|e| e.to_string())?;
 
     let size = std::fs::metadata(output).map(|m| m.len()).unwrap_or(0);
     Ok(size)
@@ -804,6 +824,35 @@ mod tests {
             max_zoom: 2,
             attribution: Some("test".to_string()),
             description: Some("desc".to_string()),
+        }
+    }
+
+    #[test]
+    fn mbtiles_indexes_every_vector_layer_with_its_zoom_range() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("vector.mbtiles");
+        let mut meta = sample_metadata();
+        meta.format = "pbf".into();
+        for (zoom, names) in [(1, vec!["water", "land"]), (2, vec!["roads", "water"])] {
+            let mut tiles = HashMap::new();
+            for (i, name) in names.iter().enumerate() {
+                let file = temp.path().join(format!("{zoom}-{i}.pbf"));
+                let mut data = vec![0x1a, (name.len()+4) as u8, 0x0a, name.len() as u8];
+                data.extend_from_slice(name.as_bytes());
+                data.extend_from_slice(&[0x78, 0x02]);
+                fs::write(&file,data).unwrap();
+                tiles.insert((i as u32,0),TileSource::from_path(file));
+            }
+            append_zoom_to_mbtiles(&path,zoom,&tiles,(zoom==1).then_some(&meta)).unwrap();
+        }
+        let db = Connection::open(path).unwrap();
+        let raw: String = db.query_row("SELECT value FROM metadata WHERE name='json'",[],|r|r.get(0)).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let layers = meta["vector_layers"].as_array().unwrap();
+        assert_eq!(layers.len(),3);
+        for (name, lo, hi) in [("water",1,2),("land",1,1),("roads",2,2)] {
+            let entry = layers.iter().find(|v|v["id"]==name).unwrap();
+            assert_eq!(entry["minzoom"],lo); assert_eq!(entry["maxzoom"],hi);
         }
     }
 

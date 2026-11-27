@@ -1,10 +1,11 @@
 import { invokeCommand } from '@/lib/tauri'
-import type { LatLngRing, MapBounds } from '@/store/selection-store'
+import type { LatLngRing, MapBounds, SelectionAreas } from '@/store/selection-store'
 
 export interface RegionBookmark {
   id: string
   name: string
   bounds: MapBounds
+  areas?: SelectionAreas | null
   polygon: LatLngRing[] | null
   created_at: string
   updated_at: string
@@ -17,6 +18,7 @@ export function listRegionBookmarks() {
 export function createRegionBookmark(input: {
   name: string
   bounds: MapBounds
+  areas?: SelectionAreas | null
   polygon: LatLngRing[] | null
 }) {
   return invokeCommand<RegionBookmark>('create_region_bookmark', input)

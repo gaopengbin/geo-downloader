@@ -1,7 +1,6 @@
 //! Explicit bounded Overpass snapshots. Only image tiles cross the preview IPC.
 use super::raster::{RasterConfig, RasterTile};
 use super::{register, validate_bounds, Bounds};
-use crate::commands::PolygonCoord;
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -55,25 +54,18 @@ pub async fn osm_preview_load(
     bounds: Bounds,
     feature_type: String,
     proxy: Option<String>,
-    polygon: Option<Vec<PolygonCoord>>,
+    polygon: Option<crate::selection_areas::SelectionAreas>,
 ) -> Result<PreviewResult, String> {
     validate_bounds(bounds)?;
-    let polygon = polygon.map(|points| {
-        points
-            .into_iter()
-            .map(|p| (p.lat, p.lng))
-            .collect::<Vec<_>>()
-    });
-    if let Some(points) = &polygon {
-        if points.len() < 3
-            || points.len() > 5000
-            || points.iter().any(|(lat, lng)| {
-                !lat.is_finite() || !lng.is_finite() || lat.abs() > 90. || lng.abs() > 180.
-            })
-        {
+    let area = if let Some(areas) = &polygon {
+        if areas.0.iter().flatten().map(Vec::len).sum::<usize>() > 5000 {
             return Err("OSM_PREVIEW: invalid polygon".into());
         }
-    }
+        areas.0.iter().map(|part| {
+            let [west,south,east,north] = crate::selection_areas::ring_bounds(&part[0]);
+            (east-west)*(north-south)
+        }).sum()
+    } else { (bounds.east - bounds.west) * (bounds.north - bounds.south) };
     if ![
         "roads",
         "buildings",
@@ -87,13 +79,13 @@ pub async fn osm_preview_load(
     {
         return Err("OSM_PREVIEW: invalid feature type".into());
     }
-    if (bounds.east - bounds.west) * (bounds.north - bounds.south) > 0.04 {
+    if area > 0.04 {
         return Err("预览范围过大，请缩小选区或放大地图后重试".into());
     }
     let (_guard, cancel) = register(&request_id)?;
     let geojson = tokio::select! {
         _ = cancel.cancelled() => return Err(super::cancelled()),
-        result = crate::admin::download_osm_features(bounds.south, bounds.west, bounds.north, bounds.east, &feature_type, proxy.as_deref(), polygon.as_deref()) => result?
+        result = crate::admin::download_osm_features(bounds.south, bounds.west, bounds.north, bounds.east, &feature_type, proxy.as_deref(), polygon.as_ref()) => result?
     };
     let bytes = serde_json::to_vec(&geojson)
         .map_err(|_| "OSM_PREVIEW: invalid data")?

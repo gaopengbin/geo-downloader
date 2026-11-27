@@ -1,6 +1,6 @@
 [package]
 name = "geo-downloader"
-version = "3.6.29"
+version = "3.6.30"
 description = "GeoDownloader - 地理空间数据下载与导出工具"
 authors = ["you"]
 license = "MIT"
@@ -67,6 +67,7 @@ log = "0.4"
 
 # Disk headroom, exclusive overview updates and staged outputs
 fs2 = "0.4.3"
+same-file = "=1.0.6"
 tempfile = "3"
 
 # Error handling

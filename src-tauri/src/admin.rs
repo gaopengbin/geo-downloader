@@ -306,6 +306,104 @@ pub struct GeoBounds {
 /// 下载 OSM 要素
 /// feature_type: building, highway, waterway, landuse, natural, amenity 等
 /// polygon: 可选的多边形坐标 (lat, lng) 列表，用于精确过滤
+fn osm_query(
+    bounds: [f64; 4],
+    feature_type: &str,
+    polygon: Option<&crate::selection_areas::SelectionAreas>,
+) -> Result<String, String> {
+    let (tag, types): (&str, &[&str]) = match feature_type {
+        "building" | "buildings" => ("building", &["way", "relation"]),
+        "highway" | "roads" => ("highway", &["way"]),
+        "waterway" | "waterways" => ("waterway", &["way", "relation"]),
+        "landuse" | "natural" => (feature_type, &["way", "relation"]),
+        "amenity" | "pois" => ("amenity", &["node", "way"]),
+        "railway" | "railways" => ("railway", &["way"]),
+        other if !other.trim().is_empty() => (other, &["way"]),
+        _ => return Err("无效的 OSM 要素类型".into()),
+    };
+    let filters = match polygon {
+        Some(areas) => areas
+            .0
+            .iter()
+            .map(|part| {
+                let outer = &part[0];
+                // Overpass poly represents holes by inserting a closed inner contour
+                // between two copies of an exterior vertex (Overpass polygon manual).
+                let mut holes_at =
+                    std::collections::BTreeMap::<usize, Vec<&crate::selection_areas::Ring>>::new();
+                for hole in &part[1..] {
+                    let distance =
+                        |p: &[f64; 2]| (p[0] - hole[0][0]).powi(2) + (p[1] - hole[0][1]).powi(2);
+                    let anchor = outer
+                        .iter()
+                        .enumerate()
+                        .min_by(|a, b| distance(a.1).total_cmp(&distance(b.1)))
+                        .unwrap()
+                        .0;
+                    holes_at.entry(anchor).or_default().push(hole);
+                }
+                let mut points = Vec::new();
+                for (index, point) in outer.iter().enumerate() {
+                    points.push(*point);
+                    for hole in holes_at.get(&index).into_iter().flatten() {
+                        points.extend(hole.iter().copied());
+                        if hole.first() != hole.last() {
+                            points.push(hole[0]);
+                        }
+                        points.push(*point);
+                    }
+                }
+                let coordinates = points
+                    .iter()
+                    .map(|p| format!("{} {}", p[1], p[0]))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(r#"(poly:"{coordinates}")"#)
+            })
+            .collect::<Vec<_>>(),
+        None => vec![format!(
+            "({},{},{},{})",
+            bounds[0], bounds[1], bounds[2], bounds[3]
+        )],
+    };
+    let quoted_tag = serde_json::to_string(tag).map_err(|e| e.to_string())?;
+    let mut query = String::from("[out:json][timeout:120];(");
+    for area in filters {
+        for kind in types {
+            query.push_str(&format!("{kind}[{quoted_tag}]{area};"));
+        }
+    }
+    query.push_str(");out body;>;out skel qt;");
+    Ok(query)
+}
+
+#[cfg(test)]
+mod polygon_query_tests {
+    use super::*;
+    #[test]
+    fn query_includes_each_area_and_preserves_closed_inner_ring() {
+        let polygons = serde_json::from_value(serde_json::json!([
+            [[[1, 2], [6, 2], [6, 7], [1, 7]], [[2, 3], [3, 3], [2, 4]]],
+            [[[10, 12], [12, 12], [12, 14]]]
+        ]))
+        .unwrap();
+        let query = osm_query([2., 1., 14., 12.], "pois", Some(&polygons)).unwrap();
+        assert_eq!(query.matches("node[").count(), 2);
+        assert_eq!(query.matches("way[").count(), 2);
+        assert!(query.contains("2 1 3 2 3 3 4 2 3 2 2 1"));
+        assert!(query.contains("12 10 12 12 14 12"));
+        let with_altitude = serde_json::from_value(serde_json::json!([[[[1,2,30],[6,2,40],[6,7,50]]]])).unwrap();
+        assert!(osm_query([2.,1.,7.,6.], "roads", Some(&with_altitude)).unwrap().contains("2 1 2 6 7 6"));
+        let old = serde_json::from_value(serde_json::json!([
+            {"lng":1,"lat":2},{"lng":6,"lat":2},{"lng":6,"lat":7}
+        ]))
+        .unwrap();
+        assert!(osm_query([2., 1., 7., 6.], "roads", Some(&old))
+            .unwrap()
+            .contains("2 1 2 6 7 6"));
+    }
+}
+
 pub async fn download_osm_features(
     south: f64,
     west: f64,
@@ -313,7 +411,7 @@ pub async fn download_osm_features(
     east: f64,
     feature_type: &str,
     proxy: Option<&str>,
-    polygon: Option<&[(f64, f64)]>,
+    polygon: Option<&crate::selection_areas::SelectionAreas>,
 ) -> Result<serde_json::Value, String> {
     download_osm_features_with_progress(south, west, north, east, feature_type, proxy, polygon, |_| {}).await
 }
@@ -325,119 +423,10 @@ pub async fn download_osm_features_with_progress(
     east: f64,
     feature_type: &str,
     proxy: Option<&str>,
-    polygon: Option<&[(f64, f64)]>,
+    polygon: Option<&crate::selection_areas::SelectionAreas>,
     progress: impl FnMut(String),
 ) -> Result<serde_json::Value, String> {
-    // 生成区域过滤字符串：优先使用多边形，否则使用边界框
-    let area_filter = if let Some(poly) = polygon {
-        if poly.len() >= 3 {
-            // 使用 Overpass poly: 语法
-            // 格式: poly:"lat1 lng1 lat2 lng2 ..."
-            let poly_str: String = poly.iter()
-                .map(|(lat, lng)| format!("{} {}", lat, lng))
-                .collect::<Vec<_>>()
-                .join(" ");
-            println!("[OSM] 下载 {} 数据, 使用多边形过滤 ({} 个顶点)", feature_type, poly.len());
-            format!("(poly:\"{}\")", poly_str)
-        } else {
-            println!("[OSM] 下载 {} 数据, 边界框: ({}, {}, {}, {})", feature_type, south, west, north, east);
-            format!("({},{},{},{})", south, west, north, east)
-        }
-    } else {
-        println!("[OSM] 下载 {} 数据, 边界框: ({}, {}, {}, {})", feature_type, south, west, north, east);
-        format!("({},{},{},{})", south, west, north, east)
-    };
-    
-    // 根据要素类型生成 Overpass 查询
-    let query = match feature_type {
-        "building" | "buildings" => format!(
-            r#"[out:json][timeout:120];
-            (
-              way["building"]{af};
-              relation["building"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            af = area_filter
-        ),
-        "highway" | "roads" => format!(
-            r#"[out:json][timeout:120];
-            (
-              way["highway"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            af = area_filter
-        ),
-        "waterway" | "waterways" => format!(
-            r#"[out:json][timeout:120];
-            (
-              way["waterway"]{af};
-              relation["waterway"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            af = area_filter
-        ),
-        "landuse" => format!(
-            r#"[out:json][timeout:120];
-            (
-              way["landuse"]{af};
-              relation["landuse"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            af = area_filter
-        ),
-        "natural" => format!(
-            r#"[out:json][timeout:120];
-            (
-              way["natural"]{af};
-              relation["natural"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            af = area_filter
-        ),
-        "amenity" | "pois" => format!(
-            r#"[out:json][timeout:120];
-            (
-              node["amenity"]{af};
-              way["amenity"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            af = area_filter
-        ),
-        "railway" | "railways" => format!(
-            r#"[out:json][timeout:120];
-            (
-              way["railway"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            af = area_filter
-        ),
-        _ => format!(
-            r#"[out:json][timeout:120];
-            (
-              way["{ft}"]{af};
-            );
-            out body;
-            >;
-            out skel qt;"#,
-            ft = feature_type,
-            af = area_filter
-        ),
-    };
-
+    let query = osm_query([south, west, north, east], feature_type, polygon)?;
     let osm_data = crate::overpass::query(&query, proxy, progress).await?;
     
     // 输出元素数量用于调试

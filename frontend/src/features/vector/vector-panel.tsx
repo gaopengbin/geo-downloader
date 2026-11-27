@@ -18,7 +18,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { PanelSection } from '@/components/layout/panel-section'
 
-import { useSelectionStore } from '@/store/selection-store'
+import { selectedAreas, useSelectionStore } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
 import { useVectorLayersStore } from '@/store/vector-layers-store'
 import { isTauriRuntime } from '@/lib/tauri'
@@ -72,7 +72,6 @@ export function VectorPanel({ source = 'osm' }: { source?: 'osm' | 'admin' | 'lo
   const [osmTaskName, setOsmTaskName] = useState('')
 
   const bounds = useSelectionStore((s) => s.bounds)
-  const polygon = useSelectionStore((s) => s.polygon)
   const currentAdminCode = useAppStore((s) => s.currentAdminCode)
 
   const layers = useVectorLayersStore((s) => s.layers)
@@ -104,13 +103,13 @@ export function VectorPanel({ source = 'osm' }: { source?: 'osm' | 'admin' | 'lo
 
       const taskName = osmTaskName.trim() || `OSM ${featLabel}`
       // OSM Overpass 只接受单个外环
-      const osmRing = polygon && polygon.length > 0 ? polygon[0] : null
+      const areas = selectedAreas(useSelectionStore.getState())
       return createOsmDownloadTask(
         bounds,
         featureType,
         savePath as string,
         proxy,
-        osmRing,
+        areas,
         taskName,
       )
     },
@@ -133,7 +132,7 @@ export function VectorPanel({ source = 'osm' }: { source?: 'osm' | 'admin' | 'lo
       const requestId = crypto.randomUUID()
       previewRequest.current = requestId
       try {
-        const result = await invokeCommand<{ id: string; feature_count: number }>('osm_preview_load', { requestId, bounds: area, featureType, proxy, polygon: bounds ? polygon?.[0] ?? null : null })
+        const result = await invokeCommand<{ id: string; feature_count: number }>('osm_preview_load', { requestId, bounds: area, featureType, proxy, polygon: bounds ? selectedAreas(useSelectionStore.getState()) : null })
         if (previewRequest.current !== requestId) {
           await invokeCommand('osm_preview_remove', { id: result.id })
           return

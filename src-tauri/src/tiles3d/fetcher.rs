@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 pub struct Tiles3dFetcher {
     client: Client,
     auth_headers: HashMap<String, String>,
+    auth_origin: Option<String>,
 }
 
 /// 下载进度回调
@@ -36,6 +37,8 @@ pub struct FetchProgress {
 impl Tiles3dFetcher {
     pub fn new(proxy: Option<&str>) -> Result<Self, String> {
         let mut builder = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .referer(false)
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(60))
             .pool_max_idle_per_host(50)
@@ -57,6 +60,7 @@ impl Tiles3dFetcher {
         Ok(Self {
             client,
             auth_headers: HashMap::new(),
+            auth_origin: None,
         })
     }
 
@@ -71,29 +75,12 @@ impl Tiles3dFetcher {
                     "https://api.cesium.com/v1/assets/{}/endpoint",
                     asset_id
                 );
-                let resp = self
-                    .client
-                    .get(&url)
-                    .header("Authorization", format!("Bearer {}", access_token))
-                    .send()
-                    .await
-                    .map_err(|e| format!("Cesium Ion API 请求失败: {}", e))?;
-
+                let headers = HashMap::from([("Authorization".to_string(), format!("Bearer {access_token}"))]);
+                let resp = scoped_get(&self.client, &url, Some("https://api.cesium.com"), &headers).await?;
                 if !resp.status().is_success() {
-                    return Err(format!(
-                        "Cesium Ion API 返回错误 {}: {}",
-                        resp.status(),
-                        resp.text().await.unwrap_or_default()
-                    ));
+                    return Err(format!("Cesium Ion API 返回错误 {}", resp.status()));
                 }
-
-                let resp_text = resp
-                    .text()
-                    .await
-                    .map_err(|e| format!("读取 Ion 响应失败: {}", e))?;
-
-                log::info!("Ion endpoint raw: {}", resp_text.chars().take(2000).collect::<String>());
-
+                let resp_text = resp.text().await.map_err(|e| e.without_url().to_string())?;
                 let endpoint: IonEndpointResponse = serde_json::from_str(&resp_text)
                     .map_err(|e| format!("解析 Ion 响应失败: {}", e))?;
 
@@ -103,7 +90,7 @@ impl Tiles3dFetcher {
                     .or_else(|| endpoint.options.and_then(|o| o.url))
                     .ok_or("Ion endpoint 响应中缺少 URL")?;
 
-                log::info!("Ion endpoint: type={}, url={}", endpoint.r#type, &raw_url);
+                log::info!("Ion endpoint type={}", endpoint.r#type);
 
                 // 认证头：标准 Ion 用 Bearer token，外部类型（如 Google）不需要
                 let mut headers = HashMap::new();
@@ -118,14 +105,13 @@ impl Tiles3dFetcher {
 
                 // Ion 返回的 URL 可能不以 tileset.json 结尾，需要补全
                 // 注意：URL 可能带查询参数如 ?v=2，需要先去掉再判断
-                let url_path = raw_url.split('?').next().unwrap_or(&raw_url);
-                let tileset_url = if url_path.to_lowercase().ends_with(".json") {
-                    raw_url
-                } else {
-                    let base = raw_url.trim_end_matches('/');
-                    format!("{}/tileset.json", base)
-                };
-
+                let mut parsed = resource_url(&raw_url)?;
+                if !parsed.path().to_ascii_lowercase().ends_with(".json") {
+                    let path = format!("{}/tileset.json", parsed.path().trim_end_matches('/'));
+                    parsed.set_path(&path);
+                }
+                self.auth_origin = Some(parsed.origin().ascii_serialization());
+                let tileset_url = parsed.to_string();
                 Ok(ResolvedEndpoint {
                     tileset_url,
                     auth_headers: headers,
@@ -135,6 +121,7 @@ impl Tiles3dFetcher {
                 tileset_url,
                 headers,
             } => {
+                self.auth_origin = Some(resource_url(tileset_url)?.origin().ascii_serialization());
                 self.auth_headers = headers.clone();
                 Ok(ResolvedEndpoint {
                     tileset_url: tileset_url.clone(),
@@ -146,61 +133,12 @@ impl Tiles3dFetcher {
 
     /// 获取并解析 tileset.json
     pub async fn fetch_tileset(&self, tileset_url: &str) -> Result<Tileset, String> {
-        let mut req = self.client.get(tileset_url);
-        for (k, v) in &self.auth_headers {
-            req = req.header(k, v);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| format!("获取 tileset.json 失败: {}", e))?;
-
-        if !resp.status().is_success() {
-            return Err(format!(
-                "tileset.json 请求返回 {}: {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            ));
-        }
-
-        let status = resp.status();
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .to_string();
-
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("读取响应体失败: {}", e))?;
-
-        log::info!(
-            "tileset response: status={}, content-type={}, body_len={}, preview={}",
-            status,
-            content_type,
-            text.len(),
-            text.chars().take(300).collect::<String>()
-        );
-
-        serde_json::from_str::<Tileset>(&text)
-            .map_err(|e| format!("解析 tileset.json 失败: {}", e))
+        self.fetch_raw_tileset(tileset_url).await.map(|(tileset, _)| tileset)
     }
 
     /// 获取 tileset.json 原始字节 + 解析后的结构体（用于解析阶段同时写盘）
     async fn fetch_raw_tileset(&self, tileset_url: &str) -> Result<(Tileset, Vec<u8>), String> {
-        let mut req = self.client.get(tileset_url);
-        for (k, v) in &self.auth_headers {
-            req = req.header(k, v);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| format!("获取 tileset 失败: {}", e))?;
-
+        let resp = scoped_get(&self.client, tileset_url, self.auth_origin.as_deref(), &self.auth_headers).await?;
         if !resp.status().is_success() {
             return Err(format!("tileset 请求返回 {}", resp.status()));
         }
@@ -208,7 +146,7 @@ impl Tiles3dFetcher {
         let bytes = resp
             .bytes()
             .await
-            .map_err(|e| format!("读取响应体失败: {}", e))?;
+            .map_err(|e| format!("读取响应体失败: {}", e.without_url()))?;
 
         let tileset = serde_json::from_slice::<Tileset>(&bytes)
             .map_err(|e| format!("解析 tileset 失败: {}", e))?;
@@ -231,7 +169,7 @@ impl Tiles3dFetcher {
     pub async fn download<F>(
         &mut self,
         tileset_url: &str,
-        polygon: Option<&[Vec<f64>]>,
+        polygon: Option<&crate::selection_areas::SelectionAreas>,
         output_dir: &Path,
         concurrency: usize,
         cancel_token: CancellationToken,
@@ -253,9 +191,9 @@ impl Tiles3dFetcher {
         let tileset = self.fetch_tileset(tileset_url).await?;
 
         // 2. 空间过滤
-        let filter_result = if let Some(poly) = polygon {
-            let region = SelectionRegion::new(poly);
-            let result = filter_tileset(&tileset, &region);
+        let selection_region = polygon.map(SelectionRegion::new);
+        let filter_result = if let Some(region) = &selection_region {
+            let result = filter_tileset(&tileset, region);
             if result.download_uris.is_empty() {
                 return Err("选区内无可下载的瓦片".to_string());
             }
@@ -269,6 +207,9 @@ impl Tiles3dFetcher {
         tokio::fs::create_dir_all(output_dir)
             .await
             .map_err(|e| format!("创建输出目录失败: {}", e))?;
+
+        let canonical_root = tokio::fs::canonicalize(output_dir).await.map_err(|e| e.to_string())?;
+        let output_dir = canonical_root.as_path();
 
         // 4. 解析 base URL（用于解析相对路径）及 query 参数（如 ?token=xxx）
         let (clean_tileset_url, query_params) = if let Some((path, query)) = tileset_url.split_once('?') {
@@ -356,13 +297,14 @@ impl Tiles3dFetcher {
         // 6c. 下载消费者
         let download_handle = {
             let client = self.client.clone();
-            let auth = self.auth_headers.clone();
+            let auth = std::sync::Arc::new(self.auth_headers.clone());
+            let origin = self.auth_origin.clone();
             let cancel = cancel_token.clone();
             let pause = pause_control.clone();
             let completed = completed.clone();
             let failed = failed.clone();
             let out_dir = output_dir.to_path_buf();
-            let sem_size = concurrency;
+            let sem_size = concurrency.max(1);
 
             tokio::spawn(async move {
                 let sem = Arc::new(Semaphore::new(sem_size));
@@ -375,7 +317,11 @@ impl Tiles3dFetcher {
                     }
                     pause.wait_if_paused().await;
 
-                    let local_path = out_dir.join(&local_rel);
+                    let local_path = match safe_output_path(&out_dir, &local_rel).await {
+                        Ok(path) => path,
+                        Err(e) => { failed.fetch_add(1, Ordering::Relaxed); log::warn!("{e}"); continue; }
+                    };
+                    let origin = origin.clone();
                     let client = client.clone();
                     let auth = auth.clone();
                     let cancel = cancel.clone();
@@ -396,14 +342,13 @@ impl Tiles3dFetcher {
                             completed.fetch_add(1, Ordering::Relaxed);
                             return;
                         }
-                        match download_file(&client, &url, &auth, &local_path, &cancel).await {
+                        match download_file(&client, &url, origin.as_deref(), &auth, &local_path, &cancel).await {
                             Ok(_) => {
                                 completed.fetch_add(1, Ordering::Relaxed);
                             }
                             Err(e) => {
                                 failed.fetch_add(1, Ordering::Relaxed);
-                                let url_tail: String = url.chars().rev().take(60).collect::<Vec<_>>().into_iter().rev().collect();
-                                log::warn!("下载失败: …{} — {}", url_tail, e);
+                                log::warn!("3D 内容下载失败: {}", e);
                             }
                         }
                     }));
@@ -418,7 +363,6 @@ impl Tiles3dFetcher {
 
         // 6d. 解析（producer）—— 解析外部 tileset 并将下载条目推入通道
         //     当有选区时，对子 tileset 也做空间过滤
-        let selection_region = polygon.map(|p| SelectionRegion::new(p));
         let resolve_result = self
             .resolve_and_stream(
                 &filter_result.download_uris,
@@ -450,12 +394,10 @@ impl Tiles3dFetcher {
         strip_query_params_from_tileset(&mut rewritten_tileset);
 
         // 9. 写入 tileset.json
-        let output_tileset_path = output_dir.join("tileset.json");
+        let output_tileset_path = safe_output_path(output_dir, "tileset.json").await?;
         let json = serde_json::to_string_pretty(&rewritten_tileset)
             .map_err(|e| format!("序列化 tileset.json 失败: {}", e))?;
-        tokio::fs::write(&output_tileset_path, json)
-            .await
-            .map_err(|e| format!("写入 tileset.json 失败: {}", e))?;
+        write_output(&output_tileset_path, json.as_bytes()).await?;
 
         let final_completed = completed.load(Ordering::Relaxed);
         let final_failed = failed.load(Ordering::Relaxed);
@@ -520,6 +462,7 @@ impl Tiles3dFetcher {
         let effective_query = {
             let mut extra = String::new();
             for uri in initial_uris {
+                if !same_origin(&resolve_url(root_base, uri), self.auth_origin.as_deref()) { continue; }
                 if let Some((_, q)) = uri.split_once('?') {
                     for p in q.split('&') {
                         if p.starts_with("session=") {
@@ -564,14 +507,14 @@ impl Tiles3dFetcher {
                 let qp = query_params.to_string();
                 in_flight.push(Box::pin(async move {
                     let _permit = sem_clone.acquire().await.unwrap();
-                    let fetch_url = append_query(&absolute_url, &qp);
+                    let fetch_url = append_query(&absolute_url, &qp, self.auth_origin.as_deref());
                     let result = self.fetch_raw_tileset(&fetch_url).await;
                     (absolute_url, json_base, 0u8, inherited_transform, result)
                 }));
             } else {
                 // 非 JSON → 立即推入下载通道
                 total_discovered.fetch_add(1, Ordering::Relaxed);
-                let download_url = append_query(&absolute_url, query_params);
+                let download_url = append_query(&absolute_url, query_params, self.auth_origin.as_deref());
                 if tx.send((download_url, local_path)).await.is_err() {
                     break;
                 }
@@ -588,71 +531,25 @@ impl Tiles3dFetcher {
             }
 
             match result {
-                Ok((sub_tileset, raw_bytes)) => {
+                Ok((sub_tileset, _)) => {
                     let json_local = absolute_to_local(&url, root_base);
-                    let dest = output_dir.join(&json_local);
-                    if let Some(parent) = dest.parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
-                    }
-
-                    // 对子 tileset 应用空间过滤（如有选区）
-                    let (sub_uris, sub_transforms) = if let Some(reg) = region {
-                        let filter_result = filter_tileset_with_parent_transform(
-                            &sub_tileset,
-                            reg,
-                            &inherited_transform,
-                        );
-                        // 重写子 tileset URI 为本地相对路径（离线预览需要）
-                        let json_dir = json_local.rsplit_once('/')
-                            .map(|(d, _)| format!("{}/", d))
-                            .unwrap_or_default();
-                        let sub_uri_map: HashMap<String, String> = filter_result.download_uris.iter()
-                            .map(|uri| {
-                                let abs = resolve_url(&base, uri);
-                                let local = absolute_to_local(&abs, root_base);
-                                let relative = if local.starts_with(&json_dir) {
-                                    local[json_dir.len()..].to_string()
-                                } else {
-                                    local
-                                };
-                                (uri.clone(), relative)
-                            })
-                            .collect();
-                        let mut filtered = rewrite_tileset_uris(&filter_result.tileset, &sub_uri_map);
-                        strip_query_params_from_tileset(&mut filtered);
-                        if let Ok(json) = serde_json::to_string_pretty(&filtered) {
-                            let _ = tokio::fs::write(&dest, json.as_bytes()).await;
-                        } else {
-                            let _ = tokio::fs::write(&dest, &raw_bytes).await;
-                        }
-                        (filter_result.download_uris, filter_result.uri_transforms)
+                    let dest = safe_output_path(output_dir, &json_local).await?;
+                    let (subset, sub_uris, sub_transforms) = if let Some(reg) = region {
+                        let filtered = filter_tileset_with_parent_transform(&sub_tileset, reg, &inherited_transform);
+                        (filtered.tileset, filtered.download_uris, filtered.uri_transforms)
                     } else {
-                        // 无选区：重写 URI 为本地相对路径
-                        let all_uris = collect_tile_content_uris(&sub_tileset.root);
-                        let json_dir = json_local.rsplit_once('/')
-                            .map(|(d, _)| format!("{}/", d))
-                            .unwrap_or_default();
-                        let sub_uri_map: HashMap<String, String> = all_uris.iter()
-                            .map(|uri| {
-                                let abs = resolve_url(&base, uri);
-                                let local = absolute_to_local(&abs, root_base);
-                                let relative = if local.starts_with(&json_dir) {
-                                    local[json_dir.len()..].to_string()
-                                } else {
-                                    local
-                                };
-                                (uri.clone(), relative)
-                            })
-                            .collect();
-                        let mut clean = rewrite_tileset_uris(&sub_tileset, &sub_uri_map);
-                        strip_query_params_from_tileset(&mut clean);
-                        if let Ok(json) = serde_json::to_string_pretty(&clean) {
-                            let _ = tokio::fs::write(&dest, json.as_bytes()).await;
-                        } else {
-                            let _ = tokio::fs::write(&dest, &raw_bytes).await;
-                        }
-                        (all_uris, HashMap::new())
+                        let uris = collect_tile_content_uris(&sub_tileset.root);
+                        (sub_tileset, uris, HashMap::new())
                     };
+                    let sub_uri_map = sub_uris.iter().map(|uri| {
+                        let absolute = resolve_url(&base, uri);
+                        let local = absolute_to_local(&absolute, root_base);
+                        (uri.clone(), relative_content_uri(&json_local, &local))
+                    }).collect();
+                    let mut local_tileset = rewrite_tileset_uris(&subset, &sub_uri_map);
+                    strip_query_params_from_tileset(&mut local_tileset);
+                    let bytes = serde_json::to_vec_pretty(&local_tileset).map_err(|e| e.to_string())?;
+                    write_output(&dest, &bytes).await?;
 
                     for sub_uri in &sub_uris {
                         let abs = resolve_url(&base, sub_uri);
@@ -676,13 +573,13 @@ impl Tiles3dFetcher {
                             let qp = query_params.to_string();
                             in_flight.push(Box::pin(async move {
                                 let _permit = sem_clone.acquire().await.unwrap();
-                                let fetch_url = append_query(&abs, &qp);
+                                let fetch_url = append_query(&abs, &qp, self.auth_origin.as_deref());
                                 let result = self.fetch_raw_tileset(&fetch_url).await;
                                 (abs, json_base, 0u8, child_transform, result)
                             }));
                         } else {
                             total_discovered.fetch_add(1, Ordering::Relaxed);
-                            let download_url = append_query(&abs, query_params);
+                            let download_url = append_query(&abs, query_params, self.auth_origin.as_deref());
                             if tx.send((download_url, local)).await.is_err() {
                                 break;
                             }
@@ -706,7 +603,7 @@ impl Tiles3dFetcher {
                                 500 * 2u64.pow(next_retries as u32 - 1),
                             );
                             tokio::time::sleep(delay).await;
-                            let fetch_url = append_query(&url, &qp);
+                            let fetch_url = append_query(&url, &qp, self.auth_origin.as_deref());
                             let result = self.fetch_raw_tileset(&fetch_url).await;
                             (url, base, next_retries, inherited_transform, result)
                         }));
@@ -733,22 +630,155 @@ impl Tiles3dFetcher {
     }
 }
 
-fn temporary_download_path(dest: &Path) -> Result<PathBuf, String> {
-    let file_name = dest
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| "下载目标文件名无效".to_string())?;
-    Ok(dest.with_file_name(format!(
-        "{}.{}.tmp",
-        file_name,
-        uuid::Uuid::new_v4()
-    )))
+fn resource_url(raw: &str) -> Result<reqwest::Url, String> {
+    reqwest::Url::parse(raw)
+        .ok()
+        .filter(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+        })
+        .ok_or_else(|| "3D 资源需要有效的 HTTP(S) 地址".into())
+}
+
+pub(crate) fn source_label(url: &str) -> String {
+    resource_url(url)
+        .map(|u| u.origin().ascii_serialization())
+        .unwrap_or_else(|_| "3D Tiles".into())
+}
+
+fn same_origin(url: &str, origin: Option<&str>) -> bool {
+    resource_url(url).is_ok_and(|u| origin == Some(u.origin().ascii_serialization().as_str()))
+}
+
+async fn scoped_get(
+    client: &Client,
+    raw: &str,
+    origin: Option<&str>,
+    headers: &HashMap<String, String>,
+) -> Result<reqwest::Response, String> {
+    let mut url = resource_url(raw)?;
+    for _ in 0..=10 {
+        let mut request = client.get(url.clone());
+        if origin == Some(url.origin().ascii_serialization().as_str()) {
+            for (key, value) in headers {
+                request = request.header(key, value);
+            }
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| e.without_url().to_string())?;
+        if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+            return Ok(response);
+        }
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or("3D 重定向缺少地址")?;
+        url = resource_url(
+            url.join(location)
+                .map_err(|_| "3D 重定向地址无效")?
+                .as_str(),
+        )?;
+    }
+    Err("3D 资源重定向次数过多".into())
+}
+
+/// Resolve only portable, ordinary components beneath the already canonical task directory.
+async fn safe_output_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let mut path = root.to_path_buf();
+    let mut segments = relative.split('/').peekable();
+    while let Some(segment) = segments.next() {
+        let stem = segment
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .trim_end()
+            .to_ascii_uppercase();
+        let reserved = matches!(
+            stem.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|s| {
+                s.len() == 1 && s.as_bytes()[0].is_ascii_digit() || matches!(s, "¹" | "²" | "³")
+            })
+        });
+        if segment.is_empty()
+            || segment.ends_with(['.', ' '])
+            || reserved
+            || segment
+                .chars()
+                .any(|c| c.is_control() || r#"\:<>|"?*"#.contains(c))
+        {
+            return Err("3D 资源的本地路径无效".into());
+        }
+        path.push(segment);
+        // Create one directory at a time. Never traverse a symlink or Windows junction.
+        if segments.peek().is_some() {
+            match tokio::fs::create_dir(&path).await {
+                Ok(()) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => {
+                #[cfg(windows)]
+                let linked = {
+                    use std::os::windows::fs::MetadataExt;
+                    metadata.file_attributes() & 0x400 != 0
+                };
+                #[cfg(not(windows))]
+                let linked = metadata.file_type().is_symlink();
+                if linked
+                    || (segments.peek().is_some() && !metadata.is_dir())
+                    || (segments.peek().is_none() && !metadata.is_file())
+                {
+                    return Err("3D 资源的本地路径指向无效位置".into());
+                }
+            }
+            Err(e) if segments.peek().is_none() && e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(path)
+}
+
+async fn write_output(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let parent = path.parent().ok_or("无效的 3D 输出目录")?;
+    let temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    let (file, temp_path) = temporary.into_parts();
+    let mut file = tokio::fs::File::from_std(file);
+    file.write_all(bytes).await.map_err(|e| e.to_string())?;
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    temp_path.persist(path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn relative_content_uri(manifest: &str, content: &str) -> String {
+    let mut directory: Vec<_> = manifest.split('/').collect();
+    directory.pop();
+    let target: Vec<_> = content.split('/').collect();
+    let common = directory
+        .iter()
+        .zip(&target)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut parts = vec![".."; directory.len() - common];
+    parts.extend_from_slice(&target[common..]);
+    parts.join("/")
 }
 
 /// 下载单个文件，带重试
 async fn download_file(
     client: &Client,
     url: &str,
+    origin: Option<&str>,
     auth: &HashMap<String, String>,
     dest: &Path,
     cancel: &CancellationToken,
@@ -761,12 +791,7 @@ async fn download_file(
             return Err("已取消".to_string());
         }
 
-        let mut req = client.get(url);
-        for (k, v) in auth {
-            req = req.header(k, v);
-        }
-
-        match req.send().await {
+        match scoped_get(client, url, origin, auth).await {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     last_err = format!("HTTP {}", resp.status());
@@ -780,24 +805,10 @@ async fn download_file(
                 let bytes = resp
                     .bytes()
                     .await
-                    .map_err(|e| format!("读取响应体失败: {}", e))?;
+                    .map_err(|e| format!("读取响应体失败: {}", e.without_url()))?;
 
                 // 写入临时文件后重命名，防止写入一半被中断
-                let tmp_path = temporary_download_path(dest)?;
-                if let Some(parent) = tmp_path.parent() {
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .map_err(|e| format!("创建目录失败: {}", e))?;
-                }
-                if let Err(error) = tokio::fs::write(&tmp_path, &bytes).await {
-                    let _ = tokio::fs::remove_file(&tmp_path).await;
-                    return Err(format!("写入文件失败: {}", error));
-                }
-                if let Err(error) = tokio::fs::rename(&tmp_path, dest).await {
-                    let _ = tokio::fs::remove_file(&tmp_path).await;
-                    return Err(format!("重命名文件失败: {}", error));
-                }
-
+                write_output(dest, &bytes).await?;
                 return Ok(());
             }
             Err(e) => {
@@ -814,29 +825,34 @@ async fn download_file(
 
 /// 将相对 URI 解析为绝对 URL（正确处理 ../ 等相对路径）
 fn resolve_url(base: &str, relative: &str) -> String {
-    if relative.starts_with("http://") || relative.starts_with("https://") {
-        return relative.to_string();
-    }
-    // 用 Url::parse + join 正确解析 ../ ./ 等相对引用
-    if let Ok(base_url) = reqwest::Url::parse(base) {
-        if let Ok(resolved) = base_url.join(relative) {
-            return resolved.to_string();
-        }
-    }
-    // fallback: 简单拼接
-    format!("{}{}", base, relative)
+    resource_url(base).and_then(|base| base.join(relative).map_err(|_| "3D 引用地址无效".into()))
+        .map(|url| url.to_string()).unwrap_or_default()
 }
 
 /// 给 URL 追加 query 参数（如 ?token=xxx），保持 URL 已有参数兼容
-fn append_query(url: &str, query: &str) -> String {
-    if query.is_empty() {
-        return url.to_string();
+fn append_query(url: &str, query: &str, origin: Option<&str>) -> String {
+    if query.is_empty() || !same_origin(url, origin) {
+        return url.to_owned();
     }
-    if url.contains('?') {
-        format!("{}&{}", url, query)
-    } else {
-        format!("{}?{}", url, query)
+    let Ok(mut parsed) = resource_url(url) else {
+        return url.to_owned();
+    };
+    let mut pairs = parsed
+        .query()
+        .filter(|q| !q.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_default();
+    for pair in query.split('&').filter(|s| !s.is_empty()) {
+        let name = pair.split('=').next();
+        if !pairs.split('&').any(|p| p.split('=').next() == name) {
+            if !pairs.is_empty() {
+                pairs.push('&');
+            }
+            pairs.push_str(pair);
+        }
     }
+    parsed.set_query(Some(&pairs));
+    parsed.to_string()
 }
 
 /// 递归收集一个 Tile 树的所有内容 URI
@@ -854,46 +870,28 @@ fn collect_tile_content_uris(tile: &crate::tiles3d::tileset::Tile) -> Vec<String
 }
 
 /// 将 URI 转为本地相对路径，保持原始目录层级
-fn uri_to_local_path(uri: &str) -> String {
-    // 去掉协议头（如果是绝对 URL）
-    let s = uri
-        .strip_prefix("http://")
-        .or_else(|| uri.strip_prefix("https://"))
-        .unwrap_or(uri);
-
-    // 去掉域名部分（如果存在）
-    let path_part = if let Some((_domain, path)) = s.split_once('/') {
-        path
-    } else {
-        s
-    };
-
-    // 去掉查询参数
-    let clean = path_part.split('?').next().unwrap_or(path_part);
-
-    // 清理首尾斜杠，替换反斜杠为正斜杠
-    let normalized = clean
-        .replace('\\', "/")
-        .trim_start_matches('/')
-        .to_string();
-
-    // 如果路径为空（不太可能），给个默认名
-    if normalized.is_empty() {
-        return "unknown_content".to_string();
-    }
-
-    normalized
-}
-
-/// 从绝对 URL 提取相对于 base_url 的本地路径，去除查询参数
 fn absolute_to_local(absolute_url: &str, base_url: &str) -> String {
-    let rel = if absolute_url.starts_with(base_url) {
-        &absolute_url[base_url.len()..]
-    } else {
-        return uri_to_local_path(absolute_url);
+    use sha2::{Digest, Sha256};
+    let Ok(url) = resource_url(absolute_url) else {
+        return String::new();
     };
-    // 去掉查询参数
-    rel.split('?').next().unwrap_or(rel).to_string()
+    let Ok(base) = resource_url(base_url) else {
+        return String::new();
+    };
+    if url.origin() == base.origin() {
+        return url
+            .path()
+            .strip_prefix(base.path())
+            .unwrap_or_else(|| url.path().trim_start_matches('/'))
+            .to_owned();
+    }
+    // Different CDN origins may serve different data at the same URL path.
+    let digest = Sha256::digest(url.origin().ascii_serialization().as_bytes());
+    format!(
+        "_external/{:x}/{}",
+        digest,
+        url.path().trim_start_matches('/')
+    )
 }
 
 /// 重写 tileset 中所有内容 URI 为本地路径
@@ -972,14 +970,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn temporary_paths_preserve_full_file_name_and_are_unique() {
-        let glb = temporary_download_path(Path::new("tiles/a.glb")).unwrap();
-        let b3dm = temporary_download_path(Path::new("tiles/a.b3dm")).unwrap();
-        let second_glb = temporary_download_path(Path::new("tiles/a.glb")).unwrap();
+    fn scoped_parameters_leave_independent_cdn_links_intact() {
+        let origin = Some("https://maps.example");
+        assert_eq!(append_query("https://maps.example/a.json?v=4","v=2&session=demo",origin),
+            "https://maps.example/a.json?v=4&session=demo");
+        assert_eq!(append_query("https://cdn.example/a.json?v=4","session=demo",origin),
+            "https://cdn.example/a.json?v=4");
+        assert_ne!(absolute_to_local("https://cdn.example/a.glb","https://maps.example/"),
+            absolute_to_local("https://cdn2.example/a.glb","https://maps.example/"));
+        assert_eq!(source_label("https://maps.example/a?session=demo"), "https://maps.example");
+    }
 
-        assert!(glb.file_name().unwrap().to_string_lossy().starts_with("a.glb."));
-        assert!(b3dm.file_name().unwrap().to_string_lossy().starts_with("a.b3dm."));
-        assert_ne!(glb, b3dm);
-        assert_ne!(glb, second_glb);
+    #[tokio::test]
+    async fn normal_nested_tileset_download_preserves_local_links_and_file_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = server.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut stream, _) = server.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let mut chunk = [0u8;1024];
+                    let n = stream.read(&mut chunk).await.unwrap(); assert!(n>0);
+                    request.extend_from_slice(&chunk[..n]);
+                }
+                let raw = String::from_utf8(request).unwrap();
+                let path = raw.split_whitespace().nth(1).unwrap();
+                let body = match path {
+                    "/scene/tileset.json?v=2" | "/scene/child/sub.json?v=2" => {
+                        let uri = if path.starts_with("/scene/child") { "../assets/data.glb" } else { "child/sub.json" };
+                        serde_json::to_vec(&serde_json::json!({"asset":{"version":"1.1"},"geometricError":0,
+                            "root":{"boundingVolume":{"region":[0,0,0.01,0.01,0,10]},"geometricError":0,"content":{"uri":uri}}})).unwrap()
+                    }
+                    "/scene/assets/data.glb?v=2" => b"sample geometry".to_vec(),
+                    _ => panic!("unexpected sample request"),
+                };
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len());
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            }
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let url = format!("http://{address}/scene/tileset.json?v=2");
+        let mut fetcher = Tiles3dFetcher::new(None).unwrap();
+        fetcher.resolve_source(&Tiles3dSource::DirectUrl{tileset_url:url.clone(),headers:HashMap::new()}).await.unwrap();
+        let path = tokio::time::timeout(std::time::Duration::from_secs(15),
+            fetcher.download(&url,None,temp.path(),2,CancellationToken::new(),PauseControl::new(),|_| {})).await.unwrap().unwrap();
+        serve.await.unwrap();
+        let root: Tileset = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(root.root.content_uris(), vec!["child/sub.json"]);
+        let sub: Tileset = serde_json::from_slice(&std::fs::read(temp.path().join("child/sub.json")).unwrap()).unwrap();
+        assert_eq!(sub.root.content_uris(), vec!["../assets/data.glb"]);
+        assert_eq!(std::fs::read(temp.path().join("assets/data.glb")).unwrap(), b"sample geometry");
+    }
+
+    #[test]
+    fn sibling_manifests_link_to_the_original_local_content() {
+        assert_eq!(relative_content_uri("maps/a/scene.json","maps/b/file.glb"),"../b/file.glb");
+        assert_eq!(relative_content_uri("scene.json","tiles/file.glb"),"tiles/file.glb");
     }
 }

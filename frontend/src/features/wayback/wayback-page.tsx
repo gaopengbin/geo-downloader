@@ -417,6 +417,7 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
       const cropPolygon = buildSelectionCropPolygon(bounds, polygon, effectiveCropToShape)
 
       let created = 0
+      const failures: { id: string; date: string; message: string }[] = []
       const overlays = enabledOverlayIds(useAppStore.getState().overlayLayersByMode.wayback ?? [], overlaySources.data ?? {}, 'esri_wayback')
       for (const v of versions) {
         const filename = `wayback_${v.date}_${zLabel}_${timestampNow()}.${ext}`
@@ -446,14 +447,22 @@ function EsriWaybackPage({ historySelector }: { historySelector: import('react')
           await createWaybackTask(request, v.id, v.date, finalTaskName)
           created += 1
         } catch (e) {
-          console.error(t('wayback.logs.batchTaskFailed', { date: v.date }), e)
+          failures.push({ id: v.id, date: v.date, message: e instanceof Error ? e.message : String(e) })
         }
       }
-      return created
+      if (!created) throw new Error(failures.length ? failures[0].date + ' · ' + failures[0].message : t('wayback.errors.selectOneVersion'))
+      return { created, failures }
     },
-    onSuccess: (n) => {
-      toast.success(t('wayback.toast.batchCreated', { count: n }))
-      useAppStore.getState().setTab('history')
+    onSuccess: ({ created, failures }) => {
+      if (failures.length) {
+        setBatchSelected(new Set(failures.map(failure => failure.id)))
+        toast.warning(t('wayback.toast.batchPartial', {
+          created, failed: failures.length, message: failures[0].date + ' · ' + failures[0].message,
+        }))
+      } else {
+        toast.success(t('wayback.toast.batchCreated', { count: created }))
+        useAppStore.getState().setTab('history')
+      }
       qc.invalidateQueries({ queryKey: ['active-tasks'] })
     },
     onError: (err: unknown) => {

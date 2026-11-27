@@ -1,16 +1,14 @@
 import { create } from 'zustand'
 
 import type { ReleaseNoteGroup } from './update-api'
-import type { UpdateTransfer } from './update-transfer'
+import type { UpdateAction, UpdateTransfer } from './update-transfer'
 
 export interface UpdateInfo {
   currentVersion: string
   latestVersion: string
   noteGroups: ReleaseNoteGroup[]
-  downloadUrl: string | null
+  action: UpdateAction | null
   releaseUrl: string
-  expectedSha256: string
-  expectedSize: number
 }
 
 export type UpdateCheckStatus =

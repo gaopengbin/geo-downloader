@@ -46,6 +46,7 @@ export function useMultiFeatureSubmit(): MultiFeatureSubmitContext {
         useSelectionStore.setState({
           bounds: feat.bounds,
           polygon: feat.rings,
+          areas: feat.areas ?? null,
         })
         await submitOnce(feat.name)
       }
@@ -53,6 +54,7 @@ export function useMultiFeatureSubmit(): MultiFeatureSubmitContext {
       useSelectionStore.setState({
         bounds: origBounds,
         polygon: origPolygon,
+        areas: snapshot.areas,
       })
     }
   }

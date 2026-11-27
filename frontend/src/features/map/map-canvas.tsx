@@ -515,6 +515,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
   )
 
   const setSelection = useSelectionStore((s) => s.setSelection)
+  const areas = useSelectionStore((s) => s.areas)
   const externalRevision = useSelectionStore((s) => s.externalRevision)
   const bounds = useSelectionStore((s) => s.bounds)
   const polygon = useSelectionStore((s) => s.polygon)
@@ -734,36 +735,29 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       }
     })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    map.on((L as any).Draw.Event.DELETED, () => {
-      setSelection({ bounds: null, polygon: null })
-    })
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    map.on((L as any).Draw.Event.EDITED, () => {
+    const syncDrawnSelection = () => {
       const layers = drawn.getLayers()
-      if (layers.length === 0) return
-      const layer = layers[0] as L.Layer
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const anyLayer = layer as any
-      if (anyLayer instanceof L.Rectangle) {
-        const b = anyLayer.getBounds() as L.LatLngBounds
-        setSelection({
-          bounds: {
-            north: b.getNorth(),
-            south: b.getSouth(),
-            east: b.getEast(),
-            west: b.getWest(),
-          },
-          polygon: null,
-        })
-      } else if (typeof anyLayer.getLatLngs === 'function') {
-        const latlngs = (anyLayer.getLatLngs()[0] as L.LatLng[]).map((ll) => ({
-          lat: ll.lat,
-          lng: ll.lng,
-        }))
-        const rings = [latlngs]
-        setSelection({ bounds: boundsFromRings(rings), polygon: rings })
+      if (!layers.length) {
+        setSelection({ bounds: null, polygon: null })
+        return
       }
-    })
+      if (layers.length === 1 && layers[0] instanceof L.Rectangle) {
+        const b = layers[0].getBounds()
+        setSelection({ bounds: { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() }, polygon: null })
+        return
+      }
+      const areas = layers.flatMap(layer => {
+        if (!(layer instanceof L.Polygon)) return []
+        const geometry = layer.toGeoJSON(false).geometry
+        return geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates
+      })
+      const rings = areas.map(part => part[0].map(([lng, lat]) => ({ lat, lng })))
+      setSelection({ bounds: boundsFromRings(rings), polygon: rings, areas })
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    map.on((L as any).Draw.Event.DELETED, syncDrawnSelection)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    map.on((L as any).Draw.Event.EDITED, syncDrawnSelection)
 
     mapRef.current = map
     const removeFoundationLayers = installFoundationLayers(map)
@@ -834,10 +828,10 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
 
     drawn.clearLayers()
     if (polygon && polygon.length > 0) {
-      const latlngs = polygon.map((ring) => ring.map((p) => L.latLng(p.lat, p.lng)))
-      const poly = L.polygon(latlngs, { color: '#2563eb' })
-      drawn.addLayer(poly)
-      map.fitBounds(poly.getBounds(), { animate: false, maxZoom: 14 })
+      const parts = areas?.map(part => part.map(ring => ring.map(([lng,lat]) => L.latLng(lat,lng))))
+        ?? polygon.map(ring => [ring.map(p => L.latLng(p.lat,p.lng))])
+      for (const rings of parts) drawn.addLayer(L.polygon(rings, { color: '#2563eb' }))
+      map.fitBounds(drawn.getBounds(), { animate: false, maxZoom: 14 })
     } else if (bounds) {
       const rect = L.rectangle(
         [
@@ -849,7 +843,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       drawn.addLayer(rect)
       map.fitBounds(rect.getBounds(), { animate: false, maxZoom: 14 })
     }
-  }, [selectionSyncKey, bounds, polygon])
+  }, [selectionSyncKey, bounds, polygon, areas])
 
   useEffect(() => {
     const map = mapRef.current
@@ -993,6 +987,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
       const expectedMaxZoom = historical ? 22 : cfg?.max_zoom ?? 22
       const expectedNativeZoom = historical ? cfg?.max_zoom : undefined
       if (!cfg || layerUrl !== expectedUrl || layer.options.maxZoom !== expectedMaxZoom
+        || (!isOsmStandardTileUrl(expectedUrl ?? '') && (layer.options as { cacheNamespace?: string }).cacheNamespace !== cfg.cache_namespace)
         || JSON.stringify((layer.options as { requestHeaders?: Record<string, string> }).requestHeaders ?? {}) !== JSON.stringify(cfg.headers ?? {})
         || layer.options.maxNativeZoom !== expectedNativeZoom) {
         if (map.hasLayer(layer)) map.removeLayer(layer)
@@ -1023,6 +1018,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
           : createCachedTileLayer(c.url, {
               sourceKey: key,
               requestHeaders: c.headers,
+              cacheNamespace: c.cache_namespace,
               displayName: c.name ?? key,
               urlTemplate: c.url,
               attribution: c.attribution ?? '',
@@ -1103,7 +1099,7 @@ export function MapCanvas({ onMapReady }: { onMapReady?: (map: L.Map) => void } 
         const layer = isOsmStandardTileUrl(url) && !Object.keys(cfg.headers ?? {}).length
           ? L.tileLayer(url, { ...options, attribution: OSM_STANDARD_ATTRIBUTION })
           : createCachedTileLayer(url, { ...options, sourceKey: id, displayName: cfg.name,
-              urlTemplate: url, requestHeaders: cfg.headers })
+              urlTemplate: url, requestHeaders: cfg.headers, cacheNamespace: cfg.cache_namespace })
         entry = { signature: JSON.stringify(cfg), layer }
         cache.set(id, entry)
       }

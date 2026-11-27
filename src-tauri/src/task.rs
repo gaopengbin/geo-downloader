@@ -38,6 +38,8 @@ pub enum TaskStatus {
 pub struct TaskInfo {
     pub id: String,
     pub created_at:String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<i64>,
     pub name: String,
     pub source: String,
     pub source_name: String,
@@ -85,12 +87,15 @@ struct TaskEntry {
     pause_control: PauseControl,
     logs: Vec<TaskLog>,
     waiting_for_batch: bool,
+    committing_output: bool,
+    worker_done: CancellationToken,
     token_pool: Option<Arc<crate::tianditu_tokens::TiandituTokens>>,
     log_writer: Option<Arc<Mutex<crate::task_log::TaskLogWriter>>>,
 }
 
 impl TaskEntry {
-    fn freeze_diagnostics(&mut self) {
+    fn freeze_outcome(&mut self) {
+        self.info.finished_at_ms.get_or_insert_with(|| chrono::Utc::now().timestamp_millis());
         if let Some(pool) = self.token_pool.take() {
             self.info.download_diagnostics = Some(pool.diagnostics());
         }
@@ -201,6 +206,14 @@ impl TaskManager {
         Ok(Some(slots))
     }
 
+    pub(crate) fn resume_batch_slots(
+        &self, saved: &mut Option<BatchOptions>, requested: Option<BatchOptions>,
+    ) -> Result<Option<Arc<BatchSlots>>, String> {
+        let slots = self.slots_for_batch(requested.as_ref().or(saved.as_ref()))?;
+        if requested.is_some() { *saved = requested; }
+        Ok(slots)
+    }
+
     pub(crate) fn set_batch_waiting(&self, id: &str, waiting: bool) {
         if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
             entry.waiting_for_batch = waiting;
@@ -233,15 +246,26 @@ impl TaskManager {
     pub fn set_event_sink(&self, sink: Arc<dyn Fn(TaskInfo) + Send + Sync>) {
         *self.event_sink.lock().unwrap() = Some(sink);
     }
+    fn snapshot_change(&self, entry: &mut TaskEntry) -> TaskInfo {
+        entry.info.revision = self.revision.fetch_add(1, Ordering::Relaxed);
+        let mut snapshot = entry.info.clone();
+        if let Some(pool) = entry.token_pool.as_ref() {
+            snapshot.download_diagnostics = Some(pool.diagnostics());
+        }
+        snapshot
+    }
+
     fn notify_changed(&self, id: &str) {
         let snapshot = {
             let mut tasks = self.tasks.lock().unwrap();
             let Some(entry) = tasks.get_mut(id) else { return };
-            entry.info.revision = self.revision.fetch_add(1, Ordering::Relaxed);
-            let mut snapshot=entry.info.clone();
-            if let Some(pool)=entry.token_pool.as_ref(){snapshot.download_diagnostics=Some(pool.diagnostics());}
-            snapshot
+            self.snapshot_change(entry)
         };
+        self.dispatch_change(snapshot);
+    }
+
+    fn dispatch_change(&self, snapshot: TaskInfo) {
+        let id = &snapshot.id;
         let sink = self.event_sink.lock().unwrap().clone();
         if matches!(snapshot.status,TaskStatus::Completed|TaskStatus::CompletedWithGaps|TaskStatus::Failed|TaskStatus::Cancelled){
             if let Some(value)=snapshot.download_diagnostics.as_ref(){
@@ -285,10 +309,27 @@ impl TaskManager {
         save_path: String,
         total: u32,
     ) -> (CancellationToken, PauseControl) {
+        let (cancel, pause, _done) = self.create_worker(id, name, source, source_name, zoom, format, save_path, total);
+        (cancel, pause)
+    }
+
+    pub(crate) fn create_worker(
+        &self,
+        id: String,
+        name: String,
+        source: String,
+        source_name: String,
+        zoom: u8,
+        format: String,
+        save_path: String,
+        total: u32,
+    ) -> (CancellationToken, PauseControl, tokio_util::sync::DropGuard) {
+        let worker_done = CancellationToken::new();
         let cancel_token = CancellationToken::new();
         let pause_control = PauseControl::new();
         let info = TaskInfo {
             created_at:chrono::Utc::now().to_rfc3339(),
+            finished_at_ms: None,
             id: id.clone(),
             name,
             source,
@@ -322,12 +363,23 @@ impl TaskManager {
             pause_control: pause_control.clone(),
             logs: Vec::new(),
             waiting_for_batch: false,
+            committing_output: false,
+            worker_done: worker_done.clone(),
             token_pool: None,
             log_writer,
         };
         self.tasks.lock().unwrap().insert(id.clone(), entry);
         self.notify_changed(&id);
-        (cancel_token, pause_control)
+        (cancel_token, pause_control, worker_done.drop_guard())
+    }
+
+    /// A terminal snapshot can reach the UI while its worker is still closing files
+    /// or writing history. Wait only for that attempt; unrelated jobs remain runnable.
+    pub(crate) async fn wait_for_finished_worker(&self, id: &str) {
+        let done = self.tasks.lock().unwrap().get(id).and_then(|entry|
+            (entry.info.finished_at_ms.is_some() || entry.info.status == TaskStatus::PendingDecision)
+                .then(|| entry.worker_done.clone()));
+        if let Some(done) = done { done.cancelled().await; }
     }
 
     /// 更新任务进度
@@ -369,103 +421,111 @@ impl TaskManager {
         self.notify_changed(id);
     }
 
-    /// 标记任务完成
-    pub fn complete_task(&self, id: &str, file_size: u64) {
-        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
-            // 终态保护：已取消/失败/完成的任务不被覆写
-            if matches!(
-                entry.info.status,
-                TaskStatus::Cancelled
-                    | TaskStatus::Failed
-                    | TaskStatus::Completed
-                    | TaskStatus::CompletedWithGaps
-            ) {
-                return;
-            }
-            entry.info.status = TaskStatus::Completed;
-            if let Some(pool)=entry.token_pool.as_ref(){pool.record_completed();}
-            entry.freeze_diagnostics();
-            entry.info.progress = 100.0;
-            entry.info.file_size = file_size;
-            entry.info.message = Some("完成".to_string());
-        }
-        self.notify_changed(id);
+    /// Commit a terminal result under the same lock used to accept cancellation.
+    /// Callers publish history/notifications only after this transition succeeds.
+    pub fn complete_task(&self, id: &str, file_size: u64) -> bool {
+        self.finish_task(id, file_size, None)
     }
 
-    /// 标记任务完成但有缺块（Issue #31）
-    ///
-    /// 成功率 ≥ `min_export_success_ratio` 时走自动导出，若伴随失败瓦片则状态
-    /// 切到 `CompletedWithGaps` 而非 `Completed`，让 UI 展示缺块徽章。
-    pub fn complete_task_with_gaps(&self, id: &str, file_size: u64, failed_count: u32) {
-        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
-            // 终态保护：已取消/失败/完成的任务不被覆写
-            if matches!(
-                entry.info.status,
-                TaskStatus::Cancelled
-                    | TaskStatus::Failed
-                    | TaskStatus::Completed
-                    | TaskStatus::CompletedWithGaps
-            ) {
-                return;
+    pub fn complete_task_with_gaps(&self, id: &str, file_size: u64, failed_count: u32) -> bool {
+        self.finish_task(id, file_size, Some(failed_count))
+    }
+
+    fn finish_task(&self, id: &str, file_size: u64, gaps: Option<u32>) -> bool {
+        let snapshot = {
+            let mut tasks = self.tasks.lock().unwrap();
+            let Some(entry) = tasks.get_mut(id) else { return false };
+            if entry.cancel_token.is_cancelled() || matches!(entry.info.status,
+                TaskStatus::Cancelled | TaskStatus::Failed | TaskStatus::Completed | TaskStatus::CompletedWithGaps)
+            {
+                return false;
             }
-            entry.info.status = TaskStatus::CompletedWithGaps;
-            entry.freeze_diagnostics();
+            if let Some(count) = gaps {
+                entry.info.status = TaskStatus::CompletedWithGaps;
+                entry.info.failed_count = count;
+                entry.info.message = Some(format!("完成但有 {} 张缺块", count));
+            } else {
+                entry.info.status = TaskStatus::Completed;
+                if let Some(pool) = entry.token_pool.as_ref() { pool.record_completed(); }
+                entry.info.message = Some("完成".into());
+            }
+            entry.freeze_outcome();
             entry.info.progress = 100.0;
             entry.info.file_size = file_size;
-            entry.info.failed_count = failed_count;
-            entry.info.message = Some(format!("完成但有 {} 张缺块", failed_count));
-        }
-        self.notify_changed(id);
+            self.snapshot_change(entry)
+        };
+        self.dispatch_change(snapshot);
+        true
     }
 
     /// 标记任务等待用户决策（Issue #31）
     ///
     /// 成功率 < `min_export_success_ratio` 时跳过导出，缓存保留供用户后续选择
     /// 「补漏重试」(`resume_task`) 或「强制按现状导出」(`export_partial_task`)。
-    pub fn mark_pending_decision(&self, id: &str, reason: String) {
+    pub fn mark_pending_decision(&self, id: &str, reason: String) -> bool {
         if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
             // 终态保护：已取消/失败/完成的任务不被覆写
-            if matches!(
+            if entry.cancel_token.is_cancelled() || matches!(
                 entry.info.status,
                 TaskStatus::Cancelled
                     | TaskStatus::Failed
                     | TaskStatus::Completed
                     | TaskStatus::CompletedWithGaps
             ) {
-                return;
+                return false;
             }
             entry.info.status = TaskStatus::PendingDecision;
             entry.info.message = Some(reason);
-        }
+        } else { return false; }
         self.notify_changed(id);
+        true
     }
 
     /// 标记任务失败
     pub fn fail_task(&self, id: &str, error: String) {
+        self.try_fail_task(id, error);
+    }
+
+    pub fn try_fail_task(&self, id: &str, error: String) -> bool {
         let can_retry = load_task_file(id).is_some_and(|task| task.task_id == id);
-        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
+        let snapshot = if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
             // 终态保护：已取消/已完成的任务不被覆写成失败
-            if matches!(
+            if entry.cancel_token.is_cancelled() || matches!(
                 entry.info.status,
-                TaskStatus::Cancelled
+                TaskStatus::Failed
+                    | TaskStatus::Cancelled
                     | TaskStatus::Completed
                     | TaskStatus::CompletedWithGaps
             ) {
-                return;
+                return false;
             }
             entry.info.status = TaskStatus::Failed;
             entry.info.can_retry = can_retry;
             if let Some(pool)=entry.token_pool.as_ref(){pool.record_failure(&error);}
-            entry.freeze_diagnostics();
+            entry.freeze_outcome();
             entry.info.error = Some(error);
+            self.snapshot_change(entry)
+        } else { return false; };
+        self.dispatch_change(snapshot);
+        true
+    }
+
+    /// Once a finished output is being recorded, a late cancellation cannot discard its checkpoint.
+    pub(crate) fn begin_output_commit(&self, id: &str) -> Result<i64, String> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let entry = tasks.get_mut(id).ok_or("任务已移除")?;
+        if entry.cancel_token.is_cancelled() || entry.info.finished_at_ms.is_some() || entry.committing_output {
+            return Err("任务已停止".into());
         }
-        self.notify_changed(id);
+        let started = chrono::DateTime::parse_from_rfc3339(&entry.info.created_at).map_err(|e| e.to_string())?;
+        entry.committing_output = true;
+        Ok(started.timestamp_millis())
     }
 
     /// 取消任务
     pub fn cancel_task(&self, id: &str) -> bool {
         if let Some(entry) = self.tasks.lock().unwrap().get(id) {
-            if entry.info.status != TaskStatus::Completed
+            if !entry.committing_output && entry.info.status != TaskStatus::Completed
                 && entry.info.status != TaskStatus::CompletedWithGaps
                 && entry.info.status != TaskStatus::Failed
                 && entry.info.status != TaskStatus::Cancelled
@@ -483,12 +543,14 @@ impl TaskManager {
 
     /// 将取消的任务标记状态
     pub fn mark_cancelled(&self, id: &str) {
-        if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
+        let snapshot = if let Some(entry) = self.tasks.lock().unwrap().get_mut(id) {
+            if entry.info.finished_at_ms.is_some() { return; }
             entry.info.status = TaskStatus::Cancelled;
-            entry.freeze_diagnostics();
+            entry.freeze_outcome();
             entry.info.message = Some("已取消".to_string());
-        }
-        self.notify_changed(id);
+            self.snapshot_change(entry)
+        } else { return; };
+        self.dispatch_change(snapshot);
     }
 
     /// 暂停/恢复任务，返回 (成功, 当前是否暂停)
@@ -767,6 +829,61 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_export_cannot_commit_success_gaps_or_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = TaskManager::new_with_log_dir(dir.path().into());
+        manager.create_task("export".into(),"Task".into(),"base".into(),"Base".into(),12,"geotiff".into(),"out.tif".into(),4);
+        manager.update_progress("export",TaskStatus::Exporting,95.0,4,0,None);
+        assert!(manager.cancel_task("export"));
+        assert!(!manager.complete_task("export",40));
+        assert!(!manager.complete_task_with_gaps("export",40,1));
+        assert!(!manager.try_fail_task("export","interrupted".into()));
+        assert!(!manager.mark_pending_decision("export","partial".into()));
+        manager.mark_cancelled("export");
+        assert_eq!(manager.task_status("export"),Some(TaskStatus::Cancelled));
+    }
+
+    #[test]
+    fn task_work_pixels_follow_provider_and_overlay_identity_on_resume() {
+        let temp = tempfile::tempdir().unwrap();
+        let original = crate::config::get_tile_sources(None)["google_satellite"].clone();
+        let mut changed = original.clone();
+        changed.url = "https://local.example.test/{z}/{x}/{y}".into();
+        let changed = changed.with_content_cache();
+        assert_eq!(prepare_work_tiles(temp.path(), std::slice::from_ref(&original)).unwrap(), temp.path());
+        std::fs::write(temp.path().join("1_2.png"), b"original").unwrap();
+        let variant = prepare_work_tiles(temp.path(), std::slice::from_ref(&changed)).unwrap();
+        assert_ne!(variant,temp.path());
+        assert!(!variant.join("1_2.png").exists());
+        assert_eq!(current_work_tiles(temp.path()).unwrap(),variant);
+        let overlay_dir = prepare_work_tiles(temp.path(), &[changed.clone(),original.clone()]).unwrap();
+        assert_ne!(variant, overlay_dir);
+        assert_eq!(prepare_work_tiles(temp.path(), &[original]).unwrap(), temp.path());
+        assert_eq!(std::fs::read(temp.path().join("1_2.png")).unwrap(), b"original");
+        let old = tempfile::tempdir().unwrap();
+        std::fs::write(old.path().join("1_2.png"),b"unverified").unwrap();
+        assert_eq!(current_work_tiles(old.path()).unwrap(),old.path());
+        assert_ne!(prepare_work_tiles(old.path(), &[changed]).unwrap(),old.path());
+        assert_eq!(std::fs::read(old.path().join("1_2.png")).unwrap(), b"unverified");
+    }
+
+    #[test]
+    fn mixed_restore_selection_obeys_the_new_batch_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = TaskManager::new_with_log_dir(temp.path().into());
+        let batch = |limit| BatchOptions{id:uuid::Uuid::new_v4().to_string(),limit};
+        let selected = batch(2);
+        let mut saved = [Some(batch(4)),Some(batch(5)),None];
+        let groups: Vec<_> = saved.iter_mut().map(|old| manager.resume_batch_slots(old,Some(selected.clone())).unwrap().unwrap()).collect();
+        assert!(saved.iter().all(|old| old.as_ref().unwrap().id == selected.id));
+        let _one = groups[0].permits.try_acquire().unwrap();
+        let _two = groups[1].permits.try_acquire().unwrap();
+        assert!(groups[2].permits.try_acquire().is_err());
+        let same = manager.resume_batch_slots(&mut saved[0],None).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&same,&groups[0]));
+    }
+
+    #[test]
     fn running_retry_cannot_be_removed_and_blocks_other_task_operations() {
         let directory = tempfile::tempdir().unwrap();
         let manager = TaskManager::new_with_log_dir(directory.path().into());
@@ -979,13 +1096,115 @@ pub struct PersistedTask {
     pub work_dir: Option<String>,
 }
 
-fn tasks_dir() -> PathBuf {
-    let dir = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("geo-downloader")
-        .join("tasks");
+#[derive(Serialize, Deserialize)]
+struct WorkSources {
+    root_source: Option<String>,
+    active_source: String,
+}
+
+impl WorkSources {
+    fn read(root: &Path) -> Result<Option<Self>, String> {
+        match std::fs::read(root.join("work-sources.json")) {
+            Ok(data) => serde_json::from_slice(&data).map(Some).map_err(|e| format!("工作瓦片图源信息损坏: {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("读取工作瓦片图源失败: {e}")),
+        }
+    }
+
+    fn directory(&self, root: &Path) -> Result<PathBuf, String> {
+        if self.active_source.len() != 64 || !self.active_source.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("无效的工作瓦片图源标识".into());
+        }
+        Ok(if self.root_source.as_ref() == Some(&self.active_source) {
+            root.to_owned()
+        } else {
+            root.join(format!("source-{}", self.active_source))
+        })
+    }
+}
+
+pub(crate) fn current_work_tiles(root: &Path) -> Result<PathBuf, String> {
+    match WorkSources::read(root)? {
+        Some(index) => index.directory(root),
+        None => Ok(root.to_owned()),
+    }
+}
+
+pub(crate) fn prepare_work_tiles(root: &Path, sources: &[crate::config::TileSource]) -> Result<PathBuf, String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for source in sources {
+        hasher.update(source.cache_key());
+        hasher.update([0]);
+        hasher.update([source.max_zoom]);
+    }
+    let hash = format!("{:x}", hasher.finalize());
+    let previous = WorkSources::read(root)?;
+    if let Some(index) = &previous {
+        if index.active_source == hash { return index.directory(root); }
+    }
+    let root_source = if let Some(index) = previous { index.root_source } else {
+        // An old custom task has no reliable record of which URL produced its tiles.
+        // Leave those files untouched when filling from the current source.
+        let editable = sources.iter().any(|source| source.cache_namespace.is_some());
+        let nonempty = std::fs::read_dir(root).map_err(|e| e.to_string())?.next().is_some();
+        if editable && nonempty { None } else { Some(hash.clone()) }
+    };
+    let index = WorkSources { root_source, active_source: hash };
+    let directory = index.directory(root)?;
+    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    crate::fs_util::atomic_write(&root.join("work-sources.json"),
+        &serde_json::to_vec(&index).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(directory)
+}
+
+pub(crate) fn tasks_dir() -> PathBuf {
+    let dir = checkpoint_dir(dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+fn checkpoint_dir(data_root: PathBuf) -> PathBuf {
+    data_root.join("geo-downloader").join("tasks")
+}
+
+pub(crate) fn cleanup_stale_legacy_work_dirs() {
+    let Some(root) = dirs::data_local_dir() else { return };
+    let now = std::time::SystemTime::now();
+    match prune_legacy_orphans(&std::env::temp_dir(), &checkpoint_dir(root), now) {
+        Ok(count) if count > 0 => log::info!("[startup] 清理了 {} 个无任务断点的旧版临时目录", count),
+        Err(error) => log::debug!("[startup] 跳过旧版工作目录清理: {error}"),
+        _ => {}
+    }
+}
+
+fn prune_legacy_orphans(temp: &Path, checkpoints: &Path, now: std::time::SystemTime) -> std::io::Result<usize> {
+    use std::{fs, io::ErrorKind, time::Duration};
+    // Require a readable checkpoint store. An unreadable or damaged record can still
+    // be the only link to downloaded tiles, so its filename alone protects the job.
+    let _ = fs::read_dir(checkpoints)?;
+    #[cfg(unix)]
+    let owner = std::os::unix::fs::MetadataExt::uid(&fs::metadata(checkpoints)?);
+    let mut removed = 0;
+    for entry in fs::read_dir(temp)?.flatten() {
+        let name = entry.file_name();
+        let Some(id) = name.to_str().and_then(|s| s.strip_prefix("tif-dl-")) else { continue };
+        if !uuid::Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id) { continue; }
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else { continue };
+        if !meta.file_type().is_dir() { continue; }
+        #[cfg(windows)]
+        if std::os::windows::fs::MetadataExt::file_attributes(&meta) & 0x400 != 0 { continue; }
+        #[cfg(unix)]
+        if std::os::unix::fs::MetadataExt::uid(&meta) != owner { continue; }
+        let age = meta.modified().ok().and_then(|mtime| now.duration_since(mtime).ok());
+        if !age.is_some_and(|age| age > Duration::from_secs(86400)) { continue; }
+        let checkpoint = checkpoints.join(format!("{id}.json"));
+        if matches!(fs::symlink_metadata(checkpoint), Err(e) if e.kind() == ErrorKind::NotFound)
+            && fs::remove_dir_all(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// 保存任务到磁盘
@@ -1126,6 +1345,39 @@ pub fn cleanup_temp_dir(task_id: &str) {
 
 #[cfg(test)]
 mod persistence_tests {
+    #[test]
+    fn startup_preserves_old_tiles_for_valid_or_damaged_checkpoints() {
+        use std::{fs, time::{Duration, SystemTime}};
+        let dir = tempfile::tempdir().unwrap();
+        let temp = dir.path().join("temp");
+        let records = dir.path().join("records");
+        fs::create_dir(&temp).unwrap();
+        fs::create_dir(&records).unwrap();
+        let make = |id: &str| {
+            let p = temp.join(format!("tif-dl-{id}"));
+            fs::create_dir(&p).unwrap();
+            fs::write(p.join("tile.jpg"), b"existing pixels").unwrap();
+            p
+        };
+        let existing = ["{}", "partial JSON"].map(|record| {
+            let id = uuid::Uuid::new_v4().to_string();
+            fs::write(records.join(format!("{id}.json")), record).unwrap();
+            make(&id)
+        });
+        let orphan = make(&uuid::Uuid::new_v4().to_string());
+        let unrelated = make("personal-notes");
+        let now = SystemTime::now();
+        let later = now + Duration::from_secs(172800);
+        assert!(super::prune_legacy_orphans(&temp, &dir.path().join("missing-store"), later).is_err());
+        assert!(orphan.is_dir());
+        assert_eq!(super::prune_legacy_orphans(&temp, &records, now).unwrap(), 0);
+        assert_eq!(super::prune_legacy_orphans(&temp, &records, later).unwrap(), 1);
+        assert!(!orphan.exists());
+        for path in existing.iter().chain(std::iter::once(&unrelated)) {
+            assert_eq!(fs::read(path.join("tile.jpg")).unwrap(), b"existing pixels");
+        }
+    }
+
     use super::*;
     use crate::tile::Bounds;
 

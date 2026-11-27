@@ -149,6 +149,7 @@ fn builtins() -> std::collections::HashMap<String, config::TileSource> {
             .filter(|(id, _)| !id.starts_with("mvt_") && !id.starts_with("dem_"))
             .collect();
     sources.insert("nasa_gibs_blue_marble".into(), config::TileSource {
+        cache_namespace: None,
         headers: Default::default(),
         id: "nasa_gibs_blue_marble".into(),
         name: "NASA GIBS Blue Marble".into(),
@@ -161,6 +162,7 @@ fn builtins() -> std::collections::HashMap<String, config::TileSource> {
 fn resolve(store: &SourceStore, id: &str) -> Result<config::TileSource, String> {
     let source = if let Some(custom) = store.custom_sources.iter().find(|s| s.id == id) {
         config::TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: custom.id.clone(),
             name: custom.name.clone(),
@@ -348,6 +350,7 @@ pub async fn run(args: &[String]) -> Result<Value, String> {
                 .collect();
             rows.extend(store.custom_sources.iter().map(|s| {
                 let tile = config::TileSource {
+                    cache_namespace: None,
                     headers: Default::default(),
                     id: s.id.clone(),
                     name: s.name.clone(),

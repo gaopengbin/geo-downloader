@@ -45,54 +45,166 @@ pub struct StripWriteOptions {
     buffer_bytes: u64,
     progress: Option<StripProgress>,
     check_space: fn(&Path, u64) -> Result<(), String>,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl From<u64> for StripWriteOptions {
     fn from(buffer_bytes: u64) -> Self {
-        Self { buffer_bytes, progress: None, check_space: crate::fs_util::ensure_write_space }
+        Self { buffer_bytes, progress: None, cancellation: None, check_space: crate::fs_util::ensure_write_space }
     }
 }
 
 impl StripWriteOptions {
+    pub fn with_cancellation(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.cancellation = Some(token);
+        self
+    }
+
     pub fn reporting(progress: StripProgress) -> Self {
         Self { progress: Some(progress), ..Self::from(export_buffer_bytes()) }
     }
 }
 
-fn staged_tiff(path: &Path) -> Result<(std::fs::File, tempfile::TempPath), String> {
-    let directory = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    tempfile::Builder::new().prefix(".geod-tiff-").tempfile_in(directory)
-        .map(|file| file.into_parts()).map_err(|e| format!("创建临时 GeoTIFF 失败: {e}"))
+pub(crate) fn check_cancelled(token: Option<&tokio_util::sync::CancellationToken>) -> Result<(), String> {
+    if token.is_some_and(|t| t.is_cancelled()) { Err("任务已取消".into()) } else { Ok(()) }
+}
+
+// Remove the marker while its inode is still locked. A competing opener may
+// already hold the old inode; it must verify its identity before using it.
+struct StageLock {
+    marker: std::path::PathBuf,
+    _file: std::fs::File,
+}
+
+impl StageLock {
+    fn acquire(marker: std::path::PathBuf) -> Result<Self, String> {
+        for _ in 0..3 {
+            let file = std::fs::OpenOptions::new().read(true).write(true).create(true)
+                .truncate(false).open(&marker).map_err(e2s)?;
+            fs2::FileExt::try_lock_exclusive(&file)
+                .map_err(|e| format!("无法锁定导出目标，可能正在被另一个任务写入: {e}"))?;
+            let handle = same_file::Handle::from_file(file.try_clone().map_err(e2s)?).map_err(e2s)?;
+            if same_file::Handle::from_path(&marker).is_ok_and(|current| current == handle) {
+                return Ok(Self { marker, _file: file });
+            }
+        }
+        Err("导出目标正由其他任务切换，请重试".into())
+    }
+}
+
+impl Drop for StageLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.marker);
+    }
+}
+
+pub(crate) struct StagedRaster {
+    partial: tempfile::TempPath,
+    _lock: StageLock,
+}
+
+impl StagedRaster {
+    pub(crate) fn persist(self, path: &Path) -> Result<(), String> {
+        // Use std's native long-path conversion on Windows. The partial and
+        // destination share a directory and the target lock remains held here.
+        std::fs::rename(&*self.partial, path).map_err(|e| format!("提交栅格文件失败: {e}"))
+    }
+}
+
+pub(crate) fn staged_raster(path: &Path) -> Result<(std::fs::File, StagedRaster), String> {
+    use sha2::{Digest, Sha256};
+    let name = path.file_name().ok_or("无效的 GeoTIFF 文件名")?;
+    #[cfg(windows)]
+    let name = std::ffi::OsString::from(name.to_string_lossy().to_lowercase());
+    let key = format!("{:x}", Sha256::digest(name.as_encoded_bytes()));
+    let marker = path.with_file_name(format!(".geod-raster-{key}.lock"));
+    let lock = StageLock::acquire(marker)?;
+    let partial = path.with_file_name(format!(".geod-raster-{key}.part"));
+    match std::fs::remove_file(&partial) {
+        Ok(()) => (),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(e) => return Err(format!("无法回收上次中断的临时 GeoTIFF: {e}")),
+    }
+    let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true)
+        .open(&partial).map_err(|e| format!("创建临时 GeoTIFF 失败: {e}"))?;
+    Ok((file, StagedRaster { partial: tempfile::TempPath::from_path(partial), _lock: lock }))
+}
+
+// Check underneath BufWriter: queued bytes consume space only when they reach the
+// file. Headers, final directories and flushes follow the same admission path.
+struct RasterFile {
+    file: std::fs::File,
+    path: std::path::PathBuf,
+    volume: std::sync::Arc<crate::fs_util::VolumeWriteBudget>,
+    check_space: fn(&Path, u64) -> Result<(), String>,
+    position: u64,
+    length: u64,
+}
+
+impl RasterFile {
+    fn new_empty(file: std::fs::File, staged: &StagedRaster, options: &StripWriteOptions) -> Self {
+        let volume = crate::fs_util::VolumeWriteBudget::for_file(&file, &staged.partial);
+        Self { file, path: staged.partial.to_path_buf(), volume, check_space: options.check_space, position: 0, length: 0 }
+    }
+}
+
+impl Write for RasterFile {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let end = self.position.checked_add(data.len() as u64)
+            .ok_or_else(|| std::io::Error::other("TIFF 文件长度溢出"))?;
+        let growth = end.saturating_sub(self.length);
+        let _reservation = if growth > 0 {
+            Some(self.volume.reserve(growth, |bytes| (self.check_space)(&self.path, bytes))
+                .map_err(std::io::Error::other)?)
+        } else {
+            None
+        };
+        let written = self.file.write(data)?;
+        self.position += written as u64;
+        self.length = self.length.max(self.position);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> { self.file.flush() }
+}
+
+impl Seek for RasterFile {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.position = self.file.seek(position)?;
+        Ok(self.position)
+    }
+
+    fn stream_position(&mut self) -> std::io::Result<u64> { Ok(self.position) }
 }
 
 fn commit_tiff(
-    mut writer: BufWriter<std::fs::File>, staged: tempfile::TempPath, path: &Path, ifd: u64,
+    mut writer: BufWriter<RasterFile>, staged: StagedRaster, path: &Path, ifd: u64,
+    cancellation: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<u64, String> {
     writer.flush().map_err(e2s)?;
-    writer.get_ref().sync_all().map_err(e2s)?;
-    let size = writer.get_ref().metadata().map_err(e2s)?.len();
+    writer.get_ref().file.sync_all().map_err(e2s)?;
+    let size = writer.get_ref().file.metadata().map_err(e2s)?.len();
     drop(writer);
-    validate_bigtiff_header(&staged, ifd)?;
-    staged.persist(path).map_err(|e| format!("提交 GeoTIFF 失败: {e}"))?;
+    validate_bigtiff_header(&staged.partial, ifd)?;
+    check_cancelled(cancellation)?;
+    staged.persist(path)?;
     Ok(size)
 }
 
 // The single producer sends strips in raster order. Report only writes accepted
 // by the writer. Never allocate an image-sized file from a compression forecast.
 fn write_strips(
-    mut w: BufWriter<std::fs::File>, rx: std::sync::mpsc::Receiver<EncodedStrip>,
-    total: u32, path: std::path::PathBuf, mut options: StripWriteOptions,
-) -> Result<(BufWriter<std::fs::File>, Vec<u64>, Vec<u64>), String> {
+    mut w: BufWriter<RasterFile>, rx: std::sync::mpsc::Receiver<EncodedStrip>,
+    total: u32, mut options: StripWriteOptions,
+) -> Result<(BufWriter<RasterFile>, Vec<u64>, Vec<u64>), String> {
     let mut offsets = Vec::with_capacity(total as usize);
     let mut counts = Vec::with_capacity(total as usize);
     let mut end = stream_pos(&mut w)?;
     let mut elapsed = StripTimes::default();
     for EncodedStrip { data, times } in rx {
+        check_cancelled(options.cancellation.as_ref())?;
         let size = data.len() as u64;
         let row = offsets.len() as u32 + 1;
-        // The final directory contains two u64 arrays plus fixed GeoTIFF tags.
-        let footer = if row == total { 16 * u64::from(total) + 1024 } else { 0 };
-        (options.check_space)(&path, size + footer + w.buffer().len() as u64)?;
         offsets.push(end);
         let start = std::time::Instant::now();
         w.write_all(&data).map_err(|e| format!("写入 GeoTIFF 失败: {e}"))?;
@@ -147,7 +259,7 @@ fn scanline_intersection(xi: i32, yi: i32, xj: i32, yj: i32, y: i32) -> i32 {
     (i128::from(xi) + i128::from(dx) * i128::from(i64::from(y) - i64::from(yi)) / i128::from(dy)) as i32
 }
 
-fn projected_rings(
+pub(crate) fn projected_rings(
     bounds: &TileBounds,
     width: u32,
     height: u32,
@@ -177,7 +289,7 @@ fn projected_rings(
     }
 }
 
-fn scanline_spans(rings: &[Vec<(i32, i32)>], y: i32) -> Vec<(i32, i32)> {
+pub(crate) fn scanline_spans(rings: &[Vec<(i32, i32)>], y: i32) -> Vec<(i32, i32)> {
     let mut intersections = Vec::new();
     for ring in rings {
         let mut previous = ring[ring.len() - 1];
@@ -272,8 +384,8 @@ pub fn merge_and_export_streaming_with_budget(
     // 用 u64 计算字节大小，防止 u32 溢出
     let strip_byte_size_u64 = width as u64 * rows_per_strip as u64 * channels as u64;
 
-    let (file, staged) = staged_tiff(save_path)?;
-    let mut w = BufWriter::new(file);
+    let (file, staged) = staged_raster(save_path)?;
+    let mut w = BufWriter::new(RasterFile::new_empty(file, &staged, &options));
 
     // ===== 1. 写 BigTIFF Header =====
     // Little-endian, version=43, offset_size=8
@@ -288,8 +400,8 @@ pub fn merge_and_export_streaming_with_budget(
     let strip_byte_size = strip_byte_size_u64 as usize;
     let slot_count = pipeline_slots(strip_byte_size_u64, options.buffer_bytes, num_strips);
     let (tx, rx) = std::sync::mpsc::sync_channel(slot_count);
-    let output_path = staged.to_path_buf();
-    let writer_handle = std::thread::spawn(move || write_strips(w, rx, num_strips, output_path, options));
+    let cancel = options.cancellation.clone();
+    let writer_handle = std::thread::spawn(move || write_strips(w, rx, num_strips, options));
 
     let channels_u = channels as usize;
     let width_u = width as usize;
@@ -298,6 +410,7 @@ pub fn merge_and_export_streaming_with_budget(
     // sync_channel 实现 IO/CPU 重叠；同一时刻仅 1 个 strip 缓冲在内存中，避免 OOM。
     let producer_result: Result<(), String> = (|| {
       for strip_idx in 0..num_strips {
+        check_cancelled(cancel.as_ref())?;
         let tile_y = y_min + strip_idx;
 
         let mut strip = if has_mask {
@@ -311,13 +424,12 @@ pub fn merge_and_export_streaming_with_budget(
         let decoded: Vec<Option<(usize, image::RgbaImage)>> = tile_xs
             .par_iter()
             .map(|&tile_x| {
-                let source = tile_files.get(&(tile_x, tile_y))?;
-                let bytes = source.bytes().ok()?;
-                let img = image::load_from_memory(&bytes).ok()?;
+                let Some(source) = tile_files.get(&(tile_x, tile_y)) else { return Ok(None) };
+                let img = source.decode_work_tile(tile_x, tile_y)?;
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
-                Some((px, img.into_rgba8()))
+                Ok(Some((px, img.into_rgba8())))
             })
-            .collect();
+            .collect::<Result<_, String>>()?;
 
         let read_decode = read_started.elapsed();
         let assemble_started = std::time::Instant::now();
@@ -409,37 +521,7 @@ pub fn merge_and_export_streaming_with_budget(
     let strip_offsets_field = if num_strips == 1 { strip_offsets[0] } else { strip_offsets_offset };
     let strip_counts_field = if num_strips == 1 { strip_counts[0] } else { strip_counts_offset };
 
-    // GeoTIFF: 转换为 EPSG:3857 (Web Mercator) 米坐标
-    let (west_m, south_m, east_m, north_m) = bounds_to_mercator(bounds);
-    let x_res = (east_m - west_m) / width as f64;
-    let y_res = (north_m - south_m) / height as f64;
-
-    // ModelPixelScale [x_res, y_res, 0]
-    let pixel_scale_offset = stream_pos(&mut w)?;
-    write_f64(&mut w, x_res)?;
-    write_f64(&mut w, y_res)?;
-    write_f64(&mut w, 0.0)?;
-
-    // ModelTiepoint [0, 0, 0, west_m, north_m, 0]
-    let tiepoint_offset = stream_pos(&mut w)?;
-    write_f64(&mut w, 0.0)?;
-    write_f64(&mut w, 0.0)?;
-    write_f64(&mut w, 0.0)?;
-    write_f64(&mut w, west_m)?;
-    write_f64(&mut w, north_m)?;
-    write_f64(&mut w, 0.0)?;
-
-    // GeoKeyDirectory: EPSG:3857
-    let geokeys_offset = stream_pos(&mut w)?;
-    let geo_keys: [u16; 16] = [
-        1, 1, 0, 3,
-        1024, 0, 1, 1,       // GTModelTypeGeoKey = ModelTypeProjected
-        1025, 0, 1, 1,       // GTRasterTypeGeoKey = RasterPixelIsArea
-        3072, 0, 1, 3857,    // ProjectedCSTypeGeoKey = EPSG:3857
-    ];
-    for &k in &geo_keys {
-        write_u16(&mut w, k)?;
-    }
+    let (pixel_scale_offset, tiepoint_offset, geokeys_offset) = write_mercator_reference(&mut w, bounds, width, height)?;
 
     // ===== 4. 写入 BigTIFF IFD =====
     let ifd_pos = stream_pos(&mut w)?;
@@ -477,10 +559,47 @@ pub fn merge_and_export_streaming_with_budget(
     w.seek(SeekFrom::Start(ifd_offset_pos)).map_err(e2s)?;
     write_u64(&mut w, ifd_pos)?;
 
-    commit_tiff(w, staged, save_path, ifd_pos)
+    commit_tiff(w, staged, save_path, ifd_pos, cancel.as_ref())
 }
 
 /// 验证 BigTIFF 文件头是否完整写入
+fn write_mercator_reference(
+    w: &mut (impl Write + Seek), bounds: &TileBounds, width: u32, height: u32,
+) -> Result<(u64, u64, u64), String> {
+    // GeoTIFF: 转换为 EPSG:3857 (Web Mercator) 米坐标
+    let (west_m, south_m, east_m, north_m) = bounds_to_mercator(bounds);
+    let x_res = (east_m - west_m) / width as f64;
+    let y_res = (north_m - south_m) / height as f64;
+
+    // ModelPixelScale [x_res, y_res, 0]
+    let pixel_scale_offset = stream_pos(w)?;
+    write_f64(w, x_res)?;
+    write_f64(w, y_res)?;
+    write_f64(w, 0.0)?;
+
+    // ModelTiepoint [0, 0, 0, west_m, north_m, 0]
+    let tiepoint_offset = stream_pos(w)?;
+    write_f64(w, 0.0)?;
+    write_f64(w, 0.0)?;
+    write_f64(w, 0.0)?;
+    write_f64(w, west_m)?;
+    write_f64(w, north_m)?;
+    write_f64(w, 0.0)?;
+
+    // GeoKeyDirectory: EPSG:3857
+    let geokeys_offset = stream_pos(w)?;
+    let geo_keys: [u16; 16] = [
+        1, 1, 0, 3,
+        1024, 0, 1, 1,       // GTModelTypeGeoKey = ModelTypeProjected
+        1025, 0, 1, 1,       // GTRasterTypeGeoKey = RasterPixelIsArea
+        3072, 0, 1, 3857,    // ProjectedCSTypeGeoKey = EPSG:3857
+    ];
+    for &k in &geo_keys {
+        write_u16(w, k)?;
+    }
+    Ok((pixel_scale_offset, tiepoint_offset, geokeys_offset))
+}
+
 fn validate_bigtiff_header(path: &Path, expected_ifd_pos: u64) -> Result<(), String> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).map_err(|e| format!("验证失败: 无法打开文件: {}", e))?;
@@ -534,20 +653,12 @@ fn write_bigtiff_entry<W: Write>(w: &mut W, tag: u16, typ: u16, count: u64, valu
 }
 
 // ============================================================
-// DEM 流式导出 (Float32 单波段 GeoTIFF, EPSG:4326)
+// DEM 流式导出 (Float32 单波段 GeoTIFF, EPSG:3857)
 // ============================================================
-
-/// Terrarium 编码 PNG → Float32 高程矩阵（单瓦片）
-/// 编码公式：elevation_m = (R * 256 + G + B / 256) - 32768
-fn decode_terrarium_tile(png_bytes: &[u8]) -> Result<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>, String> {
-    let img = image::load_from_memory(png_bytes)
-        .map_err(|e| format!("Terrarium 瓦片解码失败: {}", e))?;
-    Ok(img.to_rgb8())
-}
 
 /// 流式合并 Terrarium 瓦片并直接写入 Float32 GeoTIFF (BigTIFF)
 /// - 单波段 Float32 (BitsPerSample=32, SampleFormat=3 IEEEFP)
-/// - 投影 EPSG:4326 (与 Terrarium 源切片网格一致，无需重投影)
+/// - 投影 EPSG:3857 (与 Terrarium 源切片网格一致，无需重投影)
 /// - NoData = -9999.0 (写入 GDAL_NODATA tag 42113)
 /// - 缺失瓦片填 NoData
 /// - 可选多边形裁剪：环外像素强制为 NoData
@@ -593,30 +704,10 @@ pub fn merge_and_export_dem_streaming_with_budget(
     let strip_byte_size_u64 = width as u64 * rows_per_strip as u64 * 4;
     let strip_byte_size = strip_byte_size_u64 as usize;
 
-    // 预计算多边形像素坐标环（与像素映射保持一致：经度等距 + 纬度等距）
-    // 注：Terrarium 切片本身在 mercator 上等高，但输出 EPSG:4326 是简化处理；
-    // 裁剪坐标必须与像素坐标系一致，否则会与栅格错位
-    let pixel_rings: Vec<Vec<(i32, i32)>> = if let Some(polys) = polygons {
-        let lng_span = bounds.east - bounds.west;
-        let lat_span = bounds.north - bounds.south;
-        polys.iter()
-            .map(|ring| {
-                ring.iter()
-                    .map(|p| {
-                        let x = ((p.lng - bounds.west) / lng_span * width as f64) as i32;
-                        let y = ((bounds.north - p.lat) / lat_span * height as f64) as i32;
-                        (x, y)
-                    })
-                    .collect()
-            })
-            .filter(|ring: &Vec<(i32, i32)>| ring.len() >= 3)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let pixel_rings = projected_rings(bounds, width, height, polygons);
 
-    let (file, staged) = staged_tiff(save_path)?;
-    let mut w = BufWriter::new(file);
+    let (file, staged) = staged_raster(save_path)?;
+    let mut w = BufWriter::new(RasterFile::new_empty(file, &staged, &options));
 
     // ===== 1. BigTIFF Header =====
     w.write_all(b"II").map_err(e2s)?;
@@ -629,14 +720,15 @@ pub fn merge_and_export_dem_streaming_with_budget(
     // ===== 2. 流水线：strip 内 rayon 并行 + writer 线程异步落盘 =====
     let slot_count = pipeline_slots(strip_byte_size_u64, options.buffer_bytes, num_strips);
     let (tx, rx) = std::sync::mpsc::sync_channel(slot_count);
-    let output_path = staged.to_path_buf();
-    let writer_handle = std::thread::spawn(move || write_strips(w, rx, num_strips, output_path, options));
+    let cancel = options.cancellation.clone();
+    let writer_handle = std::thread::spawn(move || write_strips(w, rx, num_strips, options));
 
     let nodata_bytes = NODATA.to_le_bytes();
     let width_u = width as usize;
 
     let producer_result: Result<(), String> = (|| {
       for strip_idx in 0..num_strips {
+        check_cancelled(cancel.as_ref())?;
         let tile_y = y_min + strip_idx;
 
         let mut strip = vec![0u8; strip_byte_size];
@@ -649,13 +741,12 @@ pub fn merge_and_export_dem_streaming_with_budget(
         let decoded: Vec<Option<(usize, image::RgbImage)>> = tile_xs
             .par_iter()
             .map(|&tile_x| {
-                let source = tile_files.get(&(tile_x, tile_y))?;
-                let bytes = source.bytes().ok()?;
-                let rgb = decode_terrarium_tile(&bytes).ok()?;
+                let Some(source) = tile_files.get(&(tile_x, tile_y)) else { return Ok(None) };
+                let rgb = source.decode_work_tile(tile_x, tile_y)?.into_rgb8();
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
-                Some((px, rgb))
+                Ok(Some((px, rgb)))
             })
-            .collect();
+            .collect::<Result<_, String>>()?;
 
         let read_decode = read_started.elapsed();
         let assemble_started = std::time::Instant::now();
@@ -762,36 +853,7 @@ pub fn merge_and_export_dem_streaming_with_budget(
     let strip_offsets_field = if num_strips == 1 { strip_offsets[0] } else { strip_offsets_offset };
     let strip_counts_field = if num_strips == 1 { strip_counts[0] } else { strip_counts_offset };
 
-    // GeoTIFF: EPSG:4326 经纬度坐标系
-    let lng_span = bounds.east - bounds.west;
-    let lat_span = bounds.north - bounds.south;
-    let x_res = lng_span / width as f64;
-    let y_res = lat_span / height as f64;
-
-    let pixel_scale_offset = stream_pos(&mut w)?;
-    write_f64(&mut w, x_res)?;
-    write_f64(&mut w, y_res)?;
-    write_f64(&mut w, 0.0)?;
-
-    let tiepoint_offset = stream_pos(&mut w)?;
-    write_f64(&mut w, 0.0)?;
-    write_f64(&mut w, 0.0)?;
-    write_f64(&mut w, 0.0)?;
-    write_f64(&mut w, bounds.west)?;
-    write_f64(&mut w, bounds.north)?;
-    write_f64(&mut w, 0.0)?;
-
-    // GeoKeyDirectory: EPSG:4326 (Geographic)
-    let geokeys_offset = stream_pos(&mut w)?;
-    let geo_keys: [u16; 16] = [
-        1, 1, 0, 3,
-        1024, 0, 1, 2,       // GTModelTypeGeoKey = ModelTypeGeographic
-        1025, 0, 1, 1,       // GTRasterTypeGeoKey = RasterPixelIsArea
-        2048, 0, 1, 4326,    // GeographicTypeGeoKey = WGS84
-    ];
-    for &k in &geo_keys {
-        write_u16(&mut w, k)?;
-    }
+    let (pixel_scale_offset, tiepoint_offset, geokeys_offset) = write_mercator_reference(&mut w, bounds, width, height)?;
 
     // GDAL_NODATA: 6 字节 ASCII "-9999\0"，count×1=6 ≤8，BigTIFF 规范要求内联到 value 字段
     // （原先外置导致 GDAL/QGIS 读不到 NoData，-9999 被当作真实高程）。
@@ -832,7 +894,7 @@ pub fn merge_and_export_dem_streaming_with_budget(
     w.seek(SeekFrom::Start(ifd_offset_pos)).map_err(e2s)?;
     write_u64(&mut w, ifd_pos)?;
 
-    commit_tiff(w, staged, save_path, ifd_pos)
+    commit_tiff(w, staged, save_path, ifd_pos, cancel.as_ref())
 }
 
 // ============================================================
@@ -844,6 +906,101 @@ mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
     use std::sync::Arc;
+
+    #[test]
+    fn high_latitude_dem_and_overview_keep_native_grid_float_values_and_nodata() {
+        use tiff::{decoder::{Decoder, DecodingResult}, tags::Tag};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("elevation.tif");
+        let bounds = crate::tile::get_merged_bounds(2, 1, 4, 1, 3);
+        let mid_lat = 74.01954331150226;
+        let west = bounds.west - 0.01;
+        let east = bounds.east + 0.01;
+        let outline = vec![vec![
+            PolygonPoint { lng: west, lat: bounds.north }, PolygonPoint { lng: east, lat: bounds.north },
+            PolygonPoint { lng: east, lat: mid_lat }, PolygonPoint { lng: west, lat: mid_lat },
+        ]];
+        // Terrarium (127, 255, 128) = -0.5 m. The second and third grid tiles are known gaps.
+        let files = HashMap::from([((2, 1), TileSource::from_bytes(make_solid_tile(127, 255, 128)))]);
+        merge_and_export_dem_streaming(&files, 2, 1, 4, 1, &bounds, &path, "lzw", Some(&outline)).unwrap();
+        crate::pyramid::build_pyramid(&path, Default::default()).unwrap();
+        let mut reader = Decoder::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let keys = reader.get_tag_u16_vec(Tag::GeoKeyDirectoryTag).unwrap();
+        assert!(keys.chunks_exact(4).any(|k| k == [3072, 0, 1, 3857]));
+        let scale = reader.get_tag_f64_vec(Tag::ModelPixelScaleTag).unwrap();
+        let tie = reader.get_tag_f64_vec(Tag::ModelTiepointTag).unwrap();
+        let latitude = ((tie[4] - 128.0 * scale[1]) / 6378137.0).sinh().atan().to_degrees();
+        assert!((latitude - mid_lat).abs() < 1e-8);
+        let DecodingResult::F32(heights) = reader.read_image().unwrap() else { panic!("expected Float32 DEM") };
+        assert_eq!(heights[120*768 + 128], -0.5);
+        assert_eq!(heights[135*768 + 128], -9999.0);
+        reader.next_image().unwrap();
+        assert_eq!(reader.dimensions().unwrap(), (384, 128));
+        assert_eq!(reader.get_tag_ascii_string(Tag::GdalNodata).unwrap(), "-9999");
+        let DecodingResult::F32(overview) = reader.read_image().unwrap() else { panic!("expected Float32 overview") };
+        assert_eq!(overview[60*384 + 64], -0.5);
+        assert_eq!(overview[70*384 + 64], -9999.0);
+        assert_eq!(overview[60*384 + 200], -9999.0);
+    }
+
+    #[test]
+    fn registered_unreadable_tiles_preserve_destination_while_known_gaps_still_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("work.png");
+        let out = dir.path().join("out.tif");
+        let files = HashMap::from([((0, 0), TileSource::from_path(src.clone()))]);
+        let bounds = crate::tile::get_merged_bounds(0, 0, 0, 0, 1);
+        for corrupt in [false, true] {
+            if corrupt { std::fs::write(&src, b"invalid raster").unwrap(); }
+            for (dem, compression) in [(false, "lzw"), (true, "deflate"), (false, "jpeg75")] {
+                std::fs::write(&out, b"previous output").unwrap();
+                let result = if dem {
+                    merge_and_export_dem_streaming(&files, 0, 0, 0, 0, &bounds, &out, compression, None)
+                } else {
+                    merge_and_export_streaming(&files, 0, 0, 0, 0, &bounds, &out, compression, None)
+                };
+                assert!(result.is_err());
+                assert_eq!(std::fs::read(&out).unwrap(), b"previous output");
+            }
+        }
+        assert!(crate::streaming_raster::merge_and_export_streaming_png(&files, 0,0,0,0, &bounds, &out, None).is_err());
+        assert_eq!(std::fs::read(&out).unwrap(), b"previous output");
+        assert!(crate::merger::try_merge_tiles_sized(&files, 0,0,0,0,TILE_SIZE).is_err());
+        merge_and_export_dem_streaming(&HashMap::new(), 0, 0, 0, 0, &bounds, &out, "lzw", None).unwrap();
+    }
+
+    #[test]
+    fn same_destination_excludes_another_writer_and_reclaims_only_its_own_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("image.tif");
+        let (file, active) = staged_raster(&dest).unwrap();
+        assert!(staged_raster(&dest).is_err());
+        let (_other_file, other) = staged_raster(&dir.path().join("other.tif")).unwrap();
+        drop(file);
+        let stale = active.partial.keep().unwrap();
+        drop(active._lock);
+        std::fs::write(&stale, b"abandoned bytes").unwrap();
+        let (new_file, new) = staged_raster(&dest).unwrap();
+        assert_eq!(new_file.metadata().unwrap().len(), 0);
+        assert!(other.partial.is_file());
+        assert_eq!(new.partial.as_os_str(), stale.as_os_str());
+    }
+
+    #[test]
+    fn cancellation_during_last_row_preserves_original_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("image.tif");
+        let bounds = crate::tile::get_merged_bounds(0, 0, 0, 0, 1);
+        for compression in ["lzw", "jpeg75"] {
+            std::fs::write(&dest, b"previous output").unwrap();
+            let token = tokio_util::sync::CancellationToken::new();
+            let cancel = token.clone();
+            let opts = StripWriteOptions::reporting(Box::new(move |_,_,_,_| cancel.cancel())).with_cancellation(token);
+            assert!(merge_and_export_streaming_with_budget(&HashMap::new(), 0,0,0,0, &bounds, &dest, compression, None, opts).is_err());
+            assert_eq!(std::fs::read(&dest).unwrap(), b"previous output");
+        }
+    }
 
     #[test]
     fn county_scale_mask_intersections_keep_the_correct_diagonal() {
@@ -897,6 +1054,71 @@ mod tests {
 
     /// 生成一张 256×256 PNG 瓦片，每个像素 = (tx, ty, (tx+ty) & 0xFF)，
     /// 让不同 (tx, ty) 产生不同字节，便于发现行错位 bug。
+    #[test]
+    fn concurrent_jpeg_export_rechecks_buffered_strips_and_preserves_retry() {
+        use std::fs;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        // Count actual staged and published image bytes. No free space on the host is depleted.
+        fn check_capacity(path: &Path, bytes: u64) -> Result<(), String> {
+            let dir = path.parent().unwrap();
+            let capacity: u64 = fs::read_to_string(dir.join("capacity")).unwrap().parse().unwrap();
+            let used: u64 = fs::read_dir(dir).unwrap().map(Result::unwrap)
+                .filter(|e| matches!(e.path().extension().and_then(|v| v.to_str()), Some("part" | "tif")))
+                .map(|e| e.metadata().unwrap().len()).sum();
+            crate::fs_util::check_write_space(
+                crate::fs_util::MIN_FREE_SPACE_BYTES + capacity.saturating_sub(used), bytes,
+            )
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let targets = dir.path().join("exports");
+        fs::create_dir(&targets).unwrap();
+        let tiles = solid_tile_files(0, 0, 0, 0, 40, 60, 90);
+        let export = |file: &Path, compression, options| {
+            merge_and_export_streaming_with_budget(&tiles, 0, 0, 0, 0, &dummy_bounds(), file, compression, None, options)
+        };
+        let measured = export(&dir.path().join("baseline.tif"), "jpeg75", StripWriteOptions::from(1)).unwrap();
+        fs::write(targets.join("capacity"), (measured + 160).to_string()).unwrap();
+        let lzw = targets.join("strip.tif");
+        let jpeg = targets.join("photo.tif");
+        fs::write(&lzw, b"previous image").unwrap();
+        let options = || StripWriteOptions { check_space: check_capacity, ..StripWriteOptions::from(1) };
+
+        std::thread::scope(|scope| {
+            let (started, ready) = mpsc::channel();
+            let (release, resume) = mpsc::channel::<()>();
+            let mut first_options = options();
+            first_options.progress = Some(Box::new(move |_, _, _, _| {
+                started.send(()).unwrap();
+                // Closing the sender also releases the writer if the test unwinds.
+                let _ = resume.recv_timeout(Duration::from_secs(10));
+            }));
+            let first = scope.spawn(|| export(&lzw, "lzw", first_options));
+            ready.recv_timeout(Duration::from_secs(10)).unwrap();
+            let result = export(&jpeg, "jpeg75", options());
+            drop(release);
+            assert_eq!(result.unwrap(), measured);
+            assert!(first.join().unwrap().unwrap_err().contains("磁盘空间不足"));
+        });
+        assert_eq!(fs::read(&lzw).unwrap(), b"previous image");
+        assert_eq!(fs::read_dir(&targets).unwrap().count(), 3);
+        let published = fs::read(&jpeg).unwrap();
+        let mut tiff = tiff::decoder::Decoder::new(std::io::Cursor::new(&published)).unwrap();
+        assert_eq!(tiff.dimensions().unwrap(), (256, 256));
+        let offset = tiff.get_tag_u64_vec(tiff::tags::Tag::TileOffsets).unwrap()[0] as usize;
+        let length = tiff.get_tag_u64_vec(tiff::tags::Tag::TileByteCounts).unwrap()[0] as usize;
+        let block = image::load_from_memory(&published[offset..offset + length]).unwrap().into_rgb8();
+        let pixel = block.get_pixel(100, 100).0;
+        assert!(pixel.into_iter().zip([40, 60, 90]).all(|(a,b)| a.abs_diff(b) <= 2));
+
+        fs::write(targets.join("capacity"), (measured + 16384).to_string()).unwrap();
+        export(&lzw, "lzw", options()).unwrap();
+        let decoded = image::open(&lzw).unwrap().into_rgb8();
+        assert_eq!(decoded.get_pixel(255, 255).0, [40, 60, 90]);
+        assert_eq!(fs::read_dir(&targets).unwrap().count(), 3);
+    }
+
     fn make_tile(tx: u32, ty: u32) -> Vec<u8> {
         let mut buf: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::new(TILE_SIZE, TILE_SIZE);
         let r = (tx & 0xFF) as u8;

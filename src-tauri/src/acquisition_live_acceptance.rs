@@ -6,7 +6,7 @@ use std::{sync::Arc,io::{Read,Write}};
 async fn live_amap_layers_keep_native_diagnostics(){
  let root=std::path::PathBuf::from(std::env::var("GEOD_LEGACY_QA_OUTPUT").unwrap());std::fs::create_dir_all(&root).unwrap();
  let cache_volume=tempfile::tempdir().unwrap();crate::tile_cache::set_config(crate::tile_cache::CacheConfig{enabled:true,root_dir:cache_volume.path().to_path_buf(),max_total_bytes:16*1024*1024});
- let make=|id:&str,style:u8|TileSource{id:id.into(),name:id.into(),url:format!("https://webst01.is.autonavi.com/appmaptile?style={style}&size=1&scale=1&x={{x}}&y={{y}}&z={{z}}"),subdomains:vec![],max_zoom:22,attribution:"Amap".into(),headers:Default::default()};
+ let make=|id:&str,style:u8|TileSource{id:id.into(),name:id.into(),url:format!("https://webst01.is.autonavi.com/appmaptile?style={style}&size=1&scale=1&x={{x}}&y={{y}}&z={{z}}"),subdomains:vec![],max_zoom:22,attribution:"Amap".into(),cache_namespace:None,headers:Default::default()};
  let mut observations=vec![];let tile=TileCoord{x:13489,y:6208,z:14};
  for refused in [false,true]{
   let label=if refused{"controlled-overlay-403"}else{"real-amap-delivery"};let dir=root.join(label);std::fs::create_dir_all(&dir).unwrap();

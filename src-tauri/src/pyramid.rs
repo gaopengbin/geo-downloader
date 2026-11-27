@@ -40,6 +40,10 @@ struct IfdInfo {
     width: u32,
     height: u32,
     channels: u32,
+    bits_per_sample: u16,
+    sample_format: u16,
+    photometric: u16,
+    nodata: Option<(u64, u64, f32)>,
     rows_per_strip: u32,
     compression_tag: u16,
     strip_offsets: Vec<u64>,
@@ -136,7 +140,9 @@ fn parse_bigtiff_ifd(r: &mut (impl Read + Seek), ifd_offset: u64) -> Result<IfdI
     let (mut tile_width, mut tile_height, mut subfile_type) = (0, 0, 0);
     let mut width: u32 = 0;
     let mut height: u32 = 0;
-    let mut channels: u32 = 3;
+    let mut channels: u32 = 1;
+    let (mut bits_per_sample, mut sample_format, mut photometric) = (1, 1, 1);
+    let mut nodata = None;
     let mut rows_per_strip: u32 = 0;
     let mut compression_tag: u16 = 1;
     let mut strip_offsets_type: u16 = 16;
@@ -158,6 +164,25 @@ fn parse_bigtiff_ifd(r: &mut (impl Read + Seek), ifd_offset: u64) -> Result<IfdI
             323 => tile_height = value as u32,
             256 => width = value as u32,                // ImageWidth
             257 => height = value as u32,               // ImageLength
+            258 => bits_per_sample = value as u16,
+            262 => photometric = value as u16,
+            339 => sample_format = value as u16,
+            42113 if typ == 2 => {
+                if !(1..=128).contains(&count) { return Err("无效的 TIFF NoData 值".into()); }
+                let bytes = if count <= 8 {
+                    value.to_le_bytes()[..count as usize].to_vec()
+                } else {
+                    let saved = r.stream_position().map_err(|e| e.to_string())?;
+                    r.seek(SeekFrom::Start(value)).map_err(|e| e.to_string())?;
+                    let mut bytes = vec![0; count as usize];
+                    r.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+                    r.seek(SeekFrom::Start(saved)).map_err(|e| e.to_string())?;
+                    bytes
+                };
+                let number = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?
+                    .trim_end_matches(char::from(0)).trim().parse::<f32>().map_err(|e| e.to_string())?;
+                nodata = Some((count, value, number));
+            }
             259 => compression_tag = value as u16,      // Compression
             277 => channels = value as u32,             // SamplesPerPixel
             278 => rows_per_strip = value as u32,       // RowsPerStrip
@@ -190,7 +215,7 @@ fn parse_bigtiff_ifd(r: &mut (impl Read + Seek), ifd_offset: u64) -> Result<IfdI
         tile_width, tile_height, subfile_type,
         width,
         height,
-        channels,
+        channels, bits_per_sample, sample_format, photometric, nodata,
         rows_per_strip,
         compression_tag,
         strip_offsets,
@@ -203,7 +228,7 @@ fn parse_bigtiff_ifd(r: &mut (impl Read + Seek), ifd_offset: u64) -> Result<IfdI
 // ===== 解压缩 =====
 
 fn decompress_strip(data: &[u8], compression_tag: u16, expected_size: usize) -> Result<Vec<u8>, String> {
-    match compression_tag {
+    let decoded = match compression_tag {
         1 => Ok(data.to_vec()), // 无压缩
         5 => {
             // LZW (TIFF)
@@ -219,7 +244,11 @@ fn decompress_strip(data: &[u8], compression_tag: u16, expected_size: usize) -> 
             Ok(out)
         }
         _ => Err(format!("不支持的压缩格式 tag={}", compression_tag)),
+    }?;
+    if decoded.len() != expected_size {
+        return Err(format!("TIFF 条带长度异常: 需要 {expected_size}，实际 {}", decoded.len()));
     }
+    Ok(decoded)
 }
 
 // ===== 压缩 =====
@@ -288,6 +317,30 @@ fn box_average_strip_pair(
     dst
 }
 
+fn average_elevation(top: &[u8], bottom: &[u8], width: usize, rows_top: usize, nodata: Option<f32>) -> Vec<u8> {
+    let stride = width * 4;
+    let height = (top.len() + bottom.len()) / stride;
+    let mut result = Vec::with_capacity((width / 2) * (height / 2) * 4);
+    for y in (0..height.saturating_sub(1)).step_by(2) {
+        let row_a = get_row_from_pair(top, bottom, rows_top, y, stride);
+        let row_b = get_row_from_pair(top, bottom, rows_top, y + 1, stride);
+        for (a, b) in row_a.chunks_exact(8).zip(row_b.chunks_exact(8)) {
+            let mut sum = 0.0f64;
+            let mut count = 0;
+            for sample in a.chunks_exact(4).chain(b.chunks_exact(4)) {
+                let h = f32::from_le_bytes(sample.try_into().unwrap());
+                if h.is_finite() && Some(h) != nodata {
+                    sum += f64::from(h);
+                    count += 1;
+                }
+            }
+            let average = if count == 0 { nodata.unwrap_or(f32::NAN) } else { (sum / f64::from(count)) as f32 };
+            result.extend_from_slice(&average.to_le_bytes());
+        }
+    }
+    result
+}
+
 fn get_row_from_pair<'a>(top: &'a [u8], bot: &'a [u8], top_rows: usize, row: usize, stride: usize) -> &'a [u8] {
     if row < top_rows {
         let start = row * stride;
@@ -306,6 +359,15 @@ pub fn build_pyramid<P: AsRef<Path>>(
     opts: PyramidOptions,
 ) -> Result<PyramidStats, String> {
     build_with_space_check(path.as_ref(), opts, crate::fs_util::ensure_write_space)
+}
+
+pub fn build_pyramid_cancellable<P: AsRef<Path>>(
+    path: P, opts: PyramidOptions, cancel: &tokio_util::sync::CancellationToken,
+) -> Result<PyramidStats, String> {
+    build_with_space_check(path.as_ref(), opts, |path, bytes| {
+        if cancel.is_cancelled() { return Err("任务已取消".into()); }
+        crate::fs_util::ensure_write_space(path, bytes)
+    })
 }
 
 fn build_with_space_check(
@@ -368,6 +430,19 @@ fn build_with_space_check(
     file.seek(SeekFrom::Start(root_link))
         .map_err(|e| e.to_string())?;
     let mut original_link = read_u64(&mut file)?;
+    if ifd0.tile_width == 0 && original_link != 0 {
+        let existing = parse_bigtiff_ifd(&mut file, original_link)?;
+        if existing.subfile_type & 1 == 0 { return Err("TIFF 包含其他影像目录".into()); }
+        if (existing.bits_per_sample, existing.sample_format, existing.channels, existing.photometric)
+            == (ifd0.bits_per_sample, ifd0.sample_format, ifd0.channels, ifd0.photometric) {
+            return Ok(PyramidStats { levels_generated: 0, size_added_bytes: 0, elapsed_ms: start.elapsed().as_millis() as u64 });
+        }
+        // Older GeoD versions wrote byte RGB overviews for Float32 elevation.
+        // Keep the old link intact until the complete replacement is committed.
+        if !(ifd0.sample_format == 3 && ifd0.bits_per_sample == 32 && existing.bits_per_sample == 8) {
+            return Err("TIFF 概览与基图的采样格式不匹配".into());
+        }
+    }
     let result = if ifd0.tile_width != 0 {
         use crate::streaming_tiff::jpeg_tiff::{self, Blocks, Level};
         if (
@@ -422,7 +497,7 @@ fn build_with_space_check(
             },
             mask,
         };
-        jpeg_tiff::append_levels(&mut file, path, base, &opts, check_space)
+        jpeg_tiff::append_levels(&mut file, path, base, &opts, &check_space)
     } else {
         append_levels(
             &mut file,
@@ -431,13 +506,17 @@ fn build_with_space_check(
             ifd0,
             compression_str,
             level_count,
-            check_space,
+            &check_space,
         )
     };
 
     match result {
         Ok((levels, first_ifd)) => {
             if let Some(first) = first_ifd {
+                if let Err(error) = check_space(path, 0) {
+                    file.set_len(file_size_before).map_err(|e| format!("{error}；回收金字塔空间失败: {e}"))?;
+                    return Err(error);
+                }
                 let commit = file.seek(SeekFrom::Start(root_link))
                     .and_then(|_| file.write_all(&first.to_le_bytes()))
                     .and_then(|_| file.sync_data());
@@ -467,6 +546,12 @@ fn append_levels(
     ifd0: IfdInfo, compression_str: &str, level_count: usize,
     check_space: impl Fn(&Path, u64) -> Result<(), String>,
 ) -> Result<(usize, Option<u64>), String> {
+    let volume = crate::fs_util::VolumeWriteBudget::for_file(file, path);
+    let float_dem = (ifd0.sample_format, ifd0.bits_per_sample, ifd0.channels, ifd0.photometric) == (3, 32, 1, 1);
+    if !float_dem && !(ifd0.sample_format == 1 && ifd0.bits_per_sample == 8 &&
+        matches!((ifd0.channels, ifd0.photometric), (3 | 4, 2) | (1, 1))) {
+        return Err("无法为此类型的栅格构建金字塔".into());
+    }
     let mut first_ifd = None;
     // 当前层的元信息，初始为 IFD 0
     let mut prev_width = ifd0.width;
@@ -494,7 +579,7 @@ fn append_levels(
         // 降采样：逐对 strip 读取 → 2x box average → 压缩 → 追加
         let num_prev_strips = prev_strip_offsets.len();
         let ch = prev_channels;
-        let prev_stride = prev_width as usize * ch as usize;
+        let prev_stride = prev_width as usize * ch as usize * usize::from(ifd0.bits_per_sample / 8);
 
         let new_rows_per_strip = prev_rows_per_strip; // 两个 strip 合并后 2x 降采样，行数不变
 
@@ -504,76 +589,31 @@ fn append_levels(
         // 定位到文件末尾开始追加
         file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
 
-        // 成对读取 strip (两个 strip 合成一个下采样 strip)
-        let mut i = 0;
-        while i + 1 < num_prev_strips {
-            // 读取 strip i
-            let raw_top = read_strip_data(&mut file, prev_strip_offsets[i], prev_strip_byte_counts[i] as usize)?;
-            let expected_top_size = prev_stride * prev_rows_per_strip.min(prev_height.saturating_sub(i as u32 * prev_rows_per_strip)) as usize;
-            let top = decompress_strip(&raw_top, prev_compression_tag, expected_top_size)?;
+        if num_prev_strips != prev_height.div_ceil(prev_rows_per_strip) as usize || prev_strip_byte_counts.len() != num_prev_strips {
+            return Err("TIFF 条带索引数量与影像高度不一致".into());
+        }
+        for i in (0..num_prev_strips).step_by(2) {
+            let mut read_strip = |index: usize| -> Result<Vec<u8>, String> {
+                let data = read_strip_data(&mut file, prev_strip_offsets[index], prev_strip_byte_counts[index] as usize)?;
+                let rows = prev_rows_per_strip.min(prev_height - index as u32 * prev_rows_per_strip);
+                decompress_strip(&data, prev_compression_tag, prev_stride * rows as usize)
+            };
+            let top = read_strip(i)?;
+            let bottom = if i + 1 < num_prev_strips { read_strip(i + 1)? } else { Vec::new() };
             let rows_top = top.len() / prev_stride;
-
-            // 读取 strip i+1
-            let raw_bot = read_strip_data(&mut file, prev_strip_offsets[i + 1], prev_strip_byte_counts[i + 1] as usize)?;
-            let expected_bot_size = prev_stride * prev_rows_per_strip.min(prev_height.saturating_sub((i as u32 + 1) * prev_rows_per_strip)) as usize;
-            let bot = decompress_strip(&raw_bot, prev_compression_tag, expected_bot_size)?;
-            let rows_bot = bot.len() / prev_stride;
-
-            // 降采样
-            let downsampled = box_average_strip_pair(&top, &bot, prev_width, ch, rows_top as u32, rows_bot as u32);
-            drop(top);
-            drop(bot);
-
-            // 压缩
+            let rows_bottom = bottom.len() / prev_stride;
+            let downsampled = if float_dem {
+                average_elevation(&top, &bottom, prev_width as usize, rows_top, ifd0.nodata.map(|n| n.2))
+            } else {
+                box_average_strip_pair(&top, &bottom, prev_width, ch, rows_top as u32, rows_bottom as u32)
+            };
+            if downsampled.is_empty() { continue; }
             let compressed = compress_strip(&downsampled, compression_str)?;
-
-            // 追加到文件末尾
-            file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
-            let offset = file.stream_position().map_err(|e| e.to_string())?;
-            check_space(path, compressed.len() as u64)?;
-            file.write_all(&compressed).map_err(|e| format!("写入 strip: {}", e))?;
+            let offset = file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
+            let _reservation = volume.reserve(compressed.len() as u64, |total| check_space(path, total))?;
+            file.write_all(&compressed).map_err(|e| format!("写入 strip: {e}"))?;
             new_strip_offsets.push(offset);
             new_strip_byte_counts.push(compressed.len() as u64);
-
-            i += 2;
-        }
-
-        // 如果 strip 数量为奇数，最后一个 strip 单独降采样（仅宽度减半）
-        if i < num_prev_strips {
-            let raw = read_strip_data(&mut file, prev_strip_offsets[i], prev_strip_byte_counts[i] as usize)?;
-            let expected_size = prev_stride * prev_rows_per_strip.min(prev_height.saturating_sub(i as u32 * prev_rows_per_strip)) as usize;
-            let data = decompress_strip(&raw, prev_compression_tag, expected_size)?;
-            let rows = data.len() / prev_stride;
-
-            // 单 strip 降采样：水平 2x（每 2 像素取平均），垂直每 2 行取平均
-            let new_strip_w = prev_width / 2;
-            let actual_new_h = rows / 2;
-            if actual_new_h > 0 && new_strip_w > 0 {
-                let new_strip_stride = new_strip_w as usize * ch as usize;
-                let mut downsampled = vec![0u8; actual_new_h * new_strip_stride];
-                for y in 0..actual_new_h {
-                    let src_y0 = y * 2;
-                    let src_y1 = (y * 2 + 1).min(rows - 1);
-                    for x in 0..new_strip_w as usize {
-                        let sx0 = x * 2;
-                        let sx1 = sx0 + 1;
-                        for c in 0..ch as usize {
-                            let v0 = data[src_y0 * prev_stride + sx0 * ch as usize + c] as u16;
-                            let v1 = data[src_y0 * prev_stride + sx1 * ch as usize + c] as u16;
-                            let v2 = data[src_y1 * prev_stride + sx0 * ch as usize + c] as u16;
-                            let v3 = data[src_y1 * prev_stride + sx1 * ch as usize + c] as u16;
-                            downsampled[y * new_strip_stride + x * ch as usize + c] = ((v0 + v1 + v2 + v3 + 2) / 4) as u8;
-                        }
-                    }
-                }
-                let compressed = compress_strip(&downsampled, compression_str)?;
-                file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
-                let offset = file.stream_position().map_err(|e| e.to_string())?;
-                check_space(path, compressed.len() as u64)?;
-                file.write_all(&compressed).map_err(|e| format!("写入 strip: {}", e))?;
-                new_strip_offsets.push(offset);
-                new_strip_byte_counts.push(compressed.len() as u64);
-            }
         }
 
         if new_strip_offsets.is_empty() {
@@ -582,7 +622,7 @@ fn append_levels(
 
         // 写 StripOffsets / StripByteCounts 数组（count>1 外部存储，count==1 inline）
         let num_new_strips = new_strip_offsets.len() as u64;
-        check_space(path, num_new_strips * 16 + 1024)?;
+        let _reservation = volume.reserve(num_new_strips * 16 + 1024, |total| check_space(path, total))?;
         let (strip_offsets_val, strip_counts_val);
 
         if num_new_strips == 1 {
@@ -603,11 +643,7 @@ fn append_levels(
         }
 
         // BitsPerSample inline
-        let bps_inline: u64 = if ch == 4 {
-            8u64 | (8u64 << 16) | (8u64 << 32) | (8u64 << 48)
-        } else {
-            8u64 | (8u64 << 16) | (8u64 << 32)
-        };
+        let bps_inline = (0..ch).fold(0u64, |bits, i| bits | (u64::from(ifd0.bits_per_sample) << (i * 16)));
         let res_inline: u64 = 72u64 | (1u64 << 32);
         let comp_tag_val: u64 = match compression_str { "lzw" => 5, "deflate" => 8, _ => 1 };
 
@@ -615,7 +651,7 @@ fn append_levels(
         let new_ifd_pos = file.stream_position().map_err(|e| e.to_string())?;
 
         let has_alpha = ch == 4;
-        let num_entries: u64 = if has_alpha { 14 } else { 13 };
+        let num_entries = 13 + u64::from(has_alpha) + u64::from(float_dem) + u64::from(ifd0.nodata.is_some());
         write_u64(&mut file, num_entries)?;
 
         // tag 254: NewSubfileType = 1 (reduced-resolution)
@@ -624,7 +660,7 @@ fn append_levels(
         write_bigtiff_entry(&mut file, 257, 4, 1, new_h as u64)?;                     // ImageLength
         write_bigtiff_entry(&mut file, 258, 3, ch as u64, bps_inline)?;               // BitsPerSample
         write_bigtiff_entry(&mut file, 259, 3, 1, comp_tag_val)?;                     // Compression
-        write_bigtiff_entry(&mut file, 262, 3, 1, 2)?;                                // PhotometricInterpretation = RGB
+        write_bigtiff_entry(&mut file, 262, 3, 1, u64::from(ifd0.photometric))?;
         write_bigtiff_entry(&mut file, 273, 16, num_new_strips, strip_offsets_val)?;   // StripOffsets
         write_bigtiff_entry(&mut file, 277, 3, 1, ch as u64)?;                        // SamplesPerPixel
         write_bigtiff_entry(&mut file, 278, 4, 1, new_rows_per_strip as u64)?;        // RowsPerStrip
@@ -634,6 +670,11 @@ fn append_levels(
         write_bigtiff_entry(&mut file, 296, 3, 1, 2)?;                                // ResolutionUnit
         if has_alpha {
             write_bigtiff_entry(&mut file, 338, 3, 1, 2)?;                            // ExtraSamples = Unassociated Alpha
+        }
+
+        if float_dem { write_bigtiff_entry(&mut file, 339, 3, 1, 3)?; }
+        if let Some((count, value, _)) = ifd0.nodata {
+            write_bigtiff_entry(&mut file, 42113, 2, count, value)?;
         }
 
         let this_next_ifd_pos = file.stream_position().map_err(|e| e.to_string())?;
@@ -674,6 +715,15 @@ mod storage_tests {
     use super::*;
 
     #[test]
+    fn elevations_average_float_values_and_exclude_nodata() {
+        let bytes = |values: &[f32]| values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<_>>();
+        let nd = -9999.0;
+        let top = bytes(&[-2.25, 3.75, nd, nd]);
+        let bottom = bytes(&[1.5, nd, nd, nd]);
+        assert_eq!(average_elevation(&top, &bottom, 4, 1, Some(nd)), bytes(&[1.0, nd]));
+    }
+
+    #[test]
     fn failed_pyramid_append_restores_original_file_and_can_retry() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("影像.tif");
@@ -693,6 +743,10 @@ mod storage_tests {
         let stats = build_pyramid(&path, PyramidOptions::default()).unwrap();
         assert_eq!(stats.levels_generated, 1);
         assert_eq!(path.metadata().unwrap().len(), original.len() as u64 + stats.size_added_bytes);
+        let after = std::fs::read(&path).unwrap();
+        let repeat = build_pyramid(&path, PyramidOptions::default()).unwrap();
+        assert_eq!((repeat.levels_generated, repeat.size_added_bytes), (0, 0));
+        assert_eq!(std::fs::read(&path).unwrap(), after);
         let mut tiff = tiff::decoder::Decoder::new(std::fs::File::open(path).unwrap()).unwrap();
         assert_eq!(tiff.dimensions().unwrap(), (512, 1024));
         tiff.next_image().unwrap();

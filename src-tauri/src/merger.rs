@@ -22,6 +22,11 @@ pub enum TileSource {
 }
 
 impl TileSource {
+    pub(crate) fn decode_work_tile(&self, x: u32, y: u32) -> Result<image::DynamicImage, String> {
+        let bytes = self.bytes().map_err(|e| format!("读取工作瓦片 {x}/{y} 失败: {e}"))?;
+        image::load_from_memory(&bytes).map_err(|e| format!("解码工作瓦片 {x}/{y} 失败: {e}"))
+    }
+
     /// 从 PathBuf 构造（保持下游 API 简洁）
     #[inline]
     pub fn from_path(path: PathBuf) -> Self {
@@ -175,6 +180,21 @@ pub fn merge_tiles_sized(
     y_max: u32,
     tile_size: u32,
 ) -> RgbImage {
+    merge_grid(tile_files, x_min, y_min, x_max, y_max, tile_size, false)
+        .expect("permissive tile merge skips unreadable source tiles")
+}
+
+pub fn try_merge_tiles_sized(
+    tile_files: &HashMap<(u32, u32), TileSource>, x_min: u32, y_min: u32,
+    x_max: u32, y_max: u32, tile_size: u32,
+) -> Result<RgbImage, String> {
+    merge_grid(tile_files, x_min, y_min, x_max, y_max, tile_size, true)
+}
+
+fn merge_grid(
+    tile_files: &HashMap<(u32, u32), TileSource>, x_min: u32, y_min: u32,
+    x_max: u32, y_max: u32, tile_size: u32, strict: bool,
+) -> Result<RgbImage, String> {
     // 防御：异常坐标范围用 saturating 避免算术溢出 panic（正常范围行为完全不变）
     let cols = x_max.saturating_sub(x_min).saturating_add(1);
     let rows = y_max.saturating_sub(y_min).saturating_add(1);
@@ -192,12 +212,9 @@ pub fn merge_tiles_sized(
 
             if let Some(source) = tile_files.get(&(x, y)) {
                 // 从瓦片源（Path 或 Bytes）读取并解码单个瓦片
-                let bytes = match source.bytes() {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
-                let img = match image::load_from_memory(&bytes) {
-                    Ok(img) => img,
+                let img = match source.decode_work_tile(x, y) {
+                    Ok(image) => image,
+                    Err(error) if strict => return Err(error),
                     Err(_) => continue,
                 };
                 let rgb = img.to_rgb8();
@@ -219,7 +236,7 @@ pub fn merge_tiles_sized(
         }
     }
 
-    merged
+    Ok(merged)
 }
 
 /// 多边形坐标点

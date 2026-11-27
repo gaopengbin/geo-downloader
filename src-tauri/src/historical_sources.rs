@@ -12,6 +12,7 @@ pub fn sources() -> HashMap<String, TileSource> {
         .map(|(year, start, end)| {
             let id = format!("nasa_weld_{year}");
             let source = TileSource {
+                cache_namespace: None,
                 headers: Default::default(),
                 id: id.clone(),
                 name: format!("NASA Landsat {year}（30米年度合成）"),
@@ -29,6 +30,7 @@ pub fn sources() -> HashMap<String, TileSource> {
         let years = match year { 2016 => "2016 & 2017".into(), 2018 => "2017 & 2018".into(), _ => year.to_string() };
         let id = format!("eox_sentinel_{year}");
         sources.insert(id.clone(), TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id,
             name: format!("EOX Sentinel-2 {year}（年度合成）"),

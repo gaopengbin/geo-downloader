@@ -47,7 +47,7 @@ geod inspect --bundle .\output\job-001
 | --- | --- | --- |
 | 多级别 | `zoom`、`zoomMax`、`zoomLevels` | `zoomLevels` 优先，可选择离散级别 |
 | 输出格式 | `format` | `geotiff`、`png`、`jpeg`、`mbtiles`、`gpkg`、`tiles` |
-| 压缩与金字塔 | `compression`、`buildPyramid` | GeoTIFF 支持 `none/lzw/deflate`；未裁剪的 GeoTIFF 可写内置金字塔 |
+| 压缩与金字塔 | `compression`、`buildPyramid` | GeoTIFF 支持 `none/lzw/deflate/jpeg75`；未裁剪的 GeoTIFF 可写内置金字塔 |
 | GIS 辅助文件 | `generateSidecars` | 为 GeoTIFF 生成 `.tfw`、`.prj` |
 | 叠加图层 | `overlays` | 最多 4 个自定义 XYZ 源，按数组顺序 alpha 合成；可设 `maxZoom`、`subdomains` |
 | 多边形裁剪 | `cropToShape` + `polygon`，或 `clipToLayer` + `vector` | 仅 PNG/GeoTIFF；范围外透明，JPEG/瓦片包不可裁剪 |

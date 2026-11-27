@@ -603,6 +603,7 @@ pub async fn foundation_export(
     path: String,
     proxy: Option<String>,
 ) -> Result<ExportResult, String> {
+    let _work = crate::update_download::begin_work()?;
     let (_guard, cancel) = register(&request_id)?;
     let source = Source::new(proxy.as_deref())?;
     export(&source, &layers, bounds, Path::new(&path), &cancel, |p| {

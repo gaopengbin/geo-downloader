@@ -212,6 +212,10 @@ fn probes_one_registered_raster_tile() {
         while served < 2 && Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Windows can inherit the listener's nonblocking mode.
+                    stream.set_nonblocking(false).unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
                     let mut request = [0u8; 2048];
                     stream.read(&mut request).unwrap();
                     write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", png.len()).unwrap();

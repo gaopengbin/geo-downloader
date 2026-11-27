@@ -175,7 +175,7 @@ pub struct Tiles3dRequest {
     pub source: Tiles3dSource,
     /// 用户选区多边形 [[lng, lat], ...] WGS-84 度；None 表示下载全部
     #[serde(default)]
-    pub polygon: Option<Vec<Vec<f64>>>,
+    pub polygon: Option<crate::selection_areas::SelectionAreas>,
     /// 保存路径
     pub save_path: String,
     /// 并发数

@@ -1783,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "geo-downloader"
-version = "3.6.29"
+version = "3.6.30"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1804,6 +1804,7 @@ dependencies = [
  "rayon",
  "reqwest 0.12.28",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "sha2",

@@ -19,6 +19,34 @@ export function installerIntegrity(asset: { size?: unknown; sha256?: unknown; di
   return { expectedSha256: raw.toLowerCase(), expectedSize: asset.size }
 }
 
+interface ReleaseAsset {
+  name: string
+  browser_download_url: string
+  size?: number
+  sha256?: string
+  digest?: string | null
+}
+
+export type UpdateAction =
+  | { kind: 'install'; url: string; expectedSha256: string; expectedSize: number }
+  | { kind: 'download'; url: string }
+
+export function releaseAction(assets: ReleaseAsset[], tag: string, [os, arch]: [string, string]): UpdateAction | null {
+  if (os === 'windows' && arch === 'x86_64') {
+    const setup = assets.find(asset => /_windows_x64-setup\.exe$/i.test(asset.name))
+    if (!setup) throw new Error('UPDATE_INTEGRITY_MISSING')
+    return { kind: 'install', url: setup.browser_download_url, ...installerIntegrity(setup) }
+  }
+  const suffixes = os === 'macos'
+    ? { x86_64: ['_macos_x64.dmg'], aarch64: ['_macos_arm64.dmg'] }[arch]
+    : os === 'linux' && arch === 'x86_64' ? ['_linux_amd64.AppImage', '_linux_amd64.deb'] : undefined
+  const match = suffixes?.map(suffix => assets.find(asset => asset.name.endsWith(suffix))).find(Boolean)
+  if (!match) return null
+  const url = 'https://github.com/gaopengbin/geo-downloader/releases/download/' +
+    encodeURIComponent(tag) + '/' + encodeURIComponent(match.name)
+  return { kind: 'download', url }
+}
+
 export function updateSpeed(bytesPerSecond: number) {
   const speed = Number.isFinite(bytesPerSecond) ? Math.max(0, bytesPerSecond) : 0
   return speed >= 1024 * 1024 ? `${(speed / 1024 / 1024).toFixed(1)} MB/s` : `${(speed / 1024).toFixed(1)} KB/s`

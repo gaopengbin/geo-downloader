@@ -48,6 +48,13 @@ test('auto task headings show source/date/levels once without losing multiple le
     { title: 'OSM 道路', source: undefined, level: undefined })
 })
 
+test('history headings show actual output levels for named tasks, partial exports, and legacy rows', () => {
+  assert.equal(getTaskHeading('Local PNG', 'Local', 7, [8, 7]).level, 'z7–z8')
+  assert.equal(getTaskHeading('Local MBTiles', 'Local', 7, [12, 8, 7, 12, 10]).level, 'z7–z8, z10, z12')
+  assert.equal(getTaskHeading('Local z7~z9', 'Local', 7, [9]).level, 'z9')
+  assert.equal(getTaskHeading('Legacy', 'Local', 7, []).level, 'z7')
+})
+
 test('custom names, differing imagery dates and mismatched levels retain source details', () => {
   for (const [name, source, zoom] of [
     ['朝阳区变化对比', 'Google Earth 历史影像 2026-07-14', 17],

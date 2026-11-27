@@ -50,6 +50,7 @@ export const useTelemetryStore = create<TelemetryState>()(
       resetInstallId: () =>
         set((state) => ({
           installId: state.consent === 'enabled' ? createAnonymousId() : null,
+          consentedAt: state.consent === 'enabled' ? new Date().toISOString() : state.consentedAt,
         })),
     }),
     {

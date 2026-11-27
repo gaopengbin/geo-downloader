@@ -19,6 +19,7 @@ pub mod overlay;
 pub mod tile_crop;
 pub mod exporter;
 pub mod admin;
+pub mod selection_areas;
 pub mod history;
 pub mod history_maintenance;
 pub mod settings;
@@ -172,6 +173,8 @@ pub fn run() {
             // 任务管理
             commands::create_download_task,
             commands::get_active_tasks,
+            commands::set_task_outcome_tracking,
+            commands::get_task_outcomes,
             commands::get_task_logs,
             commands::read_log_file,
             commands::get_log_dir,
@@ -239,6 +242,7 @@ pub fn run() {
             commands::cancel_wayback_scan,
             commands::download_wayback_incremental,
             // 更新
+            commands::get_update_target,
             commands::get_update_info,
             commands::download_and_install_update,
             // 瓦片缓存
@@ -259,7 +263,10 @@ pub fn run() {
         ])
         .setup(|app| {
             let task_events=app.handle().clone();
-            app.state::<Arc<TaskManager>>().set_event_sink(Arc::new(move|snapshot|{let _=task_events.emit("task-updated",snapshot);}));
+            app.state::<Arc<TaskManager>>().set_event_sink(Arc::new(move |snapshot| {
+                commands::retain_task_outcome(&snapshot);
+                let _ = task_events.emit("task-updated", snapshot);
+            }));
             // 启动时从用户设置同步 TLS 严格性开关（默认 false = 严格验证证书）
             if let Ok(sm) = settings::SettingsManager::new() {
                 if let Ok(s) = sm.get() {
@@ -280,42 +287,7 @@ pub fn run() {
             // 不阻塞主窗口创建。
             std::thread::spawn(|| tile_cache::Store::global().request_capacity_check());
 
-            // 启动时异步清理上次运行残留的 tif-dl-* 临时目录（仅清 >24h 老的，
-            // 避免误删用户当前还在用的"完成但有缺块（CompletedWithGaps）"任务的 temp）
-            std::thread::spawn(|| {
-                let temp_root = std::env::temp_dir();
-                let rd = match std::fs::read_dir(&temp_root) {
-                    Ok(rd) => rd,
-                    Err(_) => return,
-                };
-                let now = std::time::SystemTime::now();
-                let mut cleaned = 0u32;
-                for entry in rd.flatten() {
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy();
-                    if !name_str.starts_with("tif-dl-") {
-                        continue;
-                    }
-                    let md = match entry.metadata() {
-                        Ok(m) => m,
-                        Err(_) => continue,
-                    };
-                    if !md.is_dir() {
-                        continue;
-                    }
-                    let too_old = md.modified().ok().and_then(|mtime| {
-                        now.duration_since(mtime).ok().map(|d| d.as_secs() > 86400)
-                    }).unwrap_or(false);
-                    if too_old {
-                        if std::fs::remove_dir_all(entry.path()).is_ok() {
-                            cleaned += 1;
-                        }
-                    }
-                }
-                if cleaned > 0 {
-                    log::info!("[startup] 清理了 {} 个 >24h 的孤儿临时目录 (tif-dl-*)", cleaned);
-                }
-            });
+            std::thread::spawn(task::cleanup_stale_legacy_work_dirs);
 
             let task_manager = app.state::<Arc<TaskManager>>().inner().clone();
             std::thread::spawn(move || {

@@ -79,7 +79,7 @@ pub(crate) fn settle_task(
         manager.mark_cancelled(id);
     } else {
         match result {
-            Ok(size) => manager.complete_task(id, size),
+            Ok(size) => { manager.complete_task(id, size); }
             Err(error) => manager.fail_task(id, error),
         }
     }

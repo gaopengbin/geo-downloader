@@ -19,6 +19,9 @@ pub struct DownloadRecord {
     pub format: String,
     pub file_path: String,
     pub file_size: u64,
+    /// Zoom levels actually exported by a multi-level task, including shared containers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_zooms: Vec<u8>,
     pub tile_count: u32,
     pub failed_count: u32,
     pub created_at: DateTime<Utc>,
@@ -87,6 +90,7 @@ impl DownloadRecord {
     ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
+            output_zooms: Vec::new(),
             name,
             source,
             source_name,
@@ -145,6 +149,15 @@ pub struct HistoryPage {
     pub total: u64,
     pub page: u32,
     pub page_size: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StoredTaskOutcome {
+    pub seq: i64,
+    pub id: String,
+    pub started: i64,
+    pub status: String,
+    pub finished: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -208,20 +221,31 @@ impl HistoryStore {
                     log_stored_size INTEGER NOT NULL DEFAULT 0,
                     log_truncated INTEGER NOT NULL DEFAULT 0,
                     log_updated_at TEXT,
-                    error TEXT
+                    error TEXT,
+                    output_zooms BLOB
                 );
                 CREATE INDEX IF NOT EXISTS idx_download_history_created_at
-                    ON download_history(created_at DESC);",
+                    ON download_history(created_at DESC);
+                CREATE TABLE IF NOT EXISTS task_outcomes (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, started INTEGER NOT NULL,
+                    status TEXT NOT NULL, finished INTEGER NOT NULL, UNIQUE(task_id, started, status)
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_outcomes_finished ON task_outcomes(finished);
+                CREATE TABLE IF NOT EXISTS recovered_outputs (
+                    task_id TEXT NOT NULL, started INTEGER NOT NULL, status TEXT NOT NULL, finished INTEGER NOT NULL,
+                    PRIMARY KEY(task_id, started, status)
+                );",
             )?;
             // Optional additive column: old rows and older clients remain valid.
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let has_error = {
+            let columns = {
                 let mut statement = tx.prepare("PRAGMA table_info(download_history)")?;
                 let names = statement.query_map([], |r| r.get::<_, String>(1))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                names.iter().any(|name| name == "error")
+                names
             };
-            if !has_error { tx.execute_batch("ALTER TABLE download_history ADD COLUMN error TEXT;")?; }
+            if !columns.iter().any(|name| name == "output_zooms") { tx.execute_batch("ALTER TABLE download_history ADD COLUMN output_zooms BLOB;")?; }
+            if !columns.iter().any(|name| name == "error") { tx.execute_batch("ALTER TABLE download_history ADD COLUMN error TEXT;")?; }
             tx.commit()?;
             Ok(())
         })?;
@@ -294,6 +318,29 @@ impl HistoryStore {
         self.with_connection(|conn| insert_record(conn, record, false))
     }
 
+    pub(crate) fn add_finished_once(&self, record: &DownloadRecord) -> Result<(), String> {
+        self.with_connection(|conn| insert_record(conn, record, true))
+    }
+
+    /// Commit the local history and recovery fact together. Only link a failure
+    /// already observed for this attempt. Older receipts can be matched when the
+    /// export timestamp falls inside the failed attempt.
+    pub(crate) fn record_recovered_output(&self, record: &DownloadRecord, task: &str, started: Option<i64>, status: &str) -> Result<(), String> {
+        self.with_connection(|conn| {
+            let tx = conn.transaction()?;
+            insert_record(&tx, record, true)?;
+            let now = Utc::now().timestamp_millis();
+            tx.execute("DELETE FROM recovered_outputs WHERE finished < ?1", [now - 90 * 86_400_000])?;
+            tx.execute("INSERT OR IGNORE INTO recovered_outputs(task_id, started, status, finished)
+                SELECT task_id, started, ?3, MAX(finished + 1, ?4) FROM task_outcomes
+                WHERE task_id = ?1 AND status = 'failed' AND
+                  (started = ?2 OR (?2 IS NULL AND started <= ?5 AND finished >= ?5))
+                ORDER BY started DESC LIMIT 1",
+                params![task, started, status, now, record.created_at.timestamp_millis()])?;
+            tx.commit()
+        })
+    }
+
     pub fn get(&self, id: &str) -> Result<Option<DownloadRecord>, String> {
         self.with_connection(|conn| {
             conn.query_row(
@@ -364,6 +411,8 @@ impl HistoryStore {
                 paths
             };
             tx.execute("DELETE FROM download_history", [])?;
+            tx.execute("DELETE FROM task_outcomes", [])?;
+            tx.execute("DELETE FROM recovered_outputs", [])?;
             tx.commit()?;
             Ok(paths)
         })
@@ -422,6 +471,42 @@ impl HistoryStore {
         })
     }
 
+    pub(crate) fn save_task_outcome(&self, id: &str, started: i64, status: &str, finished: i64) -> Result<(), String> {
+        self.with_connection(|conn| {
+            let tx = conn.transaction()?;
+            tx.execute("DELETE FROM task_outcomes WHERE finished < ?1", [finished - 90 * 86_400_000])?;
+            tx.execute("INSERT OR IGNORE INTO task_outcomes (task_id, started, status, finished) VALUES (?1, ?2, ?3, ?4)",
+                params![id, started, status, finished])?;
+            tx.commit()
+        })
+    }
+
+    pub(crate) fn task_outcomes(&self, after: i64, since: i64) -> Result<Vec<StoredTaskOutcome>, String> {
+        self.with_connection(|conn| {
+            // This query is called by the enabled monitor with its consent/identity
+            // cutoff. Recovery may have run before the monitor was initialized.
+            let pending: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM recovered_outputs)", [], |row| row.get(0))?;
+            if pending {
+                let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let oldest = Utc::now().timestamp_millis() - 90 * 86_400_000;
+                tx.execute("INSERT OR IGNORE INTO task_outcomes(task_id, started, status, finished)
+                    SELECT r.task_id, r.started, r.status, r.finished FROM recovered_outputs r
+                    WHERE r.started >= ?1 AND r.finished >= ?2 AND NOT EXISTS (
+                        SELECT 1 FROM task_outcomes o WHERE o.task_id = r.task_id AND o.started = r.started AND o.status = r.status
+                    )", params![since, oldest])?;
+                // Eligible facts are now journaled. Discard expired or pre-consent facts too.
+                tx.execute("DELETE FROM recovered_outputs", [])?;
+                tx.commit()?;
+            }
+            let mut stmt = conn.prepare("SELECT seq, task_id, started, status, finished FROM task_outcomes
+                WHERE seq > ?1 AND started >= ?2 ORDER BY seq LIMIT 12")?;
+            let rows = stmt.query_map(params![after, since], |row| Ok(StoredTaskOutcome {
+                seq: row.get(0)?, id: row.get(1)?, started: row.get(2)?, status: row.get(3)?, finished: row.get(4)?,
+            }))?;
+            rows.collect()
+        })
+    }
+
     pub fn records_requiring_log_maintenance(
         &self,
         compress_before: DateTime<Utc>,
@@ -453,7 +538,7 @@ impl HistoryStore {
 const HISTORY_COLUMNS: &str = "id, name, source, source_name, zoom, format, file_path,
     file_size, tile_count, failed_count, created_at, status, log_path, duration_secs,
     has_pyramid, log_compressed, log_original_size, log_stored_size, log_truncated,
-    log_updated_at, error";
+    log_updated_at, error, output_zooms";
 
 fn insert_record(
     conn: &Connection,
@@ -467,10 +552,10 @@ fn insert_record(
                 id, name, source, source_name, zoom, format, file_path, file_size,
                 tile_count, failed_count, created_at, status, log_path, duration_secs,
                 has_pyramid, log_compressed, log_original_size, log_stored_size,
-                log_truncated, log_updated_at, error
+                log_truncated, log_updated_at, error, output_zooms
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
              )"
         ),
         params![
@@ -495,6 +580,7 @@ fn insert_record(
             record.log_truncated,
             record.log_updated_at.map(|value| value.to_rfc3339()),
             record.error,
+            record.output_zooms,
         ],
     )?;
     Ok(())
@@ -517,6 +603,7 @@ fn row_to_record(row: &Row<'_>) -> rusqlite::Result<DownloadRecord> {
         created_at: parse_datetime(created_at, 10)?,
         status: DownloadStatus::from_str(&row.get::<_, String>(11)?)?,
         error: row.get(20)?,
+        output_zooms: row.get::<_, Option<Vec<u8>>>(21)?.unwrap_or_default(),
         log_file: row.get(12)?,
         duration_secs: row.get::<_, Option<i64>>(13)?.map(from_i64),
         has_pyramid: row.get(14)?,
@@ -580,12 +667,30 @@ mod tests {
             log_file: None,
             duration_secs: Some(1),
             has_pyramid: false,
+            output_zooms: Vec::new(),
             log_compressed: false,
             log_original_size: 0,
             log_stored_size: 0,
             log_truncated: false,
             log_updated_at: None,
         }
+    }
+
+    #[test]
+    fn task_outcomes_survive_restart_without_duplicates_or_preconsent_replay() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = HistoryStore::open_at(directory.path()).unwrap();
+        store.save_task_outcome("job", 5, "failed", 7).unwrap();
+        store.save_task_outcome("job", 5, "failed", 7).unwrap();
+        store.save_task_outcome("job", 10, "completed", 20).unwrap();
+        let reopened = HistoryStore::open_at(directory.path()).unwrap();
+        let rows = reopened.task_outcomes(0, 1).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].status, "failed");
+        assert_eq!(reopened.task_outcomes(rows[0].seq, 1).unwrap()[0].status, "completed");
+        assert_eq!(reopened.task_outcomes(0, 8).unwrap().len(), 1);
+        reopened.clear().unwrap();
+        assert!(reopened.task_outcomes(0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -607,12 +712,13 @@ mod tests {
         let store = HistoryStore::open_at(tmp.path()).unwrap();
         store.add(&record("legacy", 10)).unwrap();
         let conn = Connection::open(&store.db_path).unwrap();
-        conn.execute_batch("ALTER TABLE download_history DROP COLUMN error;").unwrap();
+        conn.execute_batch("ALTER TABLE download_history DROP COLUMN error; ALTER TABLE download_history DROP COLUMN output_zooms;").unwrap();
         drop(conn); drop(store);
         let upgraded = HistoryStore::open_at(tmp.path()).unwrap();
         let old = upgraded.get("legacy").unwrap().unwrap();
         assert_eq!(old.file_path, "D:/legacy.tif");
         assert_eq!(old.error, None);
+        assert!(old.output_zooms.is_empty());
         let mut failed = record("failed", 20);
         failed.status = DownloadStatus::Failed; failed.error = Some("磁盘只读".into());
         upgraded.add(&failed).unwrap(); drop(upgraded);
@@ -674,6 +780,52 @@ mod tests {
         assert!(store.get("a").unwrap().is_none());
         assert!(store.clear().unwrap().is_empty());
         assert_eq!(store.page(1, 50).unwrap().total, 0);
+    }
+
+    #[test]
+    fn reconciled_output_is_observed_once_for_the_original_consented_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = HistoryStore::open_at(dir.path()).unwrap();
+        let now = Utc::now().timestamp_millis();
+        let started = now - 5000;
+        let failure = now - 1000;
+        let record = DownloadRecord::new("local".into(),"source".into(),"local".into(),8,"geotiff".into(),
+            "output.tif".into(),2048,1,0,DownloadStatus::Completed);
+        store.save_task_outcome("job", started, "failed", failure).unwrap();
+        let failed = store.task_outcomes(0, started).unwrap().pop().unwrap();
+        let raw = Connection::open(dir.path().join("history.db")).unwrap();
+        raw.execute_batch("CREATE TRIGGER reject_fact BEFORE INSERT ON recovered_outputs BEGIN SELECT RAISE(ABORT, 'test'); END").unwrap();
+        assert!(store.record_recovered_output(&record, "job", Some(started), "completed").is_err());
+        assert!(store.get(&record.id).unwrap().is_none());
+        raw.execute_batch("DROP TRIGGER reject_fact").unwrap();
+        store.record_recovered_output(&record, "job", Some(started), "completed").unwrap();
+        // Reconciliation before monitor initialization cannot publish telemetry on its own.
+        assert_eq!(raw.query_row("SELECT COUNT(*) FROM task_outcomes", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        // Replaying the same verified output after another crash is idempotent.
+        store.record_recovered_output(&record, "job", Some(started), "completed").unwrap();
+        raw.execute_batch("CREATE TRIGGER reject_outcome BEFORE INSERT ON task_outcomes BEGIN SELECT RAISE(ABORT, 'test'); END").unwrap();
+        assert!(store.task_outcomes(failed.seq, started).is_err());
+        assert_eq!(raw.query_row("SELECT COUNT(*) FROM recovered_outputs", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+        raw.execute_batch("DROP TRIGGER reject_outcome").unwrap();
+        let later = store.task_outcomes(failed.seq, started).unwrap();
+        assert_eq!(later.len(), 1);
+        assert_eq!((&later[0].id, later[0].started, later[0].status.as_str()), (&failed.id, started, "completed"));
+        assert!(later[0].finished > failed.finished);
+        assert!(store.task_outcomes(later[0].seq, started).unwrap().is_empty());
+        // An unobserved task or a different attempt must not be attributed to that failure.
+        store.record_recovered_output(&record, "untracked", Some(started), "completed").unwrap();
+        store.record_recovered_output(&record, "job", Some(started + 1), "completed_with_gaps").unwrap();
+        assert!(store.task_outcomes(later[0].seq, started).unwrap().is_empty());
+        // Reset consent permanently discards pending facts from the earlier identity.
+        store.save_task_outcome("previous-identity", started, "failed", failure).unwrap();
+        store.record_recovered_output(&record, "previous-identity", Some(started), "completed").unwrap();
+        assert!(store.task_outcomes(0, now).unwrap().is_empty());
+        assert_eq!(raw.query_row("SELECT COUNT(*) FROM recovered_outputs", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        assert_eq!(raw.query_row("SELECT COUNT(*) FROM task_outcomes WHERE task_id = 'previous-identity' AND status = 'completed'", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+        // Routine polling performs no writes and coexists with an active SQLite writer.
+        raw.execute_batch("BEGIN IMMEDIATE").unwrap();
+        assert!(store.task_outcomes(0, now).unwrap().is_empty());
+        raw.execute_batch("ROLLBACK").unwrap();
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import type { SelectionAreas } from '@/store/selection-store'
 import { invokeCommand } from '@/lib/tauri'
 import { telemetryCountBucket, trackTelemetry } from '@/features/telemetry/telemetry-client'
 import type { Bounds, CreateTaskResult, Nullable, PolygonCoord } from '@/types/api'
@@ -7,7 +8,7 @@ export function createOsmDownloadTask(
   featureType: string,
   savePath: string,
   proxy: Nullable<string>,
-  polygon: Nullable<PolygonCoord[]>,
+  polygon: Nullable<PolygonCoord[] | SelectionAreas>,
   taskName: string,
 ) {
   return invokeCommand<CreateTaskResult>('create_osm_download_task', {
@@ -33,7 +34,7 @@ export function downloadOsmData(
   featureType: string,
   savePath: string,
   proxy: Nullable<string>,
-  polygon: Nullable<PolygonCoord[]>,
+  polygon: Nullable<PolygonCoord[] | SelectionAreas>,
 ) {
   return invokeCommand<unknown>('download_osm_data', {
     bounds,

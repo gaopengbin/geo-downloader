@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import type { Feature } from 'geojson'
+import { polygonCoordinates } from '@/lib/geo-area'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -193,7 +194,9 @@ function RegionImportDialogContent({
         }
       }
       const featBounds: MapBounds = { north: fn, south: fs, east: fe, west: fw }
-      importedFeatures.push({ name: featureName(i), bounds: featBounds, rings: polygon })
+      const geometry = features[i].geometry
+      const areas = geometry ? polygonCoordinates(geometry) : []
+      importedFeatures.push({ name: featureName(i), bounds: featBounds, rings: polygon, areas })
       allRings.push(...polygon)
       if (fn > n) n = fn
       if (fs < s) s = fs
@@ -209,6 +212,7 @@ function RegionImportDialogContent({
     setExternalSelection({
       bounds: { north: n, south: s, east: e, west: w },
       polygon: allRings,
+      areas: importedFeatures.flatMap(feature => feature.areas ?? []),
       features: importedFeatures.length > 1 ? importedFeatures : null,
     })
     void trackTelemetry('region_imported', {

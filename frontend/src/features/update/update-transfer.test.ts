@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { installerIntegrity, updateSpeed, UpdateTelemetryTracker } from './update-transfer.ts'
+import { installerIntegrity, releaseAction, updateSpeed, UpdateTelemetryTracker } from './update-transfer.ts'
 import { useUpdateStore } from './update-store.ts'
 
 test('mirror SHA256 and GitHub digests describe the same installer', () => {
@@ -38,6 +38,23 @@ test('speed display never produces NaN or negative values', () => {
   assert.equal(updateSpeed(-100), '0.0 KB/s')
 })
 
+test('release assets match native platform and architecture, including unsupported targets', () => {
+  const assets = ['windows_arm64-setup.exe', 'windows_x64-setup.exe', 'macos_x64.dmg', 'macos_arm64.dmg', 'linux_amd64.AppImage', 'linux_amd64.deb']
+    .map(suffix => ({ name: 'GeoDownloader_3.6.29_' + suffix, browser_download_url: 'https://example.test/' + suffix,
+      size: 100, digest: 'sha256:' + 'a'.repeat(64) }))
+  for (const [os, arch, suffix] of [['macos','x86_64','macos_x64.dmg'],['macos','aarch64','macos_arm64.dmg'],['linux','x86_64','linux_amd64.AppImage']]) {
+    const action = releaseAction(assets, 'v3.6.29', [os,arch])
+    assert.equal(action?.kind,'download')
+    assert.ok(action?.url.endsWith(suffix))
+    assert.ok(action?.url.startsWith('https://github.com/gaopengbin/geo-downloader/releases/download/v3.6.29/'))
+  }
+  const windows = releaseAction(assets, 'v3.6.29', ['windows','x86_64'])
+  assert.equal(windows?.kind, 'install')
+  assert.ok(windows?.url.endsWith('windows_x64-setup.exe'))
+  assert.equal(releaseAction(assets, 'v3.6.29', ['linux','aarch64']), null)
+  assert.throws(() => releaseAction([], 'v3.6.29', ['windows','x86_64']))
+})
+
 test('a new update or closing the dialog resets the previous source and progress', () => {
   const store = useUpdateStore.getState()
   store.setDownloading(true)
@@ -45,9 +62,9 @@ test('a new update or closing the dialog resets the previous source and progress
   store.setTransfer({ source: 'github', phase: 'downloading', attempt: 2, progress: 42,
     downloaded: 420, total: 1000, bytesPerSecond: 1024, reason: null })
   store.showDialog({ currentVersion: '3.6.13', latestVersion: '3.6.24', noteGroups: [],
-    downloadUrl: 'https://laogao.xyz/packages/latest/GeoDownloader_3.6.24_windows_x64-setup.exe',
-    releaseUrl: 'https://github.com/gaopengbin/geo-downloader/releases/tag/v3.6.24',
-    expectedSha256: 'a'.repeat(64), expectedSize: 1000 })
+    action: { kind: 'install', url: 'https://laogao.xyz/packages/latest/GeoDownloader_3.6.24_windows_x64-setup.exe',
+      expectedSha256: 'a'.repeat(64), expectedSize: 1000 },
+    releaseUrl: 'https://github.com/gaopengbin/geo-downloader/releases/tag/v3.6.24' })
   assert.equal(useUpdateStore.getState().progress, 0)
   assert.equal(useUpdateStore.getState().transfer, null)
   assert.equal(useUpdateStore.getState().downloading, false)

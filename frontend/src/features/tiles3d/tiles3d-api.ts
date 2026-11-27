@@ -15,7 +15,7 @@ export function analyze3dTiles(source: Tiles3dSource, proxy: Nullable<string>) {
 
 export function estimate3dTiles(
   source: Tiles3dSource,
-  polygon: number[][],
+  polygon: number[][] | number[][][][],
   proxy: Nullable<string>,
 ) {
   return invokeCommand<Tiles3dEstimate>('estimate_3dtiles', {

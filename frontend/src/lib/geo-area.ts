@@ -13,7 +13,7 @@ export type AreaGeometry = Polygon | MultiPolygon
 const EARTH_RADIUS_METERS = 6_371_008.8
 const DEG_TO_RAD = Math.PI / 180
 
-function polygonCoordinates(geometry: Geometry): Position[][][] {
+export function polygonCoordinates(geometry: Geometry): Position[][][] {
   if (geometry.type === 'Polygon') return [geometry.coordinates]
   if (geometry.type === 'MultiPolygon') return geometry.coordinates
   if (geometry.type === 'GeometryCollection') {

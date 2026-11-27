@@ -66,93 +66,48 @@ fn linear_scale_upper_bound(matrix: &TileTransform) -> f64 {
 /// 用户选区多边形（度，WGS-84）
 #[derive(Debug, Clone)]
 pub struct SelectionRegion {
-    /// 多边形顶点 [[lng, lat], ...]
-    pub polygon: Vec<[f64; 2]>,
-    /// 最小外接矩形 [west, south, east, north]
-    pub mbr: [f64; 4],
+    parts: Vec<([f64; 4], crate::selection_areas::Area)>,
 }
 
 impl SelectionRegion {
-    pub fn new(coords: &[Vec<f64>]) -> Self {
-        let polygon: Vec<[f64; 2]> = coords
-            .iter()
-            .filter(|c| c.len() >= 2)
-            .map(|c| [c[0], c[1]])
-            .collect();
-
-        let mut west = f64::MAX;
-        let mut south = f64::MAX;
-        let mut east = f64::MIN;
-        let mut north = f64::MIN;
-        for p in &polygon {
-            west = west.min(p[0]);
-            south = south.min(p[1]);
-            east = east.max(p[0]);
-            north = north.max(p[1]);
-        }
-
-        SelectionRegion {
-            polygon,
-            mbr: [west, south, east, north],
+    pub fn new(areas: &crate::selection_areas::SelectionAreas) -> Self {
+        Self {
+            parts: areas
+                .0
+                .iter()
+                .map(|part| (crate::selection_areas::ring_bounds(&part[0]), part.clone()))
+                .collect(),
         }
     }
 
-    /// 判断一个经纬度矩形是否与选区相交
-    /// rect: [west, south, east, north] 度
+    /// Rectangles intersecting the boundary are kept, including hole boundaries.
     pub fn intersects_rect(&self, rect: [f64; 4]) -> bool {
-        let [rw, rs, re, rn] = rect;
-        let [mw, ms, me, mn] = self.mbr;
-
-        // 第一级：MBR 快速排除
-        if rw > me || re < mw || rs > mn || rn < ms {
-            return false;
-        }
-
-        // 如果多边形顶点不超过 2 个（退化情况），MBR 相交即可
-        if self.polygon.len() < 3 {
-            return true;
-        }
-
-        // 第二级：精确多边形-矩形相交判定
-        // 情况 1：矩形任一顶点在多边形内
-        let rect_corners = [
-            [rw, rs],
-            [re, rs],
-            [re, rn],
-            [rw, rn],
-        ];
-        for corner in &rect_corners {
-            if point_in_polygon(corner, &self.polygon) {
+        let [west, south, east, north] = rect;
+        let corners = [[west, south], [east, south], [east, north], [west, north]];
+        self.parts.iter().any(|(b, rings)| {
+            if west > b[2] || east < b[0] || south > b[3] || north < b[1] {
+                return false;
+            }
+            if corners.iter().any(|p| {
+                point_in_polygon(p, &rings[0])
+                    && !rings[1..].iter().any(|hole| point_in_polygon(p, hole))
+            }) {
                 return true;
             }
-        }
-
-        // 情况 2：多边形任一顶点在矩形内
-        for vertex in &self.polygon {
-            if vertex[0] >= rw && vertex[0] <= re && vertex[1] >= rs && vertex[1] <= rn {
-                return true;
-            }
-        }
-
-        // 情况 3：多边形边与矩形边相交
-        let rect_edges = [
-            ([rw, rs], [re, rs]),
-            ([re, rs], [re, rn]),
-            ([re, rn], [rw, rn]),
-            ([rw, rn], [rw, rs]),
-        ];
-        let n = self.polygon.len();
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let poly_edge = (self.polygon[i], self.polygon[j]);
-            for rect_edge in &rect_edges {
-                if segments_intersect(poly_edge.0, poly_edge.1, rect_edge.0, rect_edge.1) {
-                    return true;
-                }
-            }
-        }
-
-        false
+            rings.iter().any(|ring| {
+                ring.iter().enumerate().any(|(i, p)| {
+                    (west <= p[0] && p[0] <= east && south <= p[1] && p[1] <= north)
+                        || (0..4).any(|k| {
+                            segments_intersect(
+                                *p,
+                                ring[(i + 1) % ring.len()],
+                                corners[k],
+                                corners[(k + 1) % 4],
+                            )
+                        })
+                })
+            })
+        })
     }
 }
 
@@ -522,13 +477,27 @@ mod tests {
     }
 
     #[test]
+    fn multiple_components_and_a_hole_select_the_correct_tiles() {
+        let area = serde_json::from_value(serde_json::json!([
+            [[[0,0],[10,0],[10,10],[0,10]], [[2,2],[4,2],[4,4],[2,4]]],
+            [[[20,20],[22,20],[22,22],[20,22]]]
+        ])).unwrap();
+        let region = SelectionRegion::new(&area);
+        assert!(region.intersects_rect([0.1,0.1,1.,1.]));
+        assert!(region.intersects_rect([20.5,20.5,21.,21.]));
+        assert!(!region.intersects_rect([14.,14.,15.,15.]));
+        assert!(!region.intersects_rect([2.5,2.5,3.5,3.5]));
+        assert!(region.intersects_rect([1.,3.,3.,3.5]));
+    }
+
+    #[test]
     fn test_intersects_rect() {
-        let region = SelectionRegion::new(&[
+        let region = SelectionRegion::new(&serde_json::from_value(serde_json::json!([
             vec![0.0, 0.0],
             vec![10.0, 0.0],
             vec![10.0, 10.0],
             vec![0.0, 10.0],
-        ]);
+        ])).unwrap());
 
         // 完全内部
         assert!(region.intersects_rect([2.0, 2.0, 8.0, 8.0]));
@@ -562,12 +531,12 @@ mod tests {
                 }]
             }
         })).unwrap();
-        let region = SelectionRegion::new(&[
+        let region = SelectionRegion::new(&serde_json::from_value(serde_json::json!([
             vec![89.9, -0.1],
             vec![90.1, -0.1],
             vec![90.1, 0.1],
             vec![89.9, 0.1],
-        ]);
+        ])).unwrap());
 
         let result = filter_tileset(&tileset, &region);
 

@@ -286,8 +286,10 @@ function readQueue(): QueuedTelemetryEvent[] {
 function writeQueue(events: QueuedTelemetryEvent[]) {
   try {
     localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(events.slice(-MAX_QUEUED_EVENTS)))
+    return true
   } catch {
     // Telemetry must never interfere with the application.
+    return false
   }
 }
 
@@ -302,29 +304,43 @@ function scheduleFlush() {
 export async function trackTelemetry<TName extends TelemetryEventName>(
   event: TName,
   properties: TelemetryEventMap[TName],
+  envelope?: { eventId: string; occurredAt: number; installId: string },
 ) {
   const endpoint = getTelemetryEndpoint()
   const state = useTelemetryStore.getState()
-  if (!useTelemetryStore.persist.hasHydrated() || !endpoint || state.consent !== 'enabled' || !state.installId) return
+  if (!useTelemetryStore.persist.hasHydrated() || !endpoint || state.consent !== 'enabled' || !state.installId) return false
 
   const appVersion = await getAppVersion()
   const latestState = useTelemetryStore.getState()
-  if (latestState.consent !== 'enabled' || !latestState.installId) return
+  if (latestState.consent !== 'enabled' || !latestState.installId || (envelope && envelope.installId !== latestState.installId)) return false
 
   let safeProperties: ReturnType<typeof sanitizeProperties>
   try { safeProperties = sanitizeProperties(event, properties) } catch { return }
+  const queue = readQueue()
+  if (envelope && queue.some(item => item.event_id === envelope.eventId)) return true
+  if (queue.length >= MAX_QUEUED_EVENTS) {
+    // A native receipt stays pending in the monitor until a transport slot is available.
+    // Other traffic may replace ordinary events, but must not evict task results.
+    const replaceable = queue.findIndex(item => item.event !== 'download_task_state')
+    if (replaceable < 0) {
+      scheduleFlush()
+      return false
+    }
+    queue.splice(replaceable, 1)
+  }
   const queued: QueuedTelemetryEvent = {
-    event_id: createEventId(),
+    event_id: envelope?.eventId ?? createEventId(),
     event,
-    occurred_at: new Date().toISOString(),
+    occurred_at: new Date(envelope?.occurredAt ?? Date.now()).toISOString(),
     install_id: latestState.installId,
     session_id: sessionId,
     app_version: appVersion,
     platform: detectPlatform(),
     properties: safeProperties,
   }
-  writeQueue([...readQueue(), queued])
-  scheduleFlush()
+  const stored = writeQueue([...queue, queued])
+  if (stored) scheduleFlush()
+  return stored
 }
 
 export function clearTelemetryQueue() {
@@ -342,9 +358,16 @@ export function flushTelemetry() {
     const endpoint = getTelemetryEndpoint()
     const state = useTelemetryStore.getState()
     // Keep diagnostic-rich batches below the receiver's 128 KiB body limit.
+    const queued = readQueue()
+    const now = Date.now()
+    const eligible = queued.filter(event => {
+      const time = Date.parse(event?.occurred_at)
+      return Number.isFinite(time) && time >= now - 90 * 86400_000 && time <= now + 86400_000
+    })
+    if (eligible.length !== queued.length) writeQueue(eligible)
     const pending: QueuedTelemetryEvent[] = []
     let bytes = 64
-    for (const event of readQueue()) {
+    for (const event of eligible) {
       const size = new TextEncoder().encode(JSON.stringify(event)).length + 1
       if (pending.length && bytes + size > 64 * 1024) break
       pending.push(event); bytes += size

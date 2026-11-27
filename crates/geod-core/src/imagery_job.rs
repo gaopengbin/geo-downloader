@@ -18,6 +18,7 @@ fn source(
     max_zoom: u8,
 ) -> TileSource {
     TileSource {
+        cache_namespace: None,
         headers: Default::default(),
         id: "geod-cli-xyz".into(),
         name: name.into(),
@@ -25,7 +26,7 @@ fn source(
         subdomains: subdomains.to_vec(),
         max_zoom,
         attribution: attribution.into(),
-    }
+    }.with_content_cache()
 }
 
 fn valid_image(bytes: &[u8], tile_size: u32) -> bool {
@@ -486,7 +487,7 @@ pub(crate) async fn execute(
             )?;
         } else if let (Some(layer), Some(vectors)) = (clip_layer, &vector) {
             eprintln!("{}", serde_json::json!({"phase":"clip","zoom":zoom}));
-            let image = merger::merge_tiles_sized(&valid, x0, y0, x1, y1, i.tile_size);
+            let image = merger::try_merge_tiles_sized(&valid, x0, y0, x1, y1, i.tile_size)?;
             let clipped = clip::clip_raster(image, vectors, layer, &bounds)?;
             exporter::export_rgba_image_to_file(
                 clipped,
@@ -496,7 +497,7 @@ pub(crate) async fn execute(
                 &i.compression,
             )?;
         } else {
-            let image = merger::merge_tiles_sized(&valid, x0, y0, x1, y1, i.tile_size);
+            let image = merger::try_merge_tiles_sized(&valid, x0, y0, x1, y1, i.tile_size)?;
             exporter::export_image_to_file(
                 image,
                 export_format,

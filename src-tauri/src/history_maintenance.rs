@@ -192,6 +192,7 @@ mod tests {
             log_file: Some(path.to_string_lossy().into_owned()),
             duration_secs: None,
             has_pyramid: false,
+            output_zooms: Vec::new(),
             log_compressed: false,
             log_original_size: 0,
             log_stored_size: 0,

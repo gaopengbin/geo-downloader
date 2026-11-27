@@ -7,15 +7,21 @@ WITH lifecycle AS (
     json_extract(properties_json, '$.attempt_id') AS attempt_id,
     json_extract(properties_json, '$.state') AS state
   FROM events WHERE event_name = 'download_task_state'
+), attempts AS (
+  SELECT *, MIN(julianday(occurred_at)) OVER (
+    PARTITION BY install_id, task_id, attempt_id
+  ) AS attempt_first_seen
+  FROM lifecycle WHERE task_id IS NOT NULL
 ), ranked AS (
   SELECT *, ROW_NUMBER() OVER (
     PARTITION BY install_id, task_id
-    ORDER BY julianday(occurred_at) DESC, julianday(received_at) DESC,
-      CASE WHEN state = 'started' THEN 0 ELSE 1 END DESC, event_id DESC
+    ORDER BY julianday(occurred_at) DESC, attempt_first_seen DESC,
+      CASE WHEN state = 'started' THEN 0 ELSE 1 END DESC,
+      julianday(received_at) DESC, event_id DESC
   ) AS position,
     MAX(CASE WHEN state = 'failed' THEN 1 ELSE 0 END)
       OVER (PARTITION BY install_id, task_id) AS had_failure
-  FROM lifecycle WHERE task_id IS NOT NULL
+  FROM attempts
 )
 SELECT COUNT(*) AS observed_tasks,
   COALESCE(SUM(state = 'completed'), 0) AS completed_tasks,

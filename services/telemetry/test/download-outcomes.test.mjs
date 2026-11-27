@@ -33,11 +33,19 @@ test('latest task outcomes join retries, isolate installations and handle delaye
     add('retrying', 'second', 'started', '11')
     add('gaps', 'first', 'failed', '10')
     add('gaps', 'second', 'completed_with_gaps', '11')
+    // A cached task can start and complete in one millisecond. Its start can arrive last.
+    add('instant', 'first', 'completed', '14')
+    insert.run('a', 'download_task_state', JSON.stringify({ task_id: 'instant', attempt_id: 'first', state: 'started' }),
+      '2026-11-14T00:00:00Z', '2026-11-21T00:00:00Z', crypto.randomUUID())
+    // A retry starting at the exact end of an older attempt is still the latest attempt.
+    add('immediate-retry', 'first', 'started', '12')
+    add('immediate-retry', 'first', 'failed', '13')
+    add('immediate-retry', 'second', 'started', '13')
     add(null, 'legacy', 'started', '10')
     add(null, 'legacy', 'failed', '11')
     assert.deepEqual({ ...db.prepare(DOWNLOAD_OUTCOMES_SQL).get() }, {
-      observed_tasks: 4, completed_tasks: 1, recovered_tasks: 1, latest_failed_tasks: 1,
-      completed_with_gaps_tasks: 1, cancelled_tasks: 0, in_progress_or_unreported_tasks: 1,
+      observed_tasks: 6, completed_tasks: 2, recovered_tasks: 1, latest_failed_tasks: 1,
+      completed_with_gaps_tasks: 1, cancelled_tasks: 0, in_progress_or_unreported_tasks: 2,
       legacy_unlinked_attempts: 1,
     })
   } finally { db.close() }

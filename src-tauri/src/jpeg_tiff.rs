@@ -171,8 +171,7 @@ fn encode_base_block(
                 continue;
             };
             let start = std::time::Instant::now();
-            let bytes = src.bytes().map_err(e2s)?;
-            let image = image::load_from_memory(&bytes).map_err(e2s)?.into_rgba8();
+            let image = src.decode_work_tile(tile_x + tx, tile_y + ty)?.into_rgba8();
             times.read_decode += start.elapsed();
             let start = std::time::Instant::now();
             for y in 0..TILE_SIZE.min(image.height()) {
@@ -218,10 +217,47 @@ pub(super) fn export(
     path: &Path,
     rings: &[Vec<(i32, i32)>],
     masked: bool,
-    mut options: StripWriteOptions,
+    options: StripWriteOptions,
 ) -> Result<u64, String> {
-    let (file, staged) = staged_tiff(path)?;
-    let mut w = BufWriter::new(file);
+    export_blocks(width, height, Some(bounds), path, rings, masked, options, |bx, by, spans| {
+        encode_base_block(files, x_min + bx * 2, y_min + by * 2, bx * SIDE, spans, masked, !rings.is_empty())
+    })
+}
+
+pub(crate) fn export_pixels<I>(
+    image: &I, bounds: Option<&TileBounds>, path: &Path, masked: bool,
+) -> Result<u64, String>
+where
+    I: image::GenericImageView + Sync,
+    I::Pixel: image::Pixel<Subpixel = u8>,
+{
+    use image::Pixel;
+    let (width, height) = image.dimensions();
+    export_blocks(width, height, bounds, path, &[], masked, export_buffer_bytes().into(), |bx, by, _| {
+        let mut rgb = vec![0; PIXELS * 3];
+        let mut mask = masked.then(|| vec![0; PIXELS / 8]);
+        for y in 0..SIDE.min(height - by * SIDE) {
+            for x in 0..SIDE.min(width - bx * SIDE) {
+                let pixel = image.get_pixel(bx * SIDE + x, by * SIDE + y).to_rgba().0;
+                let idx = (y * SIDE + x) as usize;
+                if let Some(mask) = &mut mask {
+                    if pixel[3] == 0 { continue; }
+                    cover(mask, idx);
+                }
+                rgb[idx * 3..idx * 3 + 3].copy_from_slice(&pixel[..3]);
+            }
+        }
+        Ok((encode(&rgb)?, mask.as_deref().map(deflate_compress).transpose()?, StripTimes::default()))
+    })
+}
+
+fn export_blocks(
+    width: u32, height: u32, bounds: Option<&TileBounds>, path: &Path,
+    rings: &[Vec<(i32, i32)>], masked: bool, mut options: StripWriteOptions,
+    encode_block: impl Fn(u32, u32, &[Vec<(i32, i32)>]) -> Result<(Vec<u8>, Option<Vec<u8>>, StripTimes), String> + Sync,
+) -> Result<u64, String> {
+    let (file, staged) = staged_raster(path)?;
+    let mut w = BufWriter::new(RasterFile::new_empty(file, &staged, &options));
     w.write_all(b"II\x2b\0\x08\0\0\0").map_err(e2s)?;
     write_u64(&mut w, 0)?;
     let cols = width.div_ceil(SIDE);
@@ -243,6 +279,7 @@ pub(super) fn export(
             .map(|y| scanline_spans(rings, (by * SIDE + y) as i32))
             .collect();
         for first in (0..cols).step_by(lanes) {
+            check_cancelled(options.cancellation.as_ref())?;
             let end = cols.min(first + lanes as u32);
             let blocks = (first..end)
                 .into_par_iter()
@@ -257,15 +294,7 @@ pub(super) fn export(
                             return Ok((color.clone(), Some(mask.clone()), StripTimes::default()));
                         }
                     }
-                    encode_base_block(
-                        files,
-                        x_min + bx * 2,
-                        y_min + by * 2,
-                        bx * SIDE,
-                        &spans,
-                        masked,
-                        !rings.is_empty(),
-                    )
+                    encode_block(bx, by, &spans)
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             for (jpeg, mask, elapsed) in blocks {
@@ -273,8 +302,6 @@ pub(super) fn export(
                 times.assemble_crop += elapsed.assemble_crop;
                 times.encode += elapsed.encode;
                 let start = std::time::Instant::now();
-                let bytes = jpeg.len() + mask.as_ref().map_or(0, Vec::len);
-                (options.check_space)(path, (bytes + w.buffer().len()) as u64)?;
                 colors.write(&mut w, &jpeg)?;
                 if let Some(mask) = mask {
                     masks.write(&mut w, &mask)?;
@@ -286,17 +313,13 @@ pub(super) fn export(
             cb(by + 1, rows, stream_pos(&mut w)?, times);
         }
     }
-    (options.check_space)(
-        path,
-        colors.offsets.len() as u64 * (if masked { 32 } else { 16 }) + 4096,
-    )?;
-    let (root, link) = directory(&mut w, &colors, width, height, false, false, Some(bounds))?;
+    let (root, link) = directory(&mut w, &colors, width, height, false, false, bounds)?;
     if masked {
         let (mask, ..) = directory(&mut w, &masks, width, height, true, false, None)?;
         write_link(&mut w, link, mask)?;
     }
     write_link(&mut w, 8, root)?;
-    commit_tiff(w, staged, path, root)
+    commit_tiff(w, staged, path, root, options.cancellation.as_ref())
 }
 
 pub(crate) struct Level {
@@ -431,6 +454,7 @@ pub(crate) fn append_levels(
         .log2()
         .ceil()
         .max(0.) as usize;
+    let volume = crate::fs_util::VolumeWriteBudget::for_file(file, path);
     let lane_count = jpeg_lanes(export_buffer_bytes());
     while prev.width.max(prev.height) > min {
         if let Some(cb) = &opts.progress_cb {
@@ -452,10 +476,8 @@ pub(crate) fn append_levels(
                     .collect::<Result<Vec<_>, _>>()?;
                 file.seek(SeekFrom::End(0)).map_err(e2s)?;
                 for (jpeg, bits) in children {
-                    check_space(
-                        path,
-                        (jpeg.len() + bits.as_ref().map_or(0, Vec::len)) as u64,
-                    )?;
+                    let bytes = (jpeg.len() + bits.as_ref().map_or(0, Vec::len)) as u64;
+                    let _reservation = volume.reserve(bytes, |total| check_space(path, total))?;
                     color.write(file, &jpeg)?;
                     if let (Some(mask), Some(bits)) = (&mut mask, bits) {
                         mask.write(file, &bits)?;
@@ -463,10 +485,8 @@ pub(crate) fn append_levels(
                 }
             }
         }
-        check_space(
-            path,
-            color.offsets.len() as u64 * (if mask.is_some() { 32 } else { 16 }) + 4096,
-        )?;
+        let footer = color.offsets.len() as u64 * (if mask.is_some() { 32 } else { 16 }) + 4096;
+        let _reservation = volume.reserve(footer, |total| check_space(path, total))?;
         let (pos, mut link) = directory(file, &color, w, h, false, true, None)?;
         if let Some(blocks) = &mask {
             let (m, next) = directory(file, blocks, w, h, true, true, None)?;

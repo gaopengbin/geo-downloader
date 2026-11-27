@@ -245,7 +245,7 @@ function HistoryCard({
   return (
     <div role="group" aria-label={record.name} data-history-id={id} className="min-w-0 space-y-2 rounded-md border p-3 text-sm">
       <TaskCardHeading title={record.name} source={record.source_name ? String(record.source_name) : undefined}
-        zoom={typeof record.zoom === 'number' ? record.zoom : undefined}
+        zoom={record.zoom} outputZooms={record.output_zooms}
         statusTitle={t(isFailed ? 'history.status.failed' : 'history.status.completed')}
         status={<Badge variant={isFailed ? 'destructive' : 'default'}>{t(isFailed ? 'history.status.failed' : 'history.status.completed')}</Badge>}/>
 

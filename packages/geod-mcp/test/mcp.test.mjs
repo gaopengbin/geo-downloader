@@ -365,6 +365,28 @@ test('official MCP v2 stdio client completes GeoD jobs and reads native artifact
     assert.equal(pixelAt(decoded, 80, 15)[3], 0, 'outside province polygon must be transparent');
   });
 
+  await t.test('JPEG 75 passes MCP planning and produces a JPEG-compressed GeoTIFF', async () => {
+    const imageryRequest = requestFor(fixture.url)
+    imageryRequest.imagery.compression = 'jpeg75'
+    const args = { request: imageryRequest }
+    const plan = structured(await client.callTool({ name: 'geod_plan', arguments: args }))
+    assert.equal(plan.ok, true)
+    const submitted = structured(await client.callTool({ name: 'geod_fetch', arguments: args }))
+    const final = await waitForJob(client, submitted.jobId)
+    const raster = final.artifacts.find(artifact => artifact.path.endsWith('.tif'))
+    assert.ok(raster)
+    const bytes = await readFile(raster.path)
+    assert.equal(bytes.readUInt16LE(2), 43, 'expected BigTIFF')
+    const ifd = Number(bytes.readBigUInt64LE(8))
+    const count = Number(bytes.readBigUInt64LE(ifd))
+    let compression
+    for (let i = 0; i < count; i++) {
+      const entry = ifd + 8 + i * 20
+      if (bytes.readUInt16LE(entry) === 259) compression = bytes.readUInt16LE(entry + 12)
+    }
+    assert.equal(compression, 7, 'expected a JPEG-compressed primary image')
+  });
+
   await t.test('unknown identifiers and resource traversal never expose filesystem files', async () => {
     assert.ok(completed);
     await expectRejected(() => client.callTool({ name: 'geod_job_status', arguments: { jobId: 'missing-job' } }));

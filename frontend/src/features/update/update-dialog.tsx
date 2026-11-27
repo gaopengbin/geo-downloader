@@ -20,20 +20,13 @@ import { trackTelemetry, flushTelemetry } from '@/features/telemetry/telemetry-c
 async function openExternal(url: string) {
   if (isTauriRuntime()) {
     try {
-      // 优先复用后端 reqwest 不行，这里直接走 anchor，由 tauri-plugin-opener 后端 capability 处理
-      const a = document.createElement('a')
-      a.href = url
-      a.target = '_blank'
-      a.rel = 'noopener noreferrer'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      return
-    } catch {
-      // fall through
+      await invokeCommand('plugin:opener|open_url', { url })
+    } catch (error) {
+      toast.error(String(error))
     }
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
-  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 export function UpdateDialog() {
@@ -72,13 +65,20 @@ export function UpdateDialog() {
 
   const handleUpdateNow = async () => {
     if (useUpdateStore.getState().downloading) return
-    if (!info.downloadUrl?.endsWith('.exe')) {
-      toast.error(t('update.integrityMissing'))
+    const action = info.action
+    if (!action) return
+    if (action.kind === 'download') {
+      await openExternal(action.url)
       return
     }
 
     const telemetry = new UpdateTelemetryTracker()
-    void trackTelemetry('update_transfer_state', telemetry.started())
+    let started = false
+    const recordStart = () => {
+      if (started) return
+      started = true
+      void trackTelemetry('update_transfer_state', telemetry.started())
+    }
     setDownloading(true)
     setProgress(0)
     setTransfer(null)
@@ -89,6 +89,7 @@ export function UpdateDialog() {
         setProgress(typeof e.payload === 'number' ? e.payload : 0)
       }))
       unlistenRef.current.push(await listen<UpdateTransfer>('update-download-status', (e) => {
+        recordStart()
         const transition = telemetry.observe(e.payload)
         if (transition) {
           void trackTelemetry('update_transfer_state', transition).then(() => {
@@ -100,15 +101,20 @@ export function UpdateDialog() {
       }))
 
       await invokeCommand<void>('download_and_install_update', {
-        url: info.downloadUrl,
+        url: action.url,
         version: info.latestVersion,
-        expectedSha256: info.expectedSha256,
-        expectedSize: info.expectedSize,
+        expectedSha256: action.expectedSha256,
+        expectedSize: action.expectedSize,
       })
     } catch (error) {
-      void trackTelemetry('update_transfer_state', telemetry.failed())
       const message = error instanceof Error ? error.message : String(error)
-      toast.error(t('update.failed', { message: message.startsWith('UPDATE_SOURCES_FAILED:') ? t('update.sourcesFailed') : message }))
+      if (message === 'UPDATE_WORK_ACTIVE') {
+        toast.info(t('update.activeWork'))
+      } else {
+        recordStart()
+        void trackTelemetry('update_transfer_state', telemetry.failed())
+        toast.error(t('update.failed', { message: message.startsWith('UPDATE_SOURCES_FAILED:') ? t('update.sourcesFailed') : message }))
+      }
       setDownloading(false)
       setProgress(0)
       setTransfer(null)
@@ -178,10 +184,10 @@ export function UpdateDialog() {
               <Button variant="ghost" onClick={() => closeDialog()}>
                 {t('update.later')}
               </Button>
-              <Button onClick={handleUpdateNow}>
+              {info.action && <Button onClick={handleUpdateNow}>
                 <Download className="size-4" />
-                {t(info.downloadUrl?.endsWith('.exe') ? 'update.now' : 'update.download')}
-              </Button>
+                {t(info.action.kind === 'install' ? 'update.now' : 'update.download')}
+              </Button>}
             </>
           )}
         </DialogFooter>

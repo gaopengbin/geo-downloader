@@ -1,6 +1,6 @@
 use crate::{config::TileSource,downloader::{TileDownloader,preflight_layer_access},tianditu_tokens::TiandituTokens,tile::TileCoord};
 use std::{sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}},io::{Cursor,Read,Write},time::Duration};
-fn source(id:&str,url:String)->TileSource{TileSource{id:id.into(),name:id.into(),url,subdomains:vec![],max_zoom:22,attribution:"QA".into(),headers:Default::default()}}
+fn source(id:&str,url:String)->TileSource{TileSource{id:id.into(),name:id.into(),url,subdomains:vec![],max_zoom:22,attribution:"QA".into(),cache_namespace:None,headers:Default::default()}}
 #[test]fn defaults_never_send_an_unrelated_google_referer_and_custom_headers_stay_authoritative(){
  for url in["https://webst01.is.autonavi.com/appmaptile?x={x}","https://example.org/arcgis/{z}/{x}/{y}","https://google.com.example.org/{z}/{x}/{y}"]{
   let d=TileDownloader::new_preview(source("qa",url.into()),None).unwrap();assert!(d.get_headers_public().get("referer").is_none());

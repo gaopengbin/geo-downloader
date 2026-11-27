@@ -16,6 +16,18 @@ pub(crate) fn lock_update() -> Result<ActiveUpdate, String> {
         .map(|_| ActiveUpdate).map_err(|_| "更新下载正在进行，请等待当前更新完成".into())
 }
 
+// A job holds a shared permit until its last file and history write. Installation
+// takes exclusive access before downloading, so a new job cannot race the exit.
+static WORK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+pub(crate) fn begin_work() -> Result<tokio::sync::RwLockReadGuard<'static, ()>, String> {
+    WORK.try_read().map_err(|_| "正在安装更新，请在更新完成后重试".to_string())
+}
+
+pub(crate) fn begin_install() -> Result<tokio::sync::RwLockWriteGuard<'static, ()>, String> {
+    WORK.try_write().map_err(|_| "UPDATE_WORK_ACTIVE".to_string())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Source { Mirror, Github }
@@ -86,6 +98,42 @@ impl Default for Policy {
         Self { headers: Duration::from_secs(8), idle: Duration::from_secs(5),
             window: Duration::from_secs(8), minimum_bps: 64 * 1024, total: Duration::from_secs(180) }
     }
+}
+
+/// A mirror can return HTTP 200 while release synchronization is incomplete.
+fn verified_mirror_release(release: &serde_json::Value) -> bool {
+    if release.get("draft").and_then(|v| v.as_bool()) == Some(true)
+        || release.get("prerelease").and_then(|v| v.as_bool()) == Some(true) { return false; }
+    let Some(version) = release["tag_name"].as_str().and_then(|v| v.strip_prefix('v')) else { return false; };
+    let expected = format!("GeoDownloader_{version}_windows_x64-setup.exe");
+    release["assets"].as_array().is_some_and(|assets| assets.iter().any(|asset| {
+        if asset["name"].as_str() != Some(expected.as_str()) { return false; }
+        let hash = asset["sha256"].as_str().filter(|s| !s.is_empty()).or_else(|| asset["digest"].as_str());
+        match (asset["browser_download_url"].as_str(), hash, asset["size"].as_u64()) {
+            (Some(url), Some(hash), Some(size)) => Spec::new(url, version, hash, size).is_ok(),
+            _ => false,
+        }
+    }))
+}
+
+pub(crate) async fn release_metadata(client: &Client, sources: &[(&str, bool)]) -> Result<serde_json::Value, String> {
+    let mut errors = Vec::new();
+    for &(url, is_mirror) in sources {
+        let result = async {
+            let release = client.get(url).send().await.map_err(|e| e.to_string())?
+                .error_for_status().map_err(|e| e.to_string())?
+                .json::<serde_json::Value>().await.map_err(|e| e.to_string())?;
+            if is_mirror && !verified_mirror_release(&release) {
+                return Err("镜像清单尚无可校验的 Windows 安装包".to_owned());
+            }
+            Ok(release)
+        }.await;
+        match result {
+            Ok(release) => return Ok(release),
+            Err(error) => errors.push(format!("{url}: {error}")),
+        }
+    }
+    Err(format!("获取更新信息失败：{}", errors.join("；")))
 }
 
 fn official_redirect(url: &Url) -> bool {
@@ -274,6 +322,26 @@ mod tests {
         ];
     }
     fn local_client() -> Client { Client::builder().no_proxy().build().unwrap() }
+
+    #[tokio::test]
+    async fn incomplete_http_200_mirror_falls_back_to_release_metadata() {
+        use serde_json::json;
+        let tag = "v3.6.24";
+        let name = "GeoDownloader_3.6.24_windows_x64-setup.exe";
+        let mut manifest = json!({"tag_name":tag,"assets":[{"name":name,
+            "browser_download_url":format!("https://laogao.xyz/packages/latest/{name}"),
+            "size":1024,"sha256":"a".repeat(64)}]});
+        let client = local_client();
+        let primary = mock(serde_json::to_vec(&manifest).unwrap(), Behavior::Fast).await;
+        let official = mock(serde_json::to_vec(&json!({"tag_name":tag,"body":"from official"})).unwrap(), Behavior::Fast).await;
+        assert_eq!(release_metadata(&client, &[(&primary.url, true), (&official.url, false)]).await.unwrap(), manifest);
+        assert_eq!(official.count.load(Ordering::SeqCst), 0);
+        manifest["assets"][0].as_object_mut().unwrap().remove("sha256");
+        let incomplete = mock(serde_json::to_vec(&manifest).unwrap(), Behavior::Fast).await;
+        let release = release_metadata(&client, &[(&incomplete.url, true), (&official.url, false)]).await.unwrap();
+        assert_eq!(release["body"], "from official");
+        assert_eq!(official.count.load(Ordering::SeqCst), 1);
+    }
     async fn download_with_client<F: FnMut(Transfer) + Send>(
         spec: &Spec, directory: &Path, client: &Client, policy: Policy, notify: F,
     ) -> Result<PathBuf, String> {
@@ -299,6 +367,20 @@ mod tests {
         assert!(Spec::new(&s.candidates[0].url, "../../bad", &s.sha256, s.size).is_err());
         assert!(Spec::new(&s.candidates[0].url, "3.6.24", "bad-hash", s.size).is_err());
         assert!(Spec::new(&s.candidates[0].url, "3.6.24", &s.sha256, 0).is_err());
+    }
+
+    #[test]
+    fn installer_and_file_jobs_exclude_each_other_until_handoff() {
+        let download = begin_work().unwrap();
+        let migration = begin_work().unwrap();
+        assert!(begin_install().is_err());
+        drop(download);
+        assert!(begin_install().is_err());
+        drop(migration);
+        let install = begin_install().unwrap();
+        assert!(begin_work().is_err());
+        drop(install);
+        assert!(begin_work().is_ok());
     }
 
     #[test]
@@ -365,7 +447,9 @@ mod tests {
             Some(if url.host_str() == Some("github-update.test") { github_url.clone() } else { domestic_url.clone() })
         })).build().unwrap();
         let dir = tempfile::tempdir().unwrap(); let mut events = vec![];
-        let result = download_with_clients(&s, dir.path(), &local_client(), &system, policy(), |e| events.push(e)).await;
+        // This case checks routing and integrity. Use the normal timeouts so a
+        // busy CI runner cannot turn a deliberately corrupt response into a timeout.
+        let result = download_with_clients(&s, dir.path(), &local_client(), &system, Policy::default(), |e| events.push(e)).await;
         assert_eq!(origin.count.load(Ordering::SeqCst), 1);
         assert_eq!(domestic_proxy.count.load(Ordering::SeqCst), 1);
         assert_eq!(github_proxy.count.load(Ordering::SeqCst), 1);

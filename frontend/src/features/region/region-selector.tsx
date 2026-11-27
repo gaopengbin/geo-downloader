@@ -30,6 +30,7 @@ import {
 import {
   extractAreaFeatures,
   outerRingsFromAreaGeometry,
+  polygonCoordinates,
   regionAreaErrorReason,
 } from '@/lib/geo-area'
 import { RegionImportDialog } from './region-import-dialog'
@@ -156,7 +157,8 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
         toast.error(t('region.toast.noPolygon'))
         return
       }
-      setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings })
+      setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings,
+      areas: extractAreaFeatures(geojson).flatMap(f => polygonCoordinates(f.geometry)) })
       void trackTelemetry('selection_changed', {
         method,
         geometry: 'polygon',
@@ -201,6 +203,7 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
     setExternalSelection({
       bounds: bookmark.bounds,
       polygon: bookmark.polygon,
+      areas: bookmark.areas,
     })
     setProvinceCode('')
     setCityCode('')
@@ -322,7 +325,8 @@ export function RegionSelector({ extras }: { extras?: import('react').ReactNode 
       return
     }
 
-    setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings })
+    setExternalSelection({ bounds: boundsFromRings(rings), polygon: rings,
+      areas: extractAreaFeatures(geojson).flatMap(f => polygonCoordinates(f.geometry)) })
     void trackTelemetry('region_imported', {
       format,
       outcome: 'success',

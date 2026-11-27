@@ -109,6 +109,7 @@ async fn configured_limits_share_between_jobs_and_resume_without_network_request
             subdomains: vec![],
             max_zoom: 20,
             attribution: "Synthetic validation tiles".into(),
+            cache_namespace: None,
             headers: Default::default(),
         };
         let make = || {

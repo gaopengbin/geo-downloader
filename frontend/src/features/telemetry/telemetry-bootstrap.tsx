@@ -17,6 +17,7 @@ export function TelemetryBootstrap() {
 function EnabledTelemetryBootstrap() {
   const [hydrated,setHydrated]=useState(()=>useTelemetryStore.persist.hasHydrated())
   const consent = useTelemetryStore((state) => state.consent)
+  const installId = useTelemetryStore((state) => state.installId)
   const setConsent = useTelemetryStore((state) => state.setConsent)
   const noticeAcknowledgedVersion=useTelemetryStore(state=>state.noticeAcknowledgedVersion)
   const acknowledgeNotice=useTelemetryStore(state=>state.acknowledgeNotice)
@@ -25,9 +26,9 @@ function EnabledTelemetryBootstrap() {
   useEffect(()=>{setHydrated(useTelemetryStore.persist.hasHydrated());return useTelemetryStore.persist.onFinishHydration(()=>setHydrated(true))},[])
 
   useEffect(() => {
-    if (!hydrated || consent !== 'enabled') return
+    if (!hydrated || consent !== 'enabled' || !installId) return
     return startDownloadTelemetry()
-  }, [consent,hydrated])
+  }, [consent, hydrated, installId])
 
   useEffect(() => {
     if (!hydrated) return

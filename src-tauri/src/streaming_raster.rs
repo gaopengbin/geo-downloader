@@ -4,7 +4,7 @@
 //! JPEG: 需全量画布，退化为 merger 路径 + 直写文件（见 exporter::export_image_to_file）
 
 use crate::config::TILE_SIZE;
-use crate::merger::{self, PolygonPoint, TileSource};
+use crate::merger::{PolygonPoint, TileSource};
 use crate::tile::TileBounds;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -20,43 +20,33 @@ pub fn merge_and_export_streaming_png(
     y_min: u32,
     x_max: u32,
     y_max: u32,
-    _bounds: &TileBounds,
+    bounds: &TileBounds,
     save_path: &Path,
     polygons: Option<&[Vec<PolygonPoint>]>,
+) -> Result<u64, String> {
+    merge_and_export_streaming_png_cancellable(tile_files, x_min, y_min, x_max, y_max, bounds, save_path, polygons, None)
+}
+
+pub fn merge_and_export_streaming_png_cancellable(
+    tile_files: &HashMap<(u32, u32), TileSource>,
+    x_min: u32,
+    y_min: u32,
+    x_max: u32,
+    y_max: u32,
+    bounds: &TileBounds,
+    save_path: &Path,
+    polygons: Option<&[Vec<PolygonPoint>]>,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
 ) -> Result<u64, String> {
     let (_cols, _rows, width, height) = crate::streaming_tiff::grid_dims(x_min, y_min, x_max, y_max)?;
 
     let has_mask = polygons.is_some();
     let channels: u32 = if has_mask { 4 } else { 3 };
 
-    // 预计算多边形像素坐标环（复用 merger 的 mercator_y）
-    let pixel_rings: Vec<Vec<(i32, i32)>> = if let Some(polys) = polygons {
-        let lng_span = _bounds.east - _bounds.west;
-        let merc_north = merger::mercator_y(_bounds.north);
-        let merc_south = merger::mercator_y(_bounds.south);
-        let merc_span = merc_north - merc_south;
-        polys.iter()
-            .map(|ring| {
-                ring.iter()
-                    .map(|p| {
-                        let x = ((p.lng - _bounds.west) / lng_span * width as f64) as i32;
-                        let y = ((merc_north - merger::mercator_y(p.lat)) / merc_span * height as f64) as i32;
-                        (x, y)
-                    })
-                    .collect()
-            })
-            .filter(|ring: &Vec<(i32, i32)>| ring.len() >= 3)
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    // 创建 PNG 编码器
-    let file = std::fs::File::create(save_path)
-        .map_err(|e| format!("创建文件失败: {}", e))?;
-    let w = BufWriter::new(file);
-
-    let mut encoder = png::Encoder::new(w, width, height);
+    let pixel_rings = crate::streaming_tiff::projected_rings(bounds, width, height, polygons);
+    let (file, staged) = crate::streaming_tiff::staged_raster(save_path)?;
+    let mut output = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(&mut output, width, height);
     if has_mask {
         encoder.set_color(png::ColorType::Rgba);
     } else {
@@ -73,6 +63,7 @@ pub fn merge_and_export_streaming_png(
     let ch = channels as usize;
 
     for tile_y in y_min..=y_max {
+        crate::streaming_tiff::check_cancelled(cancel)?;
         // 创建一行瓦片的 strip 缓冲区
         let strip_size = width as usize * TILE_SIZE as usize * ch;
         let mut strip = if has_mask {
@@ -85,13 +76,11 @@ pub fn merge_and_export_streaming_png(
         let tile_xs: Vec<u32> = (x_min..=x_max).collect();
         let decoded: Vec<Option<(usize, image::RgbaImage)>> = tile_xs.par_iter()
             .map(|&tile_x| {
-                let source = tile_files.get(&(tile_x, tile_y))?;
-                let bytes = source.bytes().ok()?;
-                let img = image::load_from_memory(&bytes).ok()?;
+                let Some(source) = tile_files.get(&(tile_x, tile_y)) else { return Ok(None); };
                 let px = ((tile_x - x_min) * TILE_SIZE) as usize;
-                Some((px, img.to_rgba8()))
+                Ok(Some((px, source.decode_work_tile(tile_x, tile_y)?.into_rgba8())))
             })
-            .collect();
+            .collect::<Result<_, String>>()?;
 
         // 串行填入 strip
         for item in &decoded {
@@ -126,49 +115,17 @@ pub fn merge_and_export_streaming_png(
             for local_row in 0..TILE_SIZE {
                 let global_y = (strip_y_start + local_row) as i32;
 
-                let mut intersections: Vec<i32> = Vec::new();
-                for ring in &pixel_rings {
-                    let n = ring.len();
-                    let mut j = n - 1;
-                    for i in 0..n {
-                        let (xi, yi) = ring[i];
-                        let (xj, yj) = ring[j];
-                        if (yi > global_y) != (yj > global_y) {
-                            let x_int = (xj - xi) * (global_y - yi) / (yj - yi) + xi;
-                            intersections.push(x_int);
-                        }
-                        j = i;
-                    }
+                let width = width as usize;
+                let start = local_row as usize * width * ch;
+                let row = &mut strip[start..start + width * ch];
+                let mut cursor = 0;
+                for (left, right) in crate::streaming_tiff::scanline_spans(&pixel_rings, global_y) {
+                    let left = (left.max(0) as usize).min(width) * ch;
+                    let right = (right.max(0) as usize).min(width) * ch;
+                    row[cursor..left].fill(0);
+                    cursor = right;
                 }
-                intersections.sort_unstable();
-
-                // 构造本行 inside 掩码，环外整像素清零（RGB+alpha）。
-                let mut inside = vec![false; width as usize];
-                let mut k = 0;
-                while k + 1 < intersections.len() {
-                    let x0 = (intersections[k].max(0) as usize).min(width as usize);
-                    let x1 = (intersections[k + 1].max(0) as usize).min(width as usize);
-                    for x in x0..x1 {
-                        if x < inside.len() { inside[x] = true; }
-                    }
-                    k += 2;
-                }
-
-                let row_offset = local_row as usize * width as usize * ch;
-                for x in 0..width as usize {
-                    let di = row_offset + x * ch;
-                    if di + ch - 1 >= strip.len() { continue; }
-                    if inside[x] {
-                        // Keep the provider's source alpha; a crop cannot fill missing imagery.
-                    } else {
-                        // 环外整像素清零；仅清 alpha 会残留整张外接矩形 RGB
-                        // → 群友报告的「外接矩形/黑边里有数据」。
-                        strip[di] = 0;
-                        strip[di + 1] = 0;
-                        strip[di + 2] = 0;
-                        strip[di + 3] = 0;
-                    }
-                }
+                row[cursor..].fill(0);
             }
         }
 
@@ -180,9 +137,11 @@ pub fn merge_and_export_streaming_png(
     stream_writer.finish()
         .map_err(|e| format!("PNG 结束写入失败: {}", e))?;
 
-    let file_size = std::fs::metadata(save_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
+    writer.finish().map_err(|e| format!("PNG 结束写入失败: {e}"))?;
+    output.flush().and_then(|_| output.get_ref().sync_all()).map_err(|e| e.to_string())?;
+    let file_size = output.get_ref().metadata().map_err(|e| e.to_string())?.len();
+    drop(output);
+    crate::streaming_tiff::check_cancelled(cancel)?;
+    staged.persist(save_path)?;
     Ok(file_size)
 }

@@ -3,16 +3,21 @@ import { Badge } from '@/components/ui/badge'
 import { getTaskHeading } from './task-heading'
 import { Tooltip } from '@/components/ui/tooltip'
 
-export function TaskCardHeading({ title, status, statusTitle, source, zoom, selection }: {
+export function TaskCardHeading({ title, status, statusTitle, source, zoom, outputZooms, selection }: {
   title: string
   status: ReactNode
   statusTitle?: string
   source?: string
   zoom?: number
+  outputZooms?: number[]
   selection?: ReactNode
 }) {
-  const heading = getTaskHeading(title, source, zoom)
-  const level = heading.level && <Badge data-task-card-level variant="outline" className="shrink-0 whitespace-nowrap px-1.5 py-0 text-[11px] font-normal leading-5">{heading.level}</Badge>
+  const heading = getTaskHeading(title, source, zoom, outputZooms)
+  const level = heading.level && <Tooltip content={heading.level}>
+    <Badge data-task-card-level tabIndex={0} variant="outline" className="max-w-[40%] shrink-0 px-1.5 py-0 text-[11px] font-normal leading-5">
+      <span className="truncate">{heading.level}</span>
+    </Badge>
+  </Tooltip>
   return <div className="min-w-0 space-y-1.5" data-task-card-heading>
     <div className="flex min-w-0 items-start gap-2">
       {selection && <div className="flex h-5 shrink-0 items-center">{selection}</div>}

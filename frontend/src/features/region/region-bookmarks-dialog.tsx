@@ -122,7 +122,7 @@ export function RegionBookmarksDialog({ onRestore }: Props) {
       toast.info(t('bookmarks.toast.chooseRange'))
       return
     }
-    createMutation.mutate({ name, bounds, polygon })
+    createMutation.mutate({ name, bounds, polygon, areas: useSelectionStore.getState().areas })
   }
 
   const startRename = (bookmark: RegionBookmark) => {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Deref;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SourceHeaders(pub BTreeMap<String, String>);
 
@@ -112,6 +112,8 @@ pub(crate) mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                     continue;
                 };
+                // Windows accepted sockets inherit the listener's nonblocking mode.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(3)))
                     .unwrap();
@@ -209,6 +211,7 @@ pub(crate) mod tests {
             subdomains: vec![],
             max_zoom: 18,
             attribution: "Local test fixture".into(),
+            cache_namespace: None,
             headers: SourceHeaders(
                 [
                     ("authorization", "Bearer test-only"),
@@ -263,7 +266,7 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(analysis.test_ok, success);
+            assert_eq!(analysis.test_ok, success, "route {route}: {:?}", analysis);
             let preview = crate::downloader::TileDownloader::new_preview(redirected, None).unwrap();
             assert_eq!(preview.preview_tile(&tile).await.is_ok(), success);
         }

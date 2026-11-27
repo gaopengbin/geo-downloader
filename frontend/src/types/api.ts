@@ -21,6 +21,7 @@ export type Polygon = PolygonCoord[][]
 export interface TileSource {
   id?: string
   key?: string
+  cache_namespace?: string
   name: string
   url?: string
   url_template?: string
@@ -241,6 +242,7 @@ export type TaskStatus =
   | 'cancelled'
 
 export interface TaskInfo {
+  finished_at_ms?: number
   created_at?:string
   id: string
   name: string
@@ -291,6 +293,7 @@ export interface TaskProgressPayload {
 }
 
 export interface DownloadHistoryRecord {
+  output_zooms?: number[]
   id: string | number
   name: string
   source?: string
@@ -450,7 +453,7 @@ export interface Tiles3dEstimate {
 export interface Tiles3dTaskRequest {
   source: Tiles3dSource
   /** [[lng, lat], ...] WGS-84 度环 */
-  polygon?: Nullable<number[][]>
+  polygon?: Nullable<number[][] | number[][][][]>
   save_path: string
   concurrency?: number
   proxy?: Nullable<string>

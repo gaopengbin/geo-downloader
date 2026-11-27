@@ -32,6 +32,10 @@ impl ExportFormat {
         }
     }
 
+    pub fn separate_file_per_zoom(self) -> bool {
+        matches!(self, Self::GeoTiff | Self::Png | Self::Jpeg)
+    }
+
     pub fn extension(&self) -> &'static str {
         match self {
             ExportFormat::GeoTiff => ".tif",
@@ -292,6 +296,9 @@ pub fn export_image_to_file(
             let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             Ok(size)
         }
+        ExportFormat::GeoTiff if compression == "jpeg75" => {
+            crate::streaming_tiff::jpeg_tiff::export_pixels(&image, bounds, path, false)
+        }
         ExportFormat::GeoTiff => {
             let bytes = export_tiff_bytes(&image, bounds, compression)?;
             drop(image);
@@ -335,6 +342,9 @@ pub fn export_rgba_image_to_file(
             w.flush().map_err(|e| format!("刷新缓冲失败: {}", e))?;
             let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             Ok(size)
+        }
+        ExportFormat::GeoTiff if compression == "jpeg75" => {
+            crate::streaming_tiff::jpeg_tiff::export_pixels(&image, bounds, path, true)
         }
         ExportFormat::GeoTiff => {
             let bytes = export_rgba_tiff_bytes(&image, bounds, compression)?;

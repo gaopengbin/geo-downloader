@@ -2205,6 +2205,7 @@ mod tests {
 
     fn custom_source(url: &str) -> TileSource {
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "custom_test".to_string(),
             name: "Test".to_string(),

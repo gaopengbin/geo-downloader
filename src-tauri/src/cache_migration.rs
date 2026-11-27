@@ -159,6 +159,7 @@ pub fn cache_migration_start(
     manager: State<'_, Arc<CacheMigrationManager>>,
     tasks: State<'_, Arc<TaskManager>>,
 ) -> Result<CacheMigrationStarted, String> {
+    let work = crate::update_download::begin_work()?;
     let selected_target = PathBuf::from(target_dir.trim());
     let check = preflight(&selected_target, tasks.has_active_tasks())?;
     if !check.can_start {
@@ -198,6 +199,7 @@ pub fn cache_migration_start(
     let manager = manager.inner().clone();
     let id_for_task = id.clone();
     tauri::async_runtime::spawn(async move {
+        let _work = work;
         let app_for_task = app.clone();
         let manager_for_task = manager.clone();
         let result = tokio::task::spawn_blocking(move || {

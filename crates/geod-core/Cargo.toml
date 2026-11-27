@@ -30,6 +30,7 @@ keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync
 sha2 = "=0.10.9"
 uuid = { version = "=1.20.0", features = ["v4", "serde"] }
 fs2 = "0.4.3"
+same-file = "=1.0.6"
 tempfile = "=3.24.0"
 
 [features]

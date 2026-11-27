@@ -37,7 +37,7 @@ export const requestSchema = z.strictObject({
     format: z.enum(['png', 'jpeg', 'geotiff']).optional(),
     concurrency: z.number().int().min(1).max(32).optional(),
     allowMissing: z.boolean().optional(),
-    compression: z.enum(['lzw', 'deflate', 'none']).optional(),
+    compression: z.enum(['lzw', 'deflate', 'none', 'jpeg75']).optional(),
     generateSidecars: z.boolean().optional(),
     subdomains: z.array(z.string().min(1).max(128)).max(8).optional(),
     overlays: z.array(overlaySchema).max(8).optional(),

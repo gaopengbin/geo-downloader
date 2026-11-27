@@ -244,6 +244,141 @@ async fn persist_history_record(app: &AppHandle, record: DownloadRecord) -> bool
     }
 }
 
+/// A small durable receipt survives the interval between publishing a raster, writing
+/// SQLite history and removing a potentially large recovery directory.
+#[derive(Serialize, Deserialize)]
+struct FinishedOutput {
+    record: DownloadRecord,
+    keep_work: bool,
+    #[serde(default)]
+    file_stamps: Option<Vec<(u64, Option<std::time::SystemTime>)>>,
+    #[serde(default)]
+    attempt_started: Option<i64>,
+}
+
+impl FinishedOutput {
+    fn files(record: &DownloadRecord) -> std::io::Result<Option<Vec<(u64, Option<std::time::SystemTime>)>>> {
+        let base = Path::new(&record.file_path);
+        let format = ExportFormat::from_str(&record.format);
+        if matches!(format, ExportFormat::Pbf | ExportFormat::Tiles) {
+            // A directory may predate the task and contain unrelated tiles. Only the
+            // normal resume path can verify the requested grid; don't discard its work.
+            if !base.is_dir() { return Err(std::io::Error::other("瓦片输出目录不存在")); }
+            return Ok(None);
+        }
+        let paths = if record.output_zooms.is_empty() || !format.separate_file_per_zoom() { vec![base.to_owned()] } else {
+            record.output_zooms.iter().map(|&z| zoom_level_output_path(base, z)).collect()
+        };
+        paths.iter().map(|path| {
+            let metadata = std::fs::metadata(path)?;
+            if !metadata.is_file() || metadata.len() == 0 { return Err(std::io::Error::other("导出成品无效")); }
+            Ok((metadata.len(), metadata.modified().ok()))
+        }).collect::<std::io::Result<Vec<_>>>().map(Some)
+    }
+
+    fn new(record: DownloadRecord, keep_work: bool) -> Result<Self, String> {
+        let file_stamps = Self::files(&record).map_err(|e| format!("核验成品失败: {e}"))?;
+        Ok(Self { record, keep_work, file_stamps, attempt_started: None })
+    }
+
+    fn outputs_still_match(&self) -> bool {
+        self.file_stamps.is_some() && Self::files(&self.record).is_ok_and(|actual| actual == self.file_stamps)
+    }
+
+    fn path(dir: &Path, id: &str) -> Result<PathBuf, String> {
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')) {
+            return Err("无效的任务标识".into());
+        }
+        Ok(dir.join(format!("{id}.result")))
+    }
+
+    fn stage(&self, path: &Path) -> Result<(), String> {
+        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
+        crate::fs_util::atomic_write(path, &bytes).map_err(|e| format!("保存导出回执失败: {e}"))
+    }
+
+    fn read(path: &Path) -> Result<Option<Self>, String> {
+        match std::fs::File::open(path) {
+            Ok(file) => serde_json::from_reader(std::io::BufReader::new(file)).map(Some)
+                .map_err(|e| format!("读取导出回执失败: {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("打开导出回执失败: {e}")),
+        }
+    }
+
+    fn commit(&self, path: &Path, store: &HistoryStore, cleanup: impl FnOnce()) -> Result<(), String> {
+        store.add_finished_once(&self.record)?;
+        self.retire(path, cleanup)
+    }
+
+    fn retire(&self, path: &Path, cleanup: impl FnOnce()) -> Result<(), String> {
+        if !self.keep_work { cleanup(); }
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("清理已入库的导出回执失败: {e}")),
+        }
+    }
+}
+
+fn clean_finished_work(id: &str) {
+    crate::task::cleanup_temp_dir(id);
+    crate::task::remove_task_file(id);
+}
+
+async fn commit_output_history(app: &AppHandle, tm: &TaskManager, id: &str, record: DownloadRecord, keep_work: bool) -> Result<(), String> {
+    let started = tm.begin_output_commit(id)?;
+    let id = id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let path = FinishedOutput::path(&crate::task::tasks_dir(), &id)?;
+        let mut record = record;
+        if !keep_work { record.id = id.clone(); }
+        let mut receipt = FinishedOutput::new(record, keep_work)?;
+        receipt.attempt_started = Some(started);
+        receipt.stage(&path)?;
+        receipt.commit(&path, HistoryStore::global()?, || clean_finished_work(&id))
+    }).await.map_err(|e| e.to_string())?
+        .map_err(|e| format!("成品已写出，完成记录暂未保存，任务数据已保留: {e}"))?;
+    let _ = app.emit("download-history-updated", ());
+    Ok(())
+}
+
+/// A failed database write can be retried without downloading or encoding the output again.
+/// The caller owns the per-task operation guard, so a new attempt cannot start mid-replay.
+fn recover_output(id: &str) -> Result<Option<FinishedOutput>, String> {
+    let path = FinishedOutput::path(&crate::task::tasks_dir(), id)?;
+    let Some(receipt) = FinishedOutput::read(&path)? else { return Ok(None) };
+    if !receipt.outputs_still_match() { return Ok(None); }
+    let state = if receipt.keep_work { "completed_with_gaps" } else { "completed" };
+    HistoryStore::global()?.record_recovered_output(&receipt.record, id, receipt.attempt_started, state)?;
+    receipt.retire(&path, || clean_finished_work(id))?;
+    Ok(Some(receipt))
+}
+
+fn discard_output_receipt(id: &str) -> Result<(), String> {
+    let path = FinishedOutput::path(&crate::task::tasks_dir(), id)?;
+    let Some(receipt) = FinishedOutput::read(&path)? else { return Ok(()) };
+    if receipt.outputs_still_match() {
+        // Deleting a task does not delete its history. A temporary database error
+        // leaves the verified output receipt available for the next startup.
+        if let Err(error) = recover_output(id) { log::warn!("保留待补记的导出历史: {error}"); }
+    } else {
+        std::fs::remove_file(path).map_err(|e| format!("删除任务回执失败: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn finish_interrupted_output(app: &AppHandle, manager: &TaskManager, id: &str) -> Result<Option<u32>, String> {
+    let key = id.to_owned();
+    let receipt = tokio::task::spawn_blocking(move || recover_output(&key)).await.map_err(|e| e.to_string())??;
+    let Some(receipt) = receipt else { return Ok(None) };
+    let _ = app.emit("download-history-updated", ());
+    if receipt.keep_work { return Ok(None); }
+    manager.remove_finished(id);
+    let _ = app.emit("task-list-updated", ());
+    Ok(Some(receipt.record.tile_count))
+}
+
 /// 下载请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadRequest {
@@ -336,7 +471,6 @@ fn write_sidecars_for_grid(
     bounds: &tile::TileBounds,
     cols: u32,
     rows: u32,
-    is_dem: bool,
 ) -> Result<(PathBuf, PathBuf), String> {
     let width = cols
         .checked_mul(config::TILE_SIZE)
@@ -344,12 +478,7 @@ fn write_sidecars_for_grid(
     let height = rows
         .checked_mul(config::TILE_SIZE)
         .ok_or_else(|| "GeoTIFF 高度超出辅助文件支持范围".to_string())?;
-    let crs = if is_dem {
-        SidecarCrs::Wgs84
-    } else {
-        SidecarCrs::WebMercator
-    };
-    geotiff_sidecar::write_geotiff_sidecars(save_path, bounds, width, height, crs)
+    geotiff_sidecar::write_geotiff_sidecars(save_path, bounds, width, height, SidecarCrs::WebMercator)
 }
 
 /// 多边形坐标
@@ -467,6 +596,7 @@ fn custom_to_tile_source(cs: &crate::settings::CustomTileSource, attribution: &s
         cs.url.clone()
     };
     TileSource {
+        cache_namespace: None,
         headers: cs.headers.clone(),
         id: cs.id.clone(),
         name: cs.name.clone(),
@@ -474,12 +604,28 @@ fn custom_to_tile_source(cs: &crate::settings::CustomTileSource, attribution: &s
         subdomains,
         max_zoom: cs.max_zoom,
         attribution: attribution.to_string(),
-    }
+    }.with_content_cache()
 }
 
 /// 获取瓦片图源列表（内置 + 覆盖 + 自定义）
 #[cfg(test)]
 mod source_headers_tests {
+    #[test]
+    fn edited_source_changes_preview_and_download_cache_together() {
+        let mut source: crate::settings::CustomTileSource = serde_json::from_str(
+            r#"{"id":"local","name":"test","url":"https://a.example.test/{z}/{x}/{y}","subdomains":"a,b"}"#).unwrap();
+        let old = super::custom_to_tile_source(&source, "");
+        source.url = "https://b.example.test/{z}/{x}/{y}".into();
+        let current = super::custom_to_tile_source(&source, "");
+        let native = current.cache_key();
+        assert_ne!(old.cache_key(),native);
+        let preview = serde_json::to_value(&current).unwrap();
+        assert_eq!(preview["cache_namespace"].as_str(),Some(native.as_str()));
+        source.subdomains = "c,d".into();
+        assert_ne!(native,super::custom_to_tile_source(&source,"").cache_key());
+        let builtin = &crate::config::get_tile_sources(None)["google_satellite"];
+        assert_eq!(builtin.cache_key(),builtin.id);
+    }
     #[test]
     fn custom_and_override_headers_reach_tile_source() {
         let source: crate::settings::CustomTileSource = serde_json::from_str(
@@ -506,7 +652,12 @@ pub fn get_tile_sources(tianditu_token: Option<String>) -> HashMap<String, TileS
                 let attr = sources.get(&ovr.id)
                     .map(|s| s.attribution.clone())
                     .unwrap_or_default();
-                sources.insert(ovr.id.clone(), custom_to_tile_source(ovr, &attr));
+                let mut source = custom_to_tile_source(ovr, &attr);
+                if sources.get(&ovr.id).is_some_and(|builtin| builtin.url == source.url &&
+                    builtin.subdomains == source.subdomains && builtin.headers == source.headers) {
+                    source.cache_namespace = None;
+                }
+                sources.insert(ovr.id.clone(), source);
             }
             
             // 合并自定义图源
@@ -843,6 +994,7 @@ pub async fn create_download_task(
     source_name: String,
     batch: Option<BatchOptions>,
 ) -> Result<CreateTaskResult, String> {
+    let work = crate::update_download::begin_work()?;
     let save_path = request.save_path.clone()
         .ok_or_else(|| "未指定保存路径".to_string())?;
     
@@ -897,7 +1049,7 @@ pub async fn create_download_task(
     crate::task::save_task_file(&persisted)?;
     
     // 注册任务
-    let (cancel_token, pause_control) = task_manager.create_task(
+    let (cancel_token, pause_control, worker) = task_manager.create_worker(
         task_id.clone(),
         task_name.clone(),
         request.source.clone(),
@@ -917,6 +1069,8 @@ pub async fn create_download_task(
     let req_format = request.format.clone();
     
     tokio::spawn(async move {
+        let _work = work;
+        let _worker = worker;
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
             request, source, save_path.clone(), work_dir, slots,
@@ -932,7 +1086,8 @@ pub async fn create_download_task(
         match result {
             Ok(_) => {},
             Err(e) => {
-                if tm.is_cancelled(&tid) {
+                let failed = tm.try_fail_task(&tid, e.clone());
+                if cancel_token.is_cancelled() {
                     task_log(&app, &tm, &tid, "WARN", "任务已取消");
                     if is_raw_fmt {
                         task_log(&app, &tm, &tid, "INFO", "已下载的瓦片保留在目标目录，可重新提交任务续传");
@@ -948,12 +1103,12 @@ pub async fn create_download_task(
                         total: tile_count,
                         message: Some("已取消".to_string()),
                     });
-                } else {
+                } else if failed {
                     let recoverable_message = format!("任务失败: {}。任务数据已保留，可稍后恢复", e);
                     task_log(&app, &tm, &tid, "ERROR", &recoverable_message);
                     // 失败也记录到历史（failed_count=0 因为是整体失败而非逐瓦片失败）
                     let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
-                    let record = DownloadRecord::new(
+                    let mut record = DownloadRecord::new(
                         task_name.to_string(),
                         req_source.clone(),
                         source_name.to_string(),
@@ -965,8 +1120,8 @@ pub async fn create_download_task(
                         0,
                         DownloadStatus::Failed,
                     ).with_log_metadata(&log_metadata);
+                    record.error = Some(e);
                     persist_history_record(&app, record).await;
-                    tm.fail_task(&tid, e.clone());
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
                         status: "failed".to_string(),
@@ -1065,6 +1220,7 @@ async fn execute_zoom_level(
     pause_control: &PauseControl,
     request: &DownloadRequest,
     source: TileSource,
+    overlay_list: &[TileSource],
     current_zoom: u8,
     save_path: String,
     temp_dir: std::path::PathBuf,
@@ -1142,17 +1298,6 @@ async fn execute_zoom_level(
         .map_err(|e| format!("创建临时目录失败: {}", e))?;
     task_log(app, tm, task_id, "INFO", &format!("瓦片临时目录: {}", temp_dir.display()));
     
-    // Resolve annotation layers before allocating download progress.
-    let all_sources = get_tile_sources(request.tianditu_token.clone());
-    let mut overlay_list: Vec<TileSource> = Vec::new();
-    for oid in request.overlay_sources.iter().flatten() {
-        let trimmed = oid.trim();
-        if trimmed.is_empty() || trimmed == request.source { continue; }
-        match all_sources.get(trimmed) {
-            Some(s) => overlay_list.push(s.clone()),
-            None => task_log(app, tm, task_id, "WARN", &format!("叠加图层不存在，已跳过: {}", trimmed)),
-        }
-    }
     let main_download_end = crate::overlay::main_download_end(overlay_list.len());
 
     if let Some(sample)=tiles.peek(){
@@ -1693,7 +1838,8 @@ async fn execute_zoom_level(
         let progress = is_geotiff.then(|| tiff_progress(
             app, tm, task_id, p_export..map_progress(end), completed_after_download,
             failed_after_download, total_tiles,
-        ));
+        ).with_cancellation(cancel_token.clone()));
+        let stream_cancel = cancel_token.clone();
         file_size = tokio::task::spawn_blocking(move || {
             let poly_slices: Option<&[Vec<merger::PolygonPoint>]> = polygon_data.as_deref();
             if let Some(options) = progress {
@@ -1705,10 +1851,10 @@ async fn execute_zoom_level(
                 write(&tile_files, x_min, y_min, x_max, y_max, &merged_bounds,
                     Path::new(&sp), &compression, poly_slices, options)
             } else {
-                streaming_raster::merge_and_export_streaming_png(
+                streaming_raster::merge_and_export_streaming_png_cancellable(
                     &tile_files, x_min, y_min, x_max, y_max,
                     &merged_bounds, Path::new(&sp),
-                    poly_slices,
+                    poly_slices, Some(&stream_cancel),
                 )
             }
         }).await.map_err(|e| format!("流式导出失败: {}", e))??;
@@ -1741,8 +1887,8 @@ async fn execute_zoom_level(
         });
         
         let merged = tokio::task::spawn_blocking(move || {
-            merger::merge_tiles(&tile_files, x_min, y_min, x_max, y_max)
-        }).await.map_err(|e| format!("拼接失败: {}", e))?;
+            merger::try_merge_tiles_sized(&tile_files, x_min, y_min, x_max, y_max, config::TILE_SIZE)
+        }).await.map_err(|e| format!("拼接失败: {}", e))??;
         
         if cancel_token.is_cancelled() {
             return Err("任务已取消".to_string());
@@ -1788,6 +1934,7 @@ async fn execute_zoom_level(
         current_zoom, export_start.elapsed().as_secs_f64(), file_size as f64 / 1_048_576.0,
     ));
 
+    if cancel_token.is_cancelled() { return Err("任务已取消".into()); }
     if crate::earth_history::is_source(&source.id) {
         let grid=tile::get_merged_bounds(x_min,y_min,x_max,y_max,current_zoom);
         crate::earth_history::write_manifest_for_grid(Path::new(&save_path), &source.id,&grid,cols*config::TILE_SIZE,rows*config::TILE_SIZE,current_zoom)?;
@@ -1820,8 +1967,9 @@ async fn execute_zoom_level(
 
         let pyr_off = prog_off;
         let pyr_span = prog_span;
+        let pyramid_cancel = cancel_token.clone();
         let pyramid_result = tokio::task::spawn_blocking(move || {
-            pyramid::build_pyramid(
+            pyramid::build_pyramid_cancellable(
                 &pyramid_path,
                 pyramid::PyramidOptions {
                     compression: pyramid_compression,
@@ -1842,6 +1990,7 @@ async fn execute_zoom_level(
                     })),
                     ..Default::default()
                 },
+                &pyramid_cancel,
             )
         }).await;
 
@@ -1865,6 +2014,7 @@ async fn execute_zoom_level(
         }
     }
 
+    if cancel_token.is_cancelled() { return Err("任务已取消".into()); }
     if request.generate_sidecars && is_geotiff {
         let merged_bounds = tile::get_merged_bounds(x_min, y_min, x_max, y_max, current_zoom);
         let (tfw_path, prj_path) = write_sidecars_for_grid(
@@ -1872,7 +2022,6 @@ async fn execute_zoom_level(
             &merged_bounds,
             cols,
             rows,
-            is_dem,
         )?;
         task_log(app, tm, task_id, "INFO", &format!(
             "已生成辅助文件: {}、{}",
@@ -1905,15 +2054,20 @@ fn zoom_level_save_path(save_path: &str, zoom: u8, multi_zoom: bool) -> Result<S
         return Ok(save_path.to_string());
     }
 
-    let original = Path::new(save_path);
+    let output = zoom_level_output_path(Path::new(save_path), zoom);
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建级别输出目录失败: {}", e))?;
+    }
+    Ok(output.to_string_lossy().into_owned())
+}
+
+fn zoom_level_output_path(original: &Path, zoom: u8) -> PathBuf {
     let parent = original
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let zoom_dir = parent.join(format!("z{}", zoom));
-    std::fs::create_dir_all(&zoom_dir)
-        .map_err(|e| format!("创建级别输出目录失败: {}", e))?;
-
     let stem = original
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1923,7 +2077,7 @@ fn zoom_level_save_path(save_path: &str, zoom: u8, multi_zoom: bool) -> Result<S
         _ => format!("{}_z{}", stem, zoom),
     };
 
-    Ok(zoom_dir.join(file_name).to_string_lossy().to_string())
+    zoom_dir.join(file_name)
 }
 
 async fn enter_task_batch<'a>(
@@ -1974,8 +2128,14 @@ async fn execute_download_task(
         request.tianditu_token.as_deref(), Arc::new(move |message| {
             if uses_tianditu { task_log(&app_tokens, &tm_tokens, &tid_tokens, "INFO", message); }
         }));
-    let mut diagnostic_sources=vec![source.clone()];
-    if let Some(ids)=request.overlay_sources.as_ref(){for id in ids{if let Some(source)=token_sources.get(id.trim()){diagnostic_sources.push(source.clone());}}}
+    let mut diagnostic_sources = vec![source.clone()];
+    for id in request.overlay_sources.iter().flatten().map(|s| s.trim()) {
+        if id.is_empty() || id == request.source { continue; }
+        match token_sources.get(id) {
+            Some(layer) => diagnostic_sources.push(layer.clone()),
+            None => task_log(app, tm, task_id, "WARN", &format!("叠加图层不存在，已跳过: {}", id)),
+        }
+    }
     tianditu_tokens.configure_diagnostic_sources(&diagnostic_sources);
     tm.attach_token_diagnostics(task_id, tianditu_tokens.clone());
     let start_time = std::time::Instant::now();
@@ -2054,6 +2214,8 @@ async fn execute_download_task(
         .unwrap_or_else(|| std::env::temp_dir().join(format!("tif-dl-{}", task_id)));
     std::fs::create_dir_all(&base_temp_dir)
         .map_err(|e| format!("创建任务工作目录失败: {}", e))?;
+    diagnostic_sources[0] = source.clone(); // Keyhole may have frozen the source after planning.
+    let base_temp_dir = crate::task::prepare_work_tiles(&base_temp_dir, &diagnostic_sources)?;
     tianditu_tokens.set_storage_diagnostics(crate::acquisition_storage::snapshot(std::path::Path::new(&save_path),&base_temp_dir,u64::from(total_tiles),diagnostic_sources.len().saturating_sub(1)));
 
     // Issue #31：读取自动导出阈值，clamp 到 [0.0, 1.0]
@@ -2077,7 +2239,7 @@ async fn execute_download_task(
     let mut actual_total = 0u32;
     let mut failed_total = 0u32;
     let mut no_data_total = 0u32;
-    let mut pyramid_built = false;
+    let mut pyramid_built = true;
     // Issue #31：跟踪是否有任意级别因低成功率跳过导出，决定末段任务状态分支
     let mut any_skipped_export = false;
     let mut skipped_zooms: Vec<u8> = Vec::new();
@@ -2096,14 +2258,10 @@ async fn execute_download_task(
         // MBTiles/GPKG 多 zoom 写入同一个文件，不需要为每个 zoom 单独建文件
         let req_format = ExportFormat::from_str(&request.format);
         // 单文件输出（mbtiles/gpkg）和原始瓦片目录（tiles/pbf）都共用一个 save_path，不按 zoom 切分
-        let pack_single_file = matches!(
-            req_format,
-            ExportFormat::Mbtiles | ExportFormat::Gpkg | ExportFormat::Tiles | ExportFormat::Pbf
-        );
-        let level_save_path = if pack_single_file {
-            save_path.clone()
-        } else {
+        let level_save_path = if req_format.separate_file_per_zoom() {
             zoom_level_save_path(&save_path, *zoom, multi_zoom)?
+        } else {
+            save_path.clone()
         };
         let level_temp_dir = if multi_zoom {
             base_temp_dir.join(format!("z{}", zoom))
@@ -2133,6 +2291,7 @@ async fn execute_download_task(
             pause_control,
             &request,
             source.clone(),
+            &diagnostic_sources[1..],
             *zoom,
             level_save_path,
             level_temp_dir,
@@ -2144,12 +2303,13 @@ async fn execute_download_task(
             min_export_success_ratio,
             &tianditu_tokens,
         ).await?;
+        if cancel_token.is_cancelled() { return Err("任务已取消".into()); }
 
         total_file_size = total_file_size.saturating_add(result.file_size);
         actual_total = actual_total.saturating_add(result.actual_count);
         failed_total = failed_total.saturating_add(result.failed_count);
         no_data_total = no_data_total.saturating_add(result.no_data);
-        pyramid_built |= result.pyramid_built;
+        pyramid_built &= result.pyramid_built;
         completed_offset = completed_offset.saturating_add(result.actual_count.saturating_sub(result.failed_count));
         failed_offset = failed_offset.saturating_add(result.failed_count);
         progress_offset = (progress_offset + progress_span).min(100.0);
@@ -2202,10 +2362,10 @@ async fn execute_download_task(
             zooms_str, min_export_success_ratio * 100.0
         );
         task_log(app, tm, task_id, "WARN", &pause_msg);
-        tm.mark_pending_decision(task_id, pause_msg.clone());
+        if !tm.mark_pending_decision(task_id, pause_msg.clone()) { return Err("任务已停止".into()); }
         let _ = app.emit(&event_name, TaskProgressPayload {
             task_id: task_id.to_string(),
-            status: "paused".to_string(),
+            status: "pending_decision".to_string(),
             progress: progress_offset.min(99.0),
             completed: actual_total.saturating_sub(failed_total),
             total: actual_total,
@@ -2217,31 +2377,9 @@ async fn execute_download_task(
 
     // 全部级别均已导出，按 failed_total 决定 Completed / CompletedWithGaps
     let has_gaps = failed_total > 0;
-    let (status_str, msg) = if has_gaps {
-        // Issue #31：CompletedWithGaps 保留 task_file + temp_dir 供「补漏重导」/
-        // 「强制按现状导出」复用；用户从列表移除时由 remove_task 统一清理
-        tm.complete_task_with_gaps(task_id, total_file_size, failed_total);
-        ("completed_with_gaps", format!("完成但有 {} 张缺块", failed_total))
-    } else {
-        // 全成功：清理临时文件（原行为）
-        crate::task::cleanup_temp_dir(task_id);
-        crate::task::remove_task_file(task_id);
-        tm.complete_task(task_id, total_file_size);
-        ("completed", "完成!".to_string())
-    };
-
-    let _ = app.emit(&event_name, TaskProgressPayload {
-        task_id: task_id.to_string(),
-        status: status_str.to_string(),
-        progress: 100.0,
-        completed: actual_total.saturating_sub(failed_total),
-        total: actual_total,
-        message: Some(msg),
-    });
-
     // 历史记录：CompletedWithGaps 仍记 DownloadStatus::Completed，前端按 failed_count > 0 区分
     let log_metadata = tm.get_log_metadata(task_id).unwrap_or_default();
-    let record = DownloadRecord::new(
+    let mut record = DownloadRecord::new(
         task_name.to_string(),
         request.source.clone(),
         source_name.to_string(),
@@ -2255,12 +2393,67 @@ async fn execute_download_task(
     ).with_log_metadata(&log_metadata)
      .with_duration(total_elapsed.as_secs())
      .with_pyramid(pyramid_built);
-    persist_history_record(app, record).await;
+    if multi_zoom {
+        record.output_zooms = zooms;
+    }
+    commit_output_history(app, tm, task_id, record, has_gaps).await?;
+    let (status_str, msg) = if has_gaps {
+        // Issue #31：CompletedWithGaps 保留 task_file + temp_dir 供「补漏重导」/
+        // 「强制按现状导出」复用；用户从列表移除时由 remove_task 统一清理
+        if !tm.complete_task_with_gaps(task_id, total_file_size, failed_total) { return Err("任务已停止".into()); }
+        ("completed_with_gaps", format!("完成但有 {} 张缺块", failed_total))
+    } else {
+        if !tm.complete_task(task_id, total_file_size) { return Err("任务已停止".into()); }
+        ("completed", "完成!".to_string())
+    };
+
+    let _ = app.emit(&event_name, TaskProgressPayload {
+        task_id: task_id.to_string(),
+        status: status_str.to_string(),
+        progress: 100.0,
+        completed: actual_total.saturating_sub(failed_total),
+        total: actual_total,
+        message: Some(msg),
+    });
 
     Ok(())
 }
 
 /// 获取所有活动任务
+static TRACK_OUTCOMES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn set_task_outcome_tracking(enabled: bool) {
+    TRACK_OUTCOMES.store(enabled, std::sync::atomic::Ordering::Release);
+}
+
+pub(crate) fn retain_task_outcome(task: &TaskInfo) {
+    if !TRACK_OUTCOMES.load(std::sync::atomic::Ordering::Acquire) || task.finished_at_ms.is_none() { return; }
+    if let Err(error) = crate::history::HistoryStore::global().and_then(|store| save_task_outcome_snapshot(store, task)) {
+        log::warn!("无法保存任务终态: {error}");
+    }
+}
+
+fn save_task_outcome_snapshot(store: &crate::history::HistoryStore, task: &TaskInfo) -> Result<(), String> {
+    let Some(finished) = task.finished_at_ms else { return Ok(()) };
+    let status = match task.status {
+        TaskStatus::Completed => "completed",
+        TaskStatus::CompletedWithGaps => "completed_with_gaps",
+        TaskStatus::Failed => "failed",
+        TaskStatus::Cancelled => "cancelled",
+        _ => return Ok(()),
+    };
+    let Ok(started) = chrono::DateTime::parse_from_rfc3339(&task.created_at) else { return Ok(()) };
+    if uuid::Uuid::parse_str(&task.id).is_err() { return Ok(()); }
+    store.save_task_outcome(&task.id, started.timestamp_millis(), status, finished)
+}
+
+#[tauri::command]
+pub async fn get_task_outcomes(after: i64, since: i64) -> Result<Vec<crate::history::StoredTaskOutcome>, String> {
+    if !TRACK_OUTCOMES.load(std::sync::atomic::Ordering::Acquire) { return Ok(Vec::new()); }
+    history_blocking(move |store| store.task_outcomes(after.max(0), since)).await
+}
+
 #[tauri::command]
 pub fn get_active_tasks(task_manager: State<'_, Arc<TaskManager>>) -> Vec<TaskInfo> {
     task_manager.get_all_tasks()
@@ -2511,9 +2704,14 @@ pub async fn remove_task(
     task_manager: State<'_, Arc<TaskManager>>,
     task_id: String,
 ) -> Result<(), String> {
+    let _operation = task_manager.begin_task_operation(&task_id)?;
+    if !matches!(task_manager.task_status(&task_id), Some(TaskStatus::Failed | TaskStatus::CompletedWithGaps | TaskStatus::Completed | TaskStatus::Cancelled)) {
+        return Err("任务已不存在或仍在进行中，请刷新任务列表".into());
+    }
+    task_manager.wait_for_finished_worker(&task_id).await;
     let task_manager = Arc::clone(&task_manager);
     tokio::task::spawn_blocking(move || {
-        let _operation = task_manager.begin_task_operation(&task_id)?;
+        discard_output_receipt(&task_id)?;
         if !task_manager.remove_finished(&task_id) {
             return Err("任务已不存在或仍在进行中，请刷新任务列表".into());
         }
@@ -2530,10 +2728,28 @@ pub async fn remove_task(
 /// 获取可恢复的任务列表（排除仍在本次进程任务管理器中的任务）
 #[tauri::command]
 pub async fn get_resumable_tasks(
-    task_manager: State<'_, Arc<TaskManager>>,
+    app: AppHandle, task_manager: State<'_, Arc<TaskManager>>,
 ) -> Result<Vec<crate::task::ResumableSummary>, String> {
     let manager = Arc::clone(&task_manager);
-    tokio::task::spawn_blocking(move || manager.resumable_tasks())
+    tokio::task::spawn_blocking(move || {
+        let mut recovered = false;
+        if let Ok(entries) = std::fs::read_dir(crate::task::tasks_dir()) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|ext| ext != "result") { continue; }
+                let Some(id) = path.file_stem().and_then(|id| id.to_str()) else { continue };
+                let Ok(_operation) = manager.begin_task_operation(id) else { continue };
+                if manager.task_status(id).is_some() { continue; }
+                match recover_output(id) {
+                    Ok(Some(_)) => recovered = true,
+                    Ok(None) => {},
+                    Err(error) => log::warn!("恢复导出回执失败: {error}"),
+                }
+            }
+        }
+        if recovered { let _ = app.emit("download-history-updated", ()); }
+        manager.resumable_tasks()
+    })
         .await
         .map_err(|e| format!("读取中断任务失败: {e}"))
 }
@@ -2552,6 +2768,7 @@ pub async fn resume_task(
     task_id: String,
     batch: Option<BatchOptions>,
 ) -> Result<CreateTaskResult, String> {
+    let work = crate::update_download::begin_work()?;
     let _operation = task_manager.begin_task_operation(&task_id)?;
     // 暂停仍有工作线程，继续时使用 toggle_pause_task。
     if !matches!(
@@ -2561,13 +2778,18 @@ pub async fn resume_task(
         return Err("当前任务状态无法重试，请刷新任务列表".into());
     }
 
+    task_manager.wait_for_finished_worker(&task_id).await;
+    if let Some(tile_count) = finish_interrupted_output(&app, &task_manager, &task_id).await? {
+        return Ok(CreateTaskResult { task_id, tile_count });
+    }
+
     // 读取持久化任务
     let mut persisted = crate::task::load_task_file(&task_id)
         .filter(|saved| saved.task_id == task_id)
         .ok_or_else(|| "未找到可恢复的任务".to_string())?;
-    let slots = task_manager.slots_for_batch(persisted.batch.as_ref().or(batch.as_ref()))?;
-    if persisted.batch.is_none() && batch.is_some() {
-        persisted.batch = batch;
+    let regroup = batch.is_some();
+    let slots = task_manager.resume_batch_slots(&mut persisted.batch, batch)?;
+    if regroup {
         crate::task::save_task_file(&persisted)?;
     }
 
@@ -2601,7 +2823,7 @@ pub async fn resume_task(
     validate_offline_sources(&request, &source)?;
 
     // 注册任务（复用原 task_id）
-    let (cancel_token, pause_control) = task_manager.create_task(
+    let (cancel_token, pause_control, worker) = task_manager.create_worker(
         task_id.clone(),
         task_name.clone(),
         request.source.clone(),
@@ -2621,6 +2843,8 @@ pub async fn resume_task(
     let source_name_r = source_name.clone();
     
     tokio::spawn(async move {
+        let _work = work;
+        let _worker = worker;
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
             request, source, save_path.clone(), work_dir, slots,
@@ -2630,7 +2854,8 @@ pub async fn resume_task(
         match result {
             Ok(_) => {},
             Err(e) => {
-                if tm.is_cancelled(&tid) {
+                let failed = tm.try_fail_task(&tid, e.clone());
+                if cancel_token.is_cancelled() {
                     task_log(&app, &tm, &tid, "WARN", "任务已取消");
                     crate::task::cleanup_temp_dir(&tid);
                     crate::task::remove_task_file(&tid);
@@ -2641,12 +2866,12 @@ pub async fn resume_task(
                         progress: 0.0, completed: 0, total: tile_count,
                         message: Some("已取消".to_string()),
                     });
-                } else {
+                } else if failed {
                     let recoverable_message = format!("任务失败: {}。任务数据已保留，可稍后恢复", e);
                     task_log(&app, &tm, &tid, "ERROR", &recoverable_message);
                     // 失败也记录到历史
                     let log_metadata = tm.get_log_metadata(&tid).unwrap_or_default();
-                    let record = DownloadRecord::new(
+                    let mut record = DownloadRecord::new(
                         task_name_r,
                         req_source_r,
                         source_name_r,
@@ -2658,8 +2883,8 @@ pub async fn resume_task(
                         0,
                         DownloadStatus::Failed,
                     ).with_log_metadata(&log_metadata);
+                    record.error = Some(e);
                     persist_history_record(&app, record).await;
-                    tm.fail_task(&tid, e.clone());
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
                         status: "failed".to_string(),
@@ -2687,7 +2912,14 @@ fn scan_temp_dir_for_zoom(
         base_temp_dir.to_path_buf()
     };
     let mut tile_files = HashMap::new();
-    if let Ok(entries) = std::fs::read_dir(&zoom_dir) {
+    collect_work_tiles(&zoom_dir, &mut tile_files);
+    collect_work_tiles(&zoom_dir.join("__composited"), &mut tile_files);
+    tile_files
+}
+
+// Composite tiles replace their base coordinates. Uncovered coordinates retain the base.
+fn collect_work_tiles(directory: &Path, tile_files: &mut HashMap<(u32, u32), crate::merger::TileSource>) {
+    if let Ok(entries) = std::fs::read_dir(directory) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -2702,6 +2934,7 @@ fn scan_temp_dir_for_zoom(
                 if let Ok(y_entries) = std::fs::read_dir(&path) {
                     for y_entry in y_entries.flatten() {
                         let y_path = y_entry.path();
+                        if y_path.extension().is_some_and(|ext| ext.to_string_lossy().contains("part")) { continue; }
                         let y = match y_path
                             .file_stem()
                             .and_then(|name| name.to_str())
@@ -2737,7 +2970,6 @@ fn scan_temp_dir_for_zoom(
             }
         }
     }
-    tile_files
 }
 
 #[cfg(test)]
@@ -2819,6 +3051,217 @@ mod resumable_tile_scan_tests {
     }
 
     #[test]
+    fn terminal_snapshots_and_sqlite_receipts_share_the_transition_timestamp() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = TaskManager::new_with_log_dir(temp.path().join("logs"));
+        let store = crate::history::HistoryStore::open_at(&temp.path().join("history")).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let create = || {
+            manager.create_task(id.clone(), "Task".into(), "source".into(), "Source".into(), 1,
+                "geotiff".into(), "sample.tif".into(), 1);
+        };
+        create();
+        let task = || manager.get_all_tasks().pop().unwrap();
+        assert!(serde_json::to_value(task()).unwrap().get("finished_at_ms").is_none());
+        assert!(manager.try_fail_task(&id, "offline".into()));
+        let failed = task();
+        let failure_time = failed.finished_at_ms.unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(!manager.try_fail_task(&id, "late".into()));
+        assert_eq!(task().finished_at_ms, Some(failure_time));
+        save_task_outcome_snapshot(&store, &failed).unwrap();
+        save_task_outcome_snapshot(&store, &task()).unwrap();
+        create();
+        assert!(task().finished_at_ms.is_none());
+        save_task_outcome_snapshot(&store, &task()).unwrap();
+        assert!(manager.complete_task(&id, 64));
+        let completed = task();
+        let success_time = completed.finished_at_ms.unwrap();
+        assert!(success_time > failure_time);
+        manager.mark_cancelled(&id);
+        assert_eq!(task().status, TaskStatus::Completed);
+        assert_eq!(task().finished_at_ms, Some(success_time));
+        save_task_outcome_snapshot(&store, &completed).unwrap();
+        let rows = store.task_outcomes(0, 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].finished, rows[0].status.as_str()), (failure_time, "failed"));
+        assert_eq!((rows[1].finished, rows[1].status.as_str()), (success_time, "completed"));
+    }
+
+    #[test]
+    fn receipt_replays_db_failure_and_post_commit_interruption_without_harming_raster() {
+        const FAULT_DIR: &str = "GEOD_RECEIPT_CRASH_TEST_DIR";
+        if let Some(dir) = std::env::var_os(FAULT_DIR) {
+            let dir = PathBuf::from(dir);
+            let receipt = FinishedOutput::read(&dir.join("job.result")).unwrap().unwrap();
+            let store = HistoryStore::open_at(&dir.join("database")).unwrap();
+            receipt.commit(&dir.join("job.result"), &store, || std::process::exit(73)).unwrap();
+            panic!("expected child exit at work cleanup");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("database");
+        let store = HistoryStore::open_at(&db).unwrap();
+        let out = dir.path().join("map.tif");
+        image::RgbImage::from_pixel(16, 16, image::Rgb([3, 44, 67])).save(&out).unwrap();
+        let size = out.metadata().unwrap().len();
+        let record = DownloadRecord::new("test".into(),"local".into(),"Local".into(),8,"geotiff".into(),
+            out.to_string_lossy().into_owned(),size,1,0,DownloadStatus::Completed);
+        let id = record.id.clone();
+        let path = FinishedOutput::path(dir.path(), "job").unwrap();
+        let checkpoint = dir.path().join("resume.json");
+        std::fs::write(&checkpoint, "saved").unwrap();
+        let receipt = FinishedOutput::new(record, false).unwrap();
+        receipt.stage(&path).unwrap();
+        let db_handle = rusqlite::Connection::open(db.join("history.db")).unwrap();
+        db_handle.execute_batch("CREATE TRIGGER reject_result BEFORE INSERT ON download_history
+            BEGIN SELECT RAISE(ABORT, 'injected storage failure'); END;").unwrap();
+        assert!(receipt.commit(&path, &store, || panic!("cannot clean work on failure")).is_err());
+        assert!(store.get(&id).unwrap().is_none());
+        assert!(checkpoint.is_file() && path.is_file());
+        db_handle.execute_batch("DROP TRIGGER reject_result").unwrap();
+        drop(db_handle);
+        drop(store);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "commands::resumable_tile_scan_tests::receipt_replays_db_failure_and_post_commit_interruption_without_harming_raster"])
+            .env(FAULT_DIR, dir.path()).status().unwrap();
+        assert_eq!(child.code(), Some(73));
+        assert!(checkpoint.exists() && path.exists());
+        let reopened = HistoryStore::open_at(&db).unwrap();
+        let recovered = FinishedOutput::read(&path).unwrap().unwrap();
+        recovered.commit(&path, &reopened, || std::fs::remove_file(&checkpoint).unwrap()).unwrap();
+        assert!(!path.exists() && !checkpoint.exists());
+        assert_eq!(reopened.page(1, 4).unwrap().total, 1);
+        assert_eq!(reopened.get(&id).unwrap().unwrap().file_size, size);
+        assert_eq!(image::open(&out).unwrap().to_rgb8().get_pixel(2, 2).0, [3, 44, 67]);
+
+        let partial = FinishedOutput { keep_work: true, ..recovered };
+        partial.stage(&path).unwrap();
+        partial.commit(&path, &reopened, || panic!("partial export retains work")).unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn receipts_check_all_real_outputs_and_never_infer_a_raw_grid_from_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("map.png");
+        let mut record = DownloadRecord::new("set".into(),"local".into(),"Local".into(),7,"png".into(),
+            base.to_string_lossy().into_owned(),12,2,0,DownloadStatus::Completed);
+        record.output_zooms = vec![7, 9];
+        let files: Vec<_> = [7,9].iter().map(|&z| zoom_level_output_path(&base,z)).collect();
+        for p in &files {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, [1;6]).unwrap();
+        }
+        let receipt = FinishedOutput::new(record.clone(), false).unwrap();
+        assert!(receipt.outputs_still_match());
+        std::fs::write(&files[1], [1;4]).unwrap();
+        assert!(!receipt.outputs_still_match());
+        std::fs::remove_file(&files[0]).unwrap();
+        assert!(!receipt.outputs_still_match());
+        for format in ["mbtiles", "gpkg"] {
+            let package = dir.path().join(format!("set.{format}"));
+            std::fs::write(&package, [1;12]).unwrap();
+            record.format = format.into();
+            record.file_path = package.to_string_lossy().into_owned();
+            let receipt = FinishedOutput::new(record.clone(), false).unwrap();
+            assert_eq!(receipt.file_stamps.as_ref().unwrap().len(), 1);
+            assert!(receipt.outputs_still_match());
+            std::fs::remove_file(package).unwrap();
+            assert!(!receipt.outputs_still_match());
+        }
+        record.format = "tiles".into();
+        record.file_path = dir.path().to_string_lossy().into_owned();
+        assert!(!FinishedOutput::new(record, false).unwrap().outputs_still_match());
+    }
+
+    #[tokio::test]
+    async fn terminal_task_operations_wait_for_the_original_worker_to_release_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let tm = TaskManager::new_with_log_dir(dir.path().into());
+        let (_cancel, _pause, worker) = tm.create_worker("one".into(),"job".into(),"source".into(),
+            "name".into(),8,"geotiff".into(),"one.tif".into(),1);
+        assert!(tm.cancel_task("one"));
+        tm.mark_cancelled("one");
+        let wait = tm.wait_for_finished_worker("one");
+        tokio::pin!(wait);
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20), &mut wait).await.is_err());
+        drop(worker);
+        tokio::time::timeout(std::time::Duration::from_secs(1), wait).await.unwrap();
+    }
+
+    #[test]
+    fn finished_output_commit_and_cancellation_are_mutually_exclusive() {
+        let dir = tempfile::tempdir().unwrap();
+        let tm = TaskManager::new_with_log_dir(dir.path().into());
+        for id in ["saving", "cancelled"] {
+            tm.create_task(id.into(),"job".into(),"source".into(),"name".into(),8,"geotiff".into(),"map.tif".into(),1);
+        }
+        assert!(tm.cancel_task("cancelled"));
+        assert!(tm.begin_output_commit("cancelled").is_err());
+        tm.begin_output_commit("saving").unwrap();
+        assert!(!tm.cancel_task("saving"));
+        assert!(tm.complete_task("saving", 2048));
+    }
+
+    #[test]
+    fn forced_export_uses_composited_pixels_and_retains_uncovered_coordinates() {
+        let temp = tempfile::tempdir().unwrap();
+        let zoom = temp.path().join("z8");
+        let x = zoom.join("7");
+        std::fs::create_dir_all(&x).unwrap();
+        let background = image::RgbImage::from_pixel(256, 256, image::Rgb([5u8, 10, 15]));
+        background.save(x.join("4.png")).unwrap();
+        background.save(x.join("5.png")).unwrap();
+        let label = zoom.join("overlay.png");
+        image::RgbImage::from_pixel(256, 256, image::Rgb([205u8,55,55])).save(&label).unwrap();
+        let layered = zoom.join("__composited").join("7").join("4.png");
+        assert!(crate::overlay::composite_tile_to_disk(&merger::TileSource::from_path(x.join("4.png")),
+            &[merger::TileSource::from_path(label)], &layered).unwrap());
+        std::fs::copy(&layered, layered.with_file_name("6.overlay-part")).unwrap();
+        let tiles = scan_temp_dir_for_zoom(temp.path(), 8, true);
+        assert_eq!(tiles.len(), 2);
+        let pixel = |coord| image::load_from_memory(&tiles[&coord].bytes().unwrap()).unwrap().to_rgb8().get_pixel(3,3).0;
+        assert_eq!(pixel((7,4)), [205,55,55]);
+        assert_eq!(pixel((7,5)), [5,10,15]);
+        let out = temp.path().join("merged.tif");
+        let bounds = tile::get_merged_bounds(7,4,7,5,8);
+        streaming_tiff::merge_and_export_streaming(&tiles,7,4,7,5,&bounds,&out,"none",None).unwrap();
+        let rgb = image::open(&out).unwrap().to_rgb8();
+        assert_eq!(rgb.get_pixel(3,3).0, [205,55,55]);
+        assert_eq!(rgb.get_pixel(3,259).0, [5,10,15]);
+    }
+
+    #[test]
+    fn multi_zoom_pyramids_follow_outputs_and_validate_before_touching_any_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("points.tif");
+        let mut record = DownloadRecord::new("sample".into(),"osm".into(),"OSM".into(),8,"geotiff".into(),
+            base.to_string_lossy().into(),0,2,0,DownloadStatus::Completed);
+        let a = zoom_level_output_path(&base,8);
+        let b = zoom_level_output_path(&base,10);
+        for path in [&a,&b] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path,b"sample").unwrap();
+        }
+        record.output_zooms = vec![8,10];
+        assert_eq!(history_pyramid_paths(&record).unwrap(), [a.clone(), b.clone()]);
+        let store = crate::history::HistoryStore::open_at(&temp.path().join("history")).unwrap();
+        store.add(&record).unwrap();
+        assert_eq!(store.get(&record.id).unwrap().unwrap().output_zooms,[8,10]);
+        record.output_zooms.clear();
+        let log = temp.path().join("job.log");
+        let mut writer = crate::task_log::TaskLogWriter::open(&log).unwrap();
+        for msg in ["多级别下载将按 [8,10] 串行执行","--- 级别 z8 完成 --- 文件大小: 2 MB","--- 级别 z10 完成 --- 文件大小: 3 MB"] {
+            writer.append("INFO", msg).unwrap();
+        }
+        drop(writer);
+        record.log_file = Some(log.to_string_lossy().into_owned());
+        assert_eq!(history_pyramid_paths(&record).unwrap(),[a,b.clone()]);
+        std::fs::remove_file(&b).unwrap();
+        assert!(history_pyramid_paths(&record).unwrap_err().contains("z10"));
+    }
+
+    #[test]
     fn scans_sharded_and_legacy_tile_files() {
         let dir = tempfile::tempdir().unwrap();
         let sharded_dir = dir.path().join("123");
@@ -2851,12 +3294,15 @@ pub async fn export_partial_task(
     task_manager: State<'_, Arc<TaskManager>>,
     task_id: String,
 ) -> Result<(), String> {
+    let work = crate::update_download::begin_work()?;
     let _operation = task_manager.begin_task_operation(&task_id)?;
     if !matches!(task_manager.task_status(&task_id),
         None | Some(TaskStatus::PendingDecision | TaskStatus::CompletedWithGaps | TaskStatus::Failed)
     ) {
         return Err("当前任务状态无法强制导出，请刷新任务列表".into());
     }
+    task_manager.wait_for_finished_worker(&task_id).await;
+    if finish_interrupted_output(&app, &task_manager, &task_id).await?.is_some() { return Ok(()) }
     let persisted = crate::task::load_task_file(&task_id)
         .filter(|saved| saved.task_id == task_id)
         .ok_or_else(|| "未找到可恢复的任务".to_string())?;
@@ -2903,6 +3349,7 @@ pub async fn export_partial_task(
     if !base_temp_dir.exists() {
         return Err("临时目录不存在，缓存已被清理，无法强制导出".to_string());
     }
+    let base_temp_dir = crate::task::current_work_tiles(&base_temp_dir)?;
 
     // 4) 推算 zoom 列表（同 execute_download_task）
     let z_min = request.zoom;
@@ -2929,7 +3376,7 @@ pub async fn export_partial_task(
     };
     let multi_zoom = zooms.len() > 1;
 
-    let (cancel, pause) = task_manager.create_task(
+    let (cancel, pause, worker) = task_manager.create_worker(
         task_id.clone(), task_name.clone(), request.source.clone(), source_name.clone(),
         request.zoom, request.format.clone(), save_path.clone(), total_estimated,
     );
@@ -2945,6 +3392,8 @@ pub async fn export_partial_task(
 
     // 6) spawn 后台导出
     tokio::spawn(async move {
+        let _work = work;
+        let _worker = worker;
         let _permit = match enter_task_batch(slots.as_deref(), &tm_arc, &tid, &cancel, &pause).await {
             Ok(permit) => permit,
             Err(_) if cancel.is_cancelled() => { tm_arc.mark_cancelled(&tid); return; }
@@ -2958,7 +3407,8 @@ pub async fn export_partial_task(
 
         let mut total_file_size = 0u64;
         let mut total_exported = 0u32;
-        let mut zoom_failures: Vec<u8> = Vec::new();
+        let mut exported_levels = Vec::new();
+        let mut zoom_failures: Vec<(u8, String)> = Vec::new();
 
         for (idx, zoom) in zooms.iter().enumerate() {
             if cancel.is_cancelled() { tm_arc.mark_cancelled(&tid); return; }
@@ -2976,7 +3426,7 @@ pub async fn export_partial_task(
                 task_log(&app_clone, &tm_arc, &tid, "WARN", &format!(
                     "z{} 临时目录无可用瓦片，跳过", zoom
                 ));
-                zoom_failures.push(*zoom);
+                zoom_failures.push((*zoom, "无可用瓦片".into()));
                 continue;
             }
 
@@ -2987,7 +3437,7 @@ pub async fn export_partial_task(
                         task_log(&app_clone, &tm_arc, &tid, "ERROR", &format!(
                             "z{} 计算输出路径失败: {}", zoom, e
                         ));
-                        zoom_failures.push(*zoom);
+                        zoom_failures.push((*zoom, e));
                         continue;
                     }
                 }
@@ -3035,7 +3485,8 @@ pub async fn export_partial_task(
             let progress = (zoom_is_dem || zoom_format == ExportFormat::GeoTiff).then(|| tiff_progress(
                 &app_clone, &tm_arc, &tid, (idx as f64 * span)..((idx + 1) as f64 * span).min(99.0),
                 total_exported, 0, total_estimated,
-            ));
+            ).with_cancellation(cancel.clone()));
+            let stream_cancel = cancel.clone();
             let result = tokio::task::spawn_blocking(move || -> Result<u64, String> {
                 let polygons = polygons_owned.as_deref();
                 let size = if let Some(options) = progress {
@@ -3047,9 +3498,9 @@ pub async fn export_partial_task(
                     write(&tile_files, x_min, y_min, x_max, y_max, &merged_bounds,
                         &save_p, &compression, polygons, options)
                 } else {
-                    streaming_raster::merge_and_export_streaming_png(
+                    streaming_raster::merge_and_export_streaming_png_cancellable(
                         &tile_files, x_min, y_min, x_max, y_max,
-                        &merged_bounds, &save_p, polygons,
+                        &merged_bounds, &save_p, polygons, Some(&stream_cancel),
                     )
                 }?;
                 if crate::earth_history::is_source(&earth_source_id) {
@@ -3061,7 +3512,6 @@ pub async fn export_partial_task(
                         &merged_bounds,
                         cols,
                         rows,
-                        zoom_is_dem,
                     )?;
                 }
                 Ok(size)
@@ -3073,6 +3523,7 @@ pub async fn export_partial_task(
                 Ok(Ok(size)) => {
                     total_file_size = total_file_size.saturating_add(size);
                     total_exported = total_exported.saturating_add(actual_count);
+                    exported_levels.push(*zoom);
                     task_log(&app_clone, &tm_arc, &tid, "INFO", &format!(
                         "z{} 强制导出完成，文件大小: {:.1} MB",
                         zoom, size as f64 / 1024.0 / 1024.0
@@ -3082,7 +3533,7 @@ pub async fn export_partial_task(
                     task_log(&app_clone, &tm_arc, &tid, "ERROR", &format!(
                         "z{} 强制导出失败: {}", zoom, e
                     ));
-                    zoom_failures.push(*zoom);
+                    zoom_failures.push((*zoom, e));
                 }
             }
         }
@@ -3091,12 +3542,17 @@ pub async fn export_partial_task(
         let elapsed = start.elapsed();
 
         if total_exported == 0 {
-            let err_msg = format!(
-                "强制导出全部失败：{} 个级别均未成功导出",
-                zoom_failures.len()
-            );
+            let detail = zoom_failures.first().map(|(z, error)| format!("，z{z}：{error}")).unwrap_or_default();
+            let err_msg = format!("强制导出全部失败：{} 个级别未导出{detail}", zoom_failures.len());
             task_log(&app_clone, &tm_arc, &tid, "ERROR", &err_msg);
-            tm_arc.fail_task(&tid, err_msg.clone());
+            if !tm_arc.try_fail_task(&tid, err_msg.clone()) { return; }
+            let metadata = tm_arc.get_log_metadata(&tid).unwrap_or_default();
+            let mut record = DownloadRecord::new(task_name_for_record, req_clone.source.clone(),
+                source_name_for_record, req_clone.zoom, req_clone.format.clone(), save_path_for_record,
+                0, total_estimated, 0, DownloadStatus::Failed)
+                .with_log_metadata(&metadata).with_duration(elapsed.as_secs());
+            record.error = Some(err_msg.clone());
+            persist_history_record(&app_clone, record).await;
             let _ = app_clone.emit(&event_name, TaskProgressPayload {
                 task_id: tid.clone(),
                 status: "failed".to_string(),
@@ -3119,19 +3575,9 @@ pub async fn export_partial_task(
         // 用户从列表「移除」时由 remove_task 命令统一清理
         // 估算缺块数：tile_count - total_exported
         let failed_estimate = total_estimated.saturating_sub(total_exported);
-        tm_arc.complete_task_with_gaps(&tid, total_file_size, failed_estimate);
-        let _ = app_clone.emit(&event_name, TaskProgressPayload {
-            task_id: tid.clone(),
-            status: "completed_with_gaps".to_string(),
-            progress: 100.0,
-            completed: total_exported,
-            total: total_estimated,
-            message: Some(format!("强制导出完成，缺失约 {} 张瓦片", failed_estimate)),
-        });
-
         // 历史记录
         let log_metadata = tm_arc.get_log_metadata(&tid).unwrap_or_default();
-        let record = DownloadRecord::new(
+        let mut record = DownloadRecord::new(
             task_name_for_record,
             req_clone.source.clone(),
             source_name_for_record,
@@ -3145,7 +3591,22 @@ pub async fn export_partial_task(
         )
         .with_log_metadata(&log_metadata)
         .with_duration(elapsed.as_secs());
-        persist_history_record(&app_clone, record).await;
+        if multi_zoom { record.output_zooms = exported_levels; }
+        if let Err(error) = commit_output_history(&app_clone, &tm_arc, &tid, record, true).await {
+            if tm_arc.try_fail_task(&tid, error.clone()) {
+                task_log(&app_clone, &tm_arc, &tid, "ERROR", &error);
+            }
+            return;
+        }
+        if !tm_arc.complete_task_with_gaps(&tid, total_file_size, failed_estimate) { return; }
+        let _ = app_clone.emit(&event_name, TaskProgressPayload {
+            task_id: tid.clone(),
+            status: "completed_with_gaps".to_string(),
+            progress: 100.0,
+            completed: total_exported,
+            total: total_estimated,
+            message: Some(format!("强制导出完成，缺失约 {} 张瓦片", failed_estimate)),
+        });
     });
 
     Ok(())
@@ -3161,15 +3622,13 @@ pub async fn discard_resumable_task(
     task_id: String,
     delete_cache: Option<bool>,
 ) -> Result<(), String> {
-    let task_manager = Arc::clone(&task_manager);
+    let _operation = task_manager.begin_task_operation(&task_id)?;
+    if !matches!(task_manager.task_status(&task_id), None | Some(TaskStatus::Cancelled)) {
+        return Err("任务状态已变化，请刷新任务列表".into());
+    }
+    task_manager.wait_for_finished_worker(&task_id).await;
     tokio::task::spawn_blocking(move || {
-        let _operation = task_manager.begin_task_operation(&task_id)?;
-        if !matches!(
-            task_manager.task_status(&task_id),
-            None | Some(TaskStatus::Cancelled)
-        ) {
-            return Err("任务状态已变化，请刷新任务列表".into());
-        }
+        discard_output_receipt(&task_id)?;
         if delete_cache.unwrap_or(true) {
             crate::task::cleanup_temp_dir(&task_id);
         }
@@ -3226,8 +3685,9 @@ pub async fn create_region_bookmark(
     name: String,
     bounds: BookmarkBounds,
     polygon: Option<BookmarkPolygon>,
+    areas: Option<crate::selection_areas::SelectionAreas>,
 ) -> Result<RegionBookmark, String> {
-    region_bookmark_blocking(move |store| store.create(name, bounds, polygon)).await
+    region_bookmark_blocking(move |store| store.create(name, bounds, polygon, areas)).await
 }
 
 #[tauri::command]
@@ -3307,6 +3767,52 @@ pub async fn clear_download_history(task_manager: State<'_, Arc<TaskManager>>) -
     Ok(())
 }
 
+fn history_pyramid_paths(record: &DownloadRecord) -> Result<Vec<PathBuf>, String> {
+    let base = Path::new(&record.file_path);
+    let mut levels = record.output_zooms.clone();
+    if levels.is_empty() {
+        // Older rows have only a nominal path. Their logs identify each level actually written.
+        if let Some(log) = record.log_file.as_deref().and_then(|p| crate::task_log::read_log_file(Path::new(p)).ok()) {
+            let last_run = log.iter().rposition(|line| line.message == "=== 任务开始 ===").unwrap_or(0);
+            let log = &log[last_run..];
+            // Successful multi-level jobs write all planned levels. The level list is logged
+            // before tile processing, so it survives the size cap on long task logs.
+            let planned = log.iter().rev().find_map(|line| {
+                let label = line.message.strip_prefix("多级别下载将按 [")?.split_once(']')?.0;
+                if let Some((lo, hi)) = label.split_once('~') {
+                    let (lo, hi) = (lo.parse::<u8>().ok()?, hi.parse::<u8>().ok()?);
+                    return (lo <= hi && hi <= 24).then(|| (lo..=hi).collect::<Vec<_>>());
+                }
+                label.split(',').map(|z| z.trim().parse::<u8>().ok().filter(|z| *z <= 24)).collect()
+            });
+            let last_partial = log.iter().rposition(|line| line.message.starts_with("=== 强制按现状导出任务开始"));
+            if let Some(start) = last_partial {
+                for line in &log[start..] {
+                    if let Some(z) = line.message.strip_prefix('z').and_then(|s| s.split_once(" 强制导出完成"))
+                        .and_then(|(z, _)| z.parse::<u8>().ok()) {
+                        levels.push(z);
+                    }
+                }
+                // A single-level forced export writes directly to the base path.
+                let partial_multi = log[start..].iter().any(|line| line.message.starts_with("格式: ") &&
+                    line.message.split_once("级别: [").is_some_and(|(_, list)| list.contains(',')));
+                if !partial_multi && base.is_file() { levels.clear(); }
+            } else if let Some(planned) = planned {
+                levels = planned;
+            }
+        }
+    }
+    levels.sort_unstable();
+    levels.dedup();
+    let paths = if levels.is_empty() { vec![base.to_owned()] } else {
+        levels.into_iter().map(|z| zoom_level_output_path(base, z)).collect()
+    };
+    for path in &paths {
+        if !path.is_file() { return Err(format!("文件不存在: {}", path.display())); }
+    }
+    Ok(paths)
+}
+
 /// 为已有 TIFF 文件补建金字塔
 #[tauri::command]
 pub async fn build_pyramid_for_file(
@@ -3314,36 +3820,37 @@ pub async fn build_pyramid_for_file(
     record_id: String,
     file_path: String,
 ) -> Result<(), String> {
-    use std::path::Path;
-    let p = file_path.clone();
-    if !Path::new(&p).exists() {
-        return Err(format!("文件不存在: {}", p));
+    let _work = crate::update_download::begin_work()?;
+    let id = record_id.clone();
+    let record = history_blocking(move |store| {
+        store.get(&id)?.ok_or_else(|| "历史记录不存在".to_string())
+    }).await?;
+    if record.file_path != file_path {
+        return Err("文件路径与历史记录不一致".into());
     }
-
-    let app_clone = app.clone();
-    let progress_record_id = record_id.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        pyramid::build_pyramid(
-            &p,
-            pyramid::PyramidOptions {
+    let file_size = tokio::task::spawn_blocking(move || -> Result<u64, String> {
+        let paths = history_pyramid_paths(&record)?;
+        let mut size = 0u64;
+        for path in &paths {
+            let app = app.clone();
+            let id = record.id.clone();
+            pyramid::build_pyramid(path, pyramid::PyramidOptions {
                 progress_cb: Some(Box::new(move |current, total| {
-                    let _ = app_clone.emit("pyramid-progress", serde_json::json!({
-                        "record_id": &progress_record_id,
-                        "current": current,
-                        "total": total,
+                    let _ = app.emit("pyramid-progress", serde_json::json!({
+                        "record_id": id, "current": current, "total": total,
                     }));
                 })),
                 ..Default::default()
-            },
-        )
-    }).await.map_err(|e| format!("线程异常: {}", e))?;
-
-    let stats = result?;
+            })?;
+            size = size.saturating_add(path.metadata().map_err(|e| e.to_string())?.len());
+        }
+        Ok(size)
+    }).await.map_err(|e| format!("线程异常: {}", e))??;
 
     history_blocking(move |store| {
         let mut record = store.get(&record_id)?.ok_or_else(|| "历史记录不存在".to_string())?;
         record.has_pyramid = true;
-        record.file_size = record.file_size.saturating_add(stats.size_added_bytes);
+        record.file_size = file_size;
         store.update(&record)
     }).await?;
 
@@ -3469,18 +3976,21 @@ pub async fn create_osm_download_task(
     feature_type: String,
     save_path: String,
     proxy: Option<String>,
-    polygon: Option<Vec<PolygonCoord>>,
+    polygon: Option<crate::selection_areas::SelectionAreas>,
     task_name: String,
 ) -> Result<CreateTaskResult, String> {
+    let work = crate::update_download::begin_work()?;
     let save_path = crate::osm_output::absolute_output(&save_path)?.to_string_lossy().into_owned();
     let task_id = uuid::Uuid::new_v4().to_string();
-    let (cancel_token, _pause_control) = task_manager.create_task(
+    let (cancel_token, _pause_control, worker) = task_manager.create_worker(
         task_id.clone(), task_name, "osm_vector".into(), "OSM Overpass".into(),
         0, "geojson".into(), save_path.clone(), 0,
     );
     let tm = Arc::clone(&task_manager);
     let tid = task_id.clone();
     tokio::spawn(async move {
+        let _work = work;
+        let _worker = worker;
         let event_name = format!("task-progress-{}", tid);
         task_log(&app, &tm, &tid, "INFO", &format!("OSM 保存位置: {}", save_path));
         tm.update_progress(&tid, TaskStatus::Downloading, 20.0, 0, 0, Some("正在请求 Overpass API...".into()));
@@ -3489,13 +3999,12 @@ pub async fn create_osm_download_task(
             completed: 0, total: 0, message: Some("正在请求 Overpass API...".into()),
         });
         let result: Result<u64, String> = async {
-            let coordinates = polygon.map(|p| p.into_iter().map(|c| (c.lat, c.lng)).collect::<Vec<_>>());
             let geojson = tokio::select! {
                 biased;
                 _ = cancel_token.cancelled() => return Err("已取消".into()),
                 result = crate::admin::download_osm_features_with_progress(
                     bounds.south, bounds.west, bounds.north, bounds.east,
-                    &feature_type, proxy.as_deref(), coordinates.as_deref(),
+                    &feature_type, proxy.as_deref(), polygon.as_ref(),
                     |message| {
                         if let Some(json)=message.strip_prefix("OVERPASS_DIAGNOSTIC:") {
                             if let Ok(diagnostic)=serde_json::from_str::<crate::execution_diagnostic::ExecutionDiagnostic>(json) {
@@ -3553,20 +4062,16 @@ pub async fn download_osm_data(
     feature_type: String,
     save_path: String,
     proxy: Option<String>,
-    polygon: Option<Vec<PolygonCoord>>,
+    polygon: Option<crate::selection_areas::SelectionAreas>,
 ) -> Result<String, String> {
+    let _work = crate::update_download::begin_work()?;
     use crate::admin::download_osm_features;
-    
-    // 将多边形坐标转换为 (lat, lng) 元组列表
-    let poly_coords: Option<Vec<(f64, f64)>> = polygon.map(|p| {
-        p.iter().map(|c| (c.lat, c.lng)).collect()
-    });
     
     let geojson = download_osm_features(
         bounds.south, bounds.west, bounds.north, bounds.east,
         &feature_type,
         proxy.as_deref(),
-        poly_coords.as_deref()
+        polygon.as_ref()
     ).await?;
     
     let path = crate::osm_output::absolute_output(&save_path)?;
@@ -3582,6 +4087,7 @@ pub async fn download_admin_boundary_file(
     code: String,
     save_path: String,
 ) -> Result<String, String> {
+    let _work = crate::update_download::begin_work()?;
     let geojson = admin::get_admin_boundary(&code, true).await?;
     
     let content = serde_json::to_string_pretty(&geojson)
@@ -3598,6 +4104,11 @@ const GITHUB_LATEST_RELEASE_URL: &str =
 const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/gaopengbin/geo-downloader/releases?per_page=5";
 
+#[tauri::command]
+pub fn get_update_target() -> (&'static str, &'static str) {
+    (std::env::consts::OS, std::env::consts::ARCH)
+}
+
 /// 获取更新信息。稳定版优先使用镜像清单，失败后回退 GitHub。
 #[tauri::command]
 pub async fn get_update_info(prerelease: bool) -> Result<serde_json::Value, String> {
@@ -3607,27 +4118,14 @@ pub async fn get_update_info(prerelease: bool) -> Result<serde_json::Value, Stri
         .build()
         .map_err(|e| format!("创建更新检查客户端失败: {}", e))?;
 
-    let urls: &[&str] = if prerelease {
-        &[GITHUB_RELEASES_URL]
+    let sources: &[(&str, bool)] = if prerelease {
+        &[(GITHUB_RELEASES_URL, false)]
+    } else if !cfg!(target_os = "windows") {
+        &[(GITHUB_LATEST_RELEASE_URL, false)]
     } else {
-        &[UPDATE_MANIFEST_URL, GITHUB_LATEST_RELEASE_URL]
+        &[(UPDATE_MANIFEST_URL, true), (GITHUB_LATEST_RELEASE_URL, false)]
     };
-    let mut errors = Vec::new();
-
-    for url in urls {
-        match client.get(*url).send().await {
-            Ok(response) if response.status().is_success() => {
-                match response.json::<serde_json::Value>().await {
-                    Ok(payload) => return Ok(payload),
-                    Err(error) => errors.push(format!("{} 返回的数据无效: {}", url, error)),
-                }
-            }
-            Ok(response) => errors.push(format!("{} 返回 HTTP {}", url, response.status())),
-            Err(error) => errors.push(format!("{} 请求失败: {}", url, error)),
-        }
-    }
-
-    Err(format!("获取更新信息失败：{}", errors.join("；")))
+    crate::update_download::release_metadata(&client, sources).await
 }
 
 /// 下载并安装更新。
@@ -3642,6 +4140,7 @@ pub async fn download_and_install_update(
     if !cfg!(target_os = "windows") { return Err("当前平台暂不支持应用内安装".into()); }
     let spec = crate::update_download::Spec::new(&url, &version, &expected_sha256, expected_size)?;
     let _active = crate::update_download::lock_update()?;
+    let install = crate::update_download::begin_install()?;
     let directory = std::env::temp_dir().join(format!("GeoDownloader-update-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&directory).map_err(|_| "无法创建更新临时目录")?;
     let setup_path = match crate::update_download::download(&spec, &directory, |transfer| {
@@ -3667,6 +4166,8 @@ pub async fn download_and_install_update(
         }
     }
     
+    // Keep admissions closed until the running process actually terminates.
+    std::mem::forget(install);
     app.exit(0);
     Ok(())
 }
@@ -3690,7 +4191,7 @@ pub async fn analyze_3dtiles(
 #[tauri::command]
 pub async fn estimate_3dtiles(
     source: tiles3d::tileset::Tiles3dSource,
-    polygon: Vec<Vec<f64>>,
+    polygon: crate::selection_areas::SelectionAreas,
     proxy: Option<String>,
 ) -> Result<Tiles3dEstimate, String> {
     let mut fetcher = tiles3d::fetcher::Tiles3dFetcher::new(proxy.as_deref())?;
@@ -3722,6 +4223,7 @@ pub async fn create_3dtiles_task(
     request: tiles3d::tileset::Tiles3dRequest,
     task_name: String,
 ) -> Result<CreateTaskResult, String> {
+    let work = crate::update_download::begin_work()?;
     let save_path = request.save_path.clone();
     let task_id = uuid::Uuid::new_v4().to_string();
 
@@ -3749,11 +4251,11 @@ pub async fn create_3dtiles_task(
             format!("Cesium Ion #{}", asset_id)
         }
         tiles3d::tileset::Tiles3dSource::DirectUrl { tileset_url, .. } => {
-            tileset_url.clone()
+            tiles3d::fetcher::source_label(tileset_url)
         }
     };
 
-    let (cancel_token, pause_control) = task_manager.create_task(
+    let (cancel_token, pause_control, worker) = task_manager.create_worker(
         task_id.clone(),
         task_name.clone(),
         "3dtiles".to_string(),
@@ -3771,16 +4273,36 @@ pub async fn create_3dtiles_task(
     let tn = task_name.clone();
 
     tokio::spawn(async move {
+        let _work = work;
+        let _worker = worker;
         let result = execute_3dtiles_task(
             &app, &tm, &tid, cancel_token.clone(), pause_control,
-            &endpoint.tileset_url, &request, tile_count, &sn, &tn,
+            fetcher, &endpoint.tileset_url, &request, tile_count, &sn, &tn,
         )
         .await;
 
         match result {
             Ok(_) => {}
             Err(e) => {
-                if tm.is_cancelled(&tid) {
+                if tm.try_fail_task(&tid, e.clone()) {
+                    task_log(&app, &tm, &tid, "ERROR", &format!("任务失败: {}", e));
+                    let log = tm.get_log_metadata(&tid).unwrap_or_default();
+                    let record = tiles3d::history_record(&tid, &tn, &sn, &save_path, tile_count, Err(&e))
+                        .with_log_metadata(&log);
+                    persist_history_record(&app, record).await;
+                    crate::task::remove_task_file(&tid);
+                    let _ = app.emit(
+                        &format!("task-progress-{}", tid),
+                        TaskProgressPayload {
+                            task_id: tid,
+                            status: "failed".to_string(),
+                            progress: 0.0,
+                            completed: 0,
+                            total: tile_count,
+                            message: Some(format!("失败: {}", e)),
+                        },
+                    );
+                } else if cancel_token.is_cancelled() {
                     task_log(&app, &tm, &tid, "WARN", "任务已取消");
                     tm.mark_cancelled(&tid);
                     let _ = app.emit(
@@ -3792,21 +4314,6 @@ pub async fn create_3dtiles_task(
                             completed: 0,
                             total: tile_count,
                             message: Some("已取消".to_string()),
-                        },
-                    );
-                } else {
-                    task_log(&app, &tm, &tid, "ERROR", &format!("任务失败: {}", e));
-                    crate::task::remove_task_file(&tid);
-                    tm.fail_task(&tid, e.clone());
-                    let _ = app.emit(
-                        &format!("task-progress-{}", tid),
-                        TaskProgressPayload {
-                            task_id: tid,
-                            status: "failed".to_string(),
-                            progress: 0.0,
-                            completed: 0,
-                            total: tile_count,
-                            message: Some(format!("失败: {}", e)),
                         },
                     );
                 }
@@ -3824,6 +4331,7 @@ async fn execute_3dtiles_task(
     task_id: &str,
     cancel_token: tokio_util::sync::CancellationToken,
     pause_control: PauseControl,
+    mut fetcher: tiles3d::fetcher::Tiles3dFetcher,
     tileset_url: &str,
     request: &tiles3d::tileset::Tiles3dRequest,
     tile_count: u32,
@@ -3831,7 +4339,7 @@ async fn execute_3dtiles_task(
     task_name: &str,
 ) -> Result<(), String> {
     task_log(app, tm, task_id, "INFO", "开始 3D Tiles 下载任务");
-    task_log(app, tm, task_id, "INFO", &format!("数据源: {}", tileset_url));
+    task_log(app, tm, task_id, "INFO", &format!("数据源: {}", tiles3d::fetcher::source_label(tileset_url)));
 
     tm.update_progress(
         task_id,
@@ -3842,9 +4350,6 @@ async fn execute_3dtiles_task(
         Some("正在解析 tileset...".to_string()),
     );
 
-    let mut fetcher = tiles3d::fetcher::Tiles3dFetcher::new(request.proxy.as_deref())?;
-    // 解析数据源以设置 auth_headers（含 Referer 等）
-    let _ = fetcher.resolve_source(&request.source).await?;
     let output_dir = std::path::Path::new(&request.save_path);
 
     let tid = task_id.to_string();
@@ -3854,7 +4359,7 @@ async fn execute_3dtiles_task(
     let output_path = fetcher
         .download(
             tileset_url,
-            request.polygon.as_deref(),
+            request.polygon.as_ref(),
             output_dir,
             request.concurrency,
             cancel_token,
@@ -3899,22 +4404,12 @@ async fn execute_3dtiles_task(
         &format!("下载完成，输出: {}", output_path.display()),
     );
 
-    tm.complete_task(task_id, dir_size);
+    if !tm.complete_task(task_id, dir_size) { return Err("任务已停止".into()); }
 
     // 写入下载历史记录
     let log_metadata = tm.get_log_metadata(task_id).unwrap_or_default();
-    let record = DownloadRecord::new(
-        task_name.to_string(),
-        "3dtiles".to_string(),
-        source_name.to_string(),
-        0,
-        "tileset".to_string(),
-        request.save_path.clone(),
-        dir_size,
-        tile_count,
-        0,
-        DownloadStatus::Completed,
-    ).with_log_metadata(&log_metadata);
+    let record = tiles3d::history_record(task_id, task_name, source_name, &request.save_path, tile_count, Ok(dir_size))
+        .with_log_metadata(&log_metadata);
     persist_history_record(app, record).await;
 
     let _ = app.emit(
@@ -4331,6 +4826,7 @@ pub async fn create_wayback_task(
     version_date: String,
     task_name: String,
 ) -> Result<CreateTaskResult, String> {
+    let work = crate::update_download::begin_work()?;
     let source = crate::wayback::make_tile_source(&version_id, &version_date);
     validate_offline_sources(&request, &source)?;
     let source_name = source.name.clone();
@@ -4366,7 +4862,7 @@ pub async fn create_wayback_task(
     };
     crate::task::save_task_file(&persisted)?;
 
-    let (cancel_token, pause_control) = task_manager.create_task(
+    let (cancel_token, pause_control, worker) = task_manager.create_worker(
         task_id.clone(),
         task_name.clone(),
         request.source.clone(),
@@ -4381,6 +4877,8 @@ pub async fn create_wayback_task(
     let tid = task_id.clone();
 
     tokio::spawn(async move {
+        let _work = work;
+        let _worker = worker;
         let result = execute_download_task(
             &app, &tm, &tid, &cancel_token, &pause_control,
             request, source, save_path, work_dir, None,
@@ -4390,7 +4888,8 @@ pub async fn create_wayback_task(
         match result {
             Ok(_) => {},
             Err(e) => {
-                if tm.is_cancelled(&tid) {
+                let failed = tm.try_fail_task(&tid, e.clone());
+                if cancel_token.is_cancelled() {
                     task_log(&app, &tm, &tid, "WARN", "任务已取消");
                     crate::task::cleanup_temp_dir(&tid);
                     crate::task::remove_task_file(&tid);
@@ -4403,10 +4902,9 @@ pub async fn create_wayback_task(
                         total: tile_count,
                         message: Some("已取消".to_string()),
                     });
-                } else {
+                } else if failed {
                     let recoverable_message = format!("任务失败: {}。任务数据已保留，可稍后恢复", e);
                     task_log(&app, &tm, &tid, "ERROR", &recoverable_message);
-                    tm.fail_task(&tid, e.clone());
                     let _ = app.emit(&format!("task-progress-{}", tid), TaskProgressPayload {
                         task_id: tid,
                         status: "failed".to_string(),
@@ -4463,6 +4961,7 @@ pub async fn scan_wayback_metadata(
     req: ScanWaybackRequest,
     progress: State<'_, crate::wayback_metadata::ScanProgressMap>,
 ) -> Result<ScanWaybackResponse, String> {
+    let work = crate::update_download::begin_work()?;
     let scan_mode = crate::wayback_metadata::normalize_scan_mode(req.scan_mode.as_deref());
 
     // 1. 缓存优先（除非强制刷新）
@@ -4497,6 +4996,7 @@ pub async fn scan_wayback_metadata(
 
     let sid = scan_id.clone();
     tokio::spawn(async move {
+        let _work = work;
         let result = crate::wayback_metadata::scan_metadata(
             req.bbox,
             req.zoom_min,
@@ -4588,6 +5088,7 @@ pub async fn download_wayback_incremental(
     task_manager: State<'_, Arc<TaskManager>>,
     req: WaybackIncrementalRequest,
 ) -> Result<WaybackIncrementalResult, String> {
+    let _work = crate::update_download::begin_work()?;
     let mut task_ids = Vec::new();
     for fp in req.footprints {
         let safe_source = fp.source_name.replace([' ', '/', '\\'], "_");

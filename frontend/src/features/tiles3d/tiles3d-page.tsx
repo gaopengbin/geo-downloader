@@ -17,7 +17,7 @@ import { RegionSelector } from '@/features/region/region-selector'
 import { useMultiFeatureSubmit } from '@/features/region/use-multi-feature-submit'
 import { DispatchModeRadio } from '@/features/region/dispatch-mode-radio'
 import { getSettings, saveSettings } from '@/features/settings/settings-api'
-import { useSelectionStore } from '@/store/selection-store'
+import { selectedAreas, useSelectionStore } from '@/store/selection-store'
 import { useAppStore } from '@/store/app-store'
 
 import {
@@ -46,19 +46,19 @@ function timestampNow() {
   return new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
 }
 
-function buildPolygonCoords(): number[][] | null {
-  const { bounds, polygon } = useSelectionStore.getState()
-  if (polygon && polygon.length > 0) {
-    return polygon[0].map((p) => [p.lng, p.lat])
-  }
+function buildPolygonCoords(): number[][][][] | null {
+  const selection = useSelectionStore.getState()
+  const areas = selectedAreas(selection)
+  if (areas?.length) return areas
+  const { bounds } = selection
   if (bounds) {
-    return [
+    return [[[
       [bounds.west, bounds.south],
       [bounds.west, bounds.north],
       [bounds.east, bounds.north],
       [bounds.east, bounds.south],
       [bounds.west, bounds.south],
-    ]
+    ]]]
   }
   return null
 }
@@ -140,7 +140,7 @@ export function Tiles3dPage() {
       setSummary(s)
       // 自动估算
       const coords = buildPolygonCoords()
-      if (coords && coords.length >= 3 && source) {
+      if (coords && coords.length > 0 && source) {
         try {
           const est = await estimate3dTiles(source, coords, proxy)
           setEstimate(est)
@@ -195,7 +195,7 @@ export function Tiles3dPage() {
       const result = await create3dTilesTask(
         {
           source,
-          polygon: coords && coords.length >= 3 ? coords : null,
+          polygon: coords && coords.length > 0 ? coords : null,
           save_path: savePath,
           concurrency,
           proxy,
@@ -261,7 +261,7 @@ export function Tiles3dPage() {
     if (!summary || !source || !hasSelection) return
     const handle = window.setTimeout(() => {
       const coords = buildPolygonCoords()
-      if (!coords || coords.length < 3) return
+      if (!coords || coords.length === 0) return
       estimate3dTiles(source, coords, proxy)
         .then((e) => setEstimate(e))
         .catch((e) => console.warn(t('tiles3d.estimateFailed'), e))

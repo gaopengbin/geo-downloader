@@ -51,14 +51,31 @@ pub struct TileSource {
     pub attribution: String,
     #[serde(default, skip_serializing_if = "crate::source_headers::SourceHeaders::is_empty")]
     pub headers: crate::source_headers::SourceHeaders,
+    /// Resolved native cache key for an editable source, also consumed by map preview.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub cache_namespace: Option<String>,
 }
 
 impl TileSource {
     pub fn cache_key(&self) -> String {
+        if let Some(namespace) = &self.cache_namespace { return namespace.clone(); }
         if self.headers.is_empty() { return self.id.clone(); }
+        self.content_cache_key()
+    }
+
+    pub fn with_content_cache(mut self) -> Self {
+        self.cache_namespace = Some(self.content_cache_key());
+        self
+    }
+
+    fn content_cache_key(&self) -> String {
         use sha2::{Digest, Sha256};
         let mut digest = Sha256::new();
         digest.update(self.url.as_bytes());
+        for subdomain in &self.subdomains {
+            digest.update([0]); digest.update(subdomain.as_bytes());
+        }
+        digest.update([0xff]);
         for (name, value) in self.headers.iter() {
             digest.update([0]); digest.update(name.to_ascii_lowercase().as_bytes());
             digest.update([0]); digest.update(value.as_bytes());
@@ -78,6 +95,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "google_satellite".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "google_satellite".to_string(),
             name: "Google 卫星".to_string(),
@@ -94,6 +112,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "google_map".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "google_map".to_string(),
             name: "Google 地图".to_string(),
@@ -110,6 +129,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "google_hybrid".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "google_hybrid".to_string(),
             name: "Google 混合".to_string(),
@@ -126,6 +146,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "osm".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "osm".to_string(),
             name: "OpenStreetMap".to_string(),
@@ -139,6 +160,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "arcgis_satellite".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "arcgis_satellite".to_string(),
             name: "ArcGIS 卫星".to_string(),
@@ -152,6 +174,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "carto_light".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "carto_light".to_string(),
             name: "Carto Light".to_string(),
@@ -168,6 +191,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "carto_dark".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "carto_dark".to_string(),
             name: "Carto Dark".to_string(),
@@ -184,6 +208,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "arcgis_topo".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "arcgis_topo".to_string(),
             name: "ArcGIS 地形".to_string(),
@@ -197,6 +222,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "arcgis_street".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "arcgis_street".to_string(),
             name: "ArcGIS 街道".to_string(),
@@ -210,6 +236,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "opentopomap".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "opentopomap".to_string(),
             name: "OpenTopoMap".to_string(),
@@ -226,6 +253,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "gaode_map".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "gaode_map".to_string(),
             name: "高德 地图".to_string(),
@@ -242,6 +270,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "gaode_satellite".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "gaode_satellite".to_string(),
             name: "高德 卫星".to_string(),
@@ -258,6 +287,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_satellite".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "tianditu_satellite".to_string(),
             name: "天地图 卫星".to_string(),
@@ -277,6 +307,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_vector".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "tianditu_vector".to_string(),
             name: "天地图 矢量".to_string(),
@@ -300,6 +331,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_satellite_label".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "tianditu_satellite_label".to_string(),
             name: "天地图 影像注记".to_string(),
@@ -319,6 +351,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_vector_label".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "tianditu_vector_label".to_string(),
             name: "天地图 矢量注记".to_string(),
@@ -338,6 +371,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "tianditu_terrain_label".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "tianditu_terrain_label".to_string(),
             name: "天地图 地形注记".to_string(),
@@ -358,6 +392,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "dem_terrarium".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "dem_terrarium".to_string(),
             name: "DEM 高程 (Terrarium)".to_string(),
@@ -374,6 +409,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "mvt_openfreemap".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "mvt_openfreemap".to_string(),
             name: "OpenFreeMap (MVT 全球)".to_string(),
@@ -389,6 +425,7 @@ pub fn get_tile_sources(tianditu_token: Option<&str>) -> HashMap<String, TileSou
     sources.insert(
         "mvt_versatiles_osm".to_string(),
         TileSource {
+            cache_namespace: None,
             headers: Default::default(),
             id: "mvt_versatiles_osm".to_string(),
             name: "VersaTiles OSM (MVT 全球)".to_string(),
