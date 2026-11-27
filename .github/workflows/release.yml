@@ -15,6 +15,11 @@ on:
         default: true
         type: boolean
 
+      smoke_published_macos:
+        description: Launch the already-published macOS packages in validation-only mode
+        default: false
+        type: boolean
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -52,6 +57,41 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: python control/scripts/validate_release.py --root source
+
+  smoke-published-macos:
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' && inputs.validate_only && inputs.smoke_published_macos
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: |
+            scripts/check_macos_release_dmg.sh
+            scripts/check_unix_release_startup.py
+          sparse-checkout-cone-mode: false
+      - name: Launch the published macOS baseline
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          file="GeoDownloader_${VERSION}_macos_${ARCH}.dmg"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$file" --dir "$RUNNER_TEMP"
+          bash scripts/check_macos_release_dmg.sh "$RUNNER_TEMP/$file" "$VERSION" --previous-schema
 
   build:
     needs: validate
@@ -162,7 +202,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: release-control
-          sparse-checkout: scripts/check_unix_release_startup.py
+          sparse-checkout: |
+            scripts/check_unix_release_startup.py
+            scripts/check_macos_release_dmg.sh
           sparse-checkout-cone-mode: false
 
       - name: Verify and launch the macOS app from the release DMG
@@ -171,18 +213,7 @@ jobs:
         run: |
           DMG=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -type f -name "*.dmg" | head -1)
           test -n "$DMG"
-          MOUNT_DIR=$(mktemp -d)
-          trap 'hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true; rm -rf "$MOUNT_DIR"' EXIT
-          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT_DIR"
-          APP=$(find "$MOUNT_DIR" -maxdepth 1 -type d -name "*.app" -print -quit)
-          test -n "$APP"
-          executable=$(plutil -extract CFBundleExecutable raw -o - "$APP/Contents/Info.plist")
-          lipo -verify_arch "$(uname -m)" "$APP/Contents/MacOS/$executable"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          codesign -dv --verbose=4 "$APP" 2>&1
-          installed=$(mktemp -d "$RUNNER_TEMP/geod-mac-app.XXXXXX")/"$(basename "$APP")"
-          ditto "$APP" "$installed"
-          python3 release-control/scripts/check_unix_release_startup.py "$installed/Contents/MacOS/$executable"
+          bash release-control/scripts/check_macos_release_dmg.sh "$DMG" "${{ needs.validate.outputs.version }}"
 
       - name: Checkout the Windows installer verification tool
         if: runner.os == 'Windows'

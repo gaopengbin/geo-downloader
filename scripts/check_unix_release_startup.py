@@ -28,7 +28,7 @@ def web_stores(roots):
                         yield Path(folder) / name
 
 
-def verify_startup(executable, profile):
+def verify_startup(executable, profile, previous_schema=False):
     env = os.environ.copy()
     roots = [profile]
     history = profile / "data/geo-downloader/history.db"
@@ -49,6 +49,9 @@ def verify_startup(executable, profile):
     markers = "SELECT COUNT(*) FROM ItemTable WHERE key IN ('gd:theme-mode','gd:theme-accent')"
     old_markers = {p for p in web_stores(roots) if has_rows(p, markers, 2)}
     history_tables = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('download_history','task_outcomes')"
+    if previous_schema:
+        history_tables = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='download_history'"
+    expected_tables = 1 if previous_schema else 2
     child = subprocess.Popen([str(executable.resolve())], env=env, start_new_session=True)
     try:
         deadline = time.monotonic() + 90
@@ -56,7 +59,7 @@ def verify_startup(executable, profile):
             if child.poll() is not None:
                 raise RuntimeError(f"{executable} exited during startup with code {child.returncode}")
             web_ready = any(p not in old_markers and has_rows(p, markers, 2) for p in web_stores(roots))
-            if web_ready and history.is_file() and has_rows(history, history_tables, 2):
+            if web_ready and history.is_file() and has_rows(history, history_tables, expected_tables):
                 time.sleep(3)
                 if child.poll() is not None:
                     raise RuntimeError(f"{executable} exited after initialization with code {child.returncode}")
@@ -78,6 +81,7 @@ def verify_startup(executable, profile):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
+    parser.add_argument("--previous-schema", action="store_true", help="check the legacy download history table in a published baseline")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="geod-package-", dir=os.environ["RUNNER_TEMP"]) as directory:
-        verify_startup(args.executable, Path(directory))
+        verify_startup(args.executable, Path(directory), args.previous_schema)
