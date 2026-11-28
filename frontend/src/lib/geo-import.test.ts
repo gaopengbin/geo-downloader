@@ -37,3 +37,17 @@ test('rejects NaN and Infinity coordinates', () => {
   assert.equal(result.valid, false)
   assert.equal(result.invalidCount, 1)
 })
+
+test('rejects malformed vertices mixed with valid polygon coordinates', () => {
+  for (const longitude of [null, 'bad']) {
+    const value = {
+      type: 'Polygon',
+      coordinates: [[[108, 34], [109, 34], [longitude, 35], [108, 34]]],
+    } as unknown as GeoJsonObject
+    const result = validateWgs84Coordinates(value)
+    assert.equal(result.valid, false)
+    assert.equal(result.coordinateCount, 4)
+    assert.equal(result.invalidCount, 1)
+    assert.deepEqual(result.firstInvalid, [longitude, 35])
+  }
+})
